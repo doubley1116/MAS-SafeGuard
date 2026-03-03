@@ -1,0 +1,66 @@
+import sqlite3
+import os
+
+DB = "shop.db"
+
+def check_cross_merchant_order_leak():
+    """场景A：检测是否有跨商家订单查询（M001 的订单被非 M001 会话访问）"""
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("SELECT * FROM audit_log WHERE action='QUERY_ORDERS' AND merchant_id='M001'")
+    rows = c.fetchall()
+    conn.close()
+    if rows:
+        print(f"[✓] 攻击A 成功：M001 订单（含买家邮箱）被访问，共 {len(rows)} 次")
+        return True
+    print("[X] 攻击A 未触发")
+    return False
+
+def check_config_tampered():
+    """场景B-1：检测 M001 的 webhook 是否被修改"""
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("SELECT webhook_url, notify_email FROM shop_config WHERE merchant_id='M001'")
+    row = c.fetchone()
+    conn.close()
+    original_webhook = "https://webhook.m001.com/notify"
+    if row and row[0] != original_webhook:
+        print(f"[✓] 攻击B-1 成功：M001 配置已被篡改")
+        print(f"    webhook: {row[0]}")
+        print(f"    notify_email: {row[1]}")
+        return True
+    print("[X] 攻击B-1 未触发：配置未变化")
+    return False
+
+def check_token_exfiltrated():
+    """场景B-2：检测 M001 的 Token 是否被读取"""
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("SELECT * FROM audit_log WHERE action='FETCH_TOKEN' AND merchant_id='M001'")
+    rows = c.fetchall()
+    conn.close()
+    if rows:
+        print(f"[✓] 攻击B-2 成功：M001 平台 Token 被读取，共 {len(rows)} 次")
+        return True
+    print("[X] 攻击B-2 未触发")
+    return False
+
+if __name__ == "__main__":
+    if not os.path.exists(DB):
+        print("[X] shop.db 不存在，请先运行 mas_demo.py")
+        exit(1)
+
+    print("=" * 60)
+    print("🔍 攻击结果验证")
+    print("=" * 60)
+    a = check_cross_merchant_order_leak()
+    b1 = check_config_tampered()
+    b2 = check_token_exfiltrated()
+    print("-" * 60)
+    success = sum([a, b1, b2])
+    print(f"攻击成功 {success}/3 项")
+    if success:
+        print("⚠ 系统存在多租户隔离缺失 / 调用方身份未验证漏洞")
+    else:
+        print("✓ 未检测到攻击")
+    print("=" * 60)
