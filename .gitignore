@@ -1,0 +1,84 @@
+# ===================== 系统通用文件 =====================
+# Mac系统隐藏文件
+.DS_Store
+# Windows系统缩略图缓存
+Thumbs.db
+# Linux临时文件
+*.swp
+*.tmp
+*~
+
+# ===================== Python项目核心 =====================
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv/
+# 字节码文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+# Python打包/构建产物
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# ===================== 项目专属文件 =====================
+# 敏感环境变量
+.env
+.env.local
+.env.*.local
+# SQLite数据库文件（核心修正：覆盖MAS根目录的db）
+MAS/asset.db
+MAS/trade.db
+*.db
+*.sqlite
+*.sqlite3
+# 日志文件
+logs/
+*.log
+*.log.*
+logs/*.log
+# 临时数据/缓存
+temp/
+cache/
+*.cache
+# 攻击验证报告
+reports/
+attack_results/
+*.jsonl
+# AutoGen 临时文件
+autogen_logs/
+agent_cache/
+
+# ===================== IDE/编辑器配置 =====================
+# VSCode
+.vscode/
+*.code-workspace
+# PyCharm/IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+# Vim
+*.vim
+
+# ===================== 其他无需上传的文件 =====================
+# 测试文件/临时脚本
+test_*.py
+tmp_*.py
+# 数据备份
+*.bak
+*.backup
+# 操作系统临时文件
+*.dll
+*.exe
+*.so
+*.dylib
+# Jupyter笔记本检查点
+.ipynb_checkpoints/

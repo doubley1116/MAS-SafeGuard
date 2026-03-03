@@ -1,0 +1,11 @@
+# ===== Core LLM Framework =====
+pyautogen==0.2.25
+
+# ===== OpenAI SDK =====
+openai>=1.0.0
+
+# ===== Environment Variable Loader =====
+python-dotenv>=1.0.0
+
+# ===== YAML Policy Loader =====
+PyYAML>=6.0
