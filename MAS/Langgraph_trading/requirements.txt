@@ -1,0 +1,17 @@
+# ===== Core LangGraph & LangChain Framework =====
+langgraph>=0.1.14
+langchain>=0.2.6
+langchain-core>=0.2.10
+langchain-openai>=0.1.14
+
+# ===== Data Validation & Structuring =====
+pydantic>=2.0.0
+
+# ===== OpenAI SDK =====
+openai>=1.0.0
+
+# ===== Environment Variable Loader =====
+python-dotenv>=1.0.0
+
+# ===== YAML Policy Loader (保留自原项目) =====
+PyYAML>=6.0
