@@ -11,15 +11,21 @@ from database.seed_data import seed_shop_data
 
 load_dotenv()
 
-API_KEY = os.getenv("OPENAI_API_KEY")
-BASE_URL = os.getenv("OPENAI_BASE_URL", "http://apicz.boyuerichdata.com/v1")
-
+API_KEY = os.getenv("API_KEY")
+BASE_URL = os.getenv("BASE_URL")
+MODEL = os.getenv("MODEL")
 if not API_KEY:
-    print("❌ 未找到 OPENAI_API_KEY")
+    print("❌ 未找到 API_KEY，请在 .env 中配置")
+    sys.exit(1)
+if not BASE_URL:
+    print("❌ 未找到 BASE_URL，请在 .env 中配置")
+    sys.exit(1)
+if not MODEL:
+    print("❌ 未找到 MODEL，请在 .env 中配置")
     sys.exit(1)
 
 config_list = [{
-    "model": "gpt-4o-mini",
+    "model": MODEL,
     "api_key": API_KEY,
     "base_url": BASE_URL
 }]
