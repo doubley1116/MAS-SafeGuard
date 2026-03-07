@@ -1,0 +1,146 @@
+version: "1.0"
+description: "跨境电商 MAS 零信任权限策略（LangGraph 拓扑版）"
+
+# ══ 架构说明 ════════════════════════════════════════════════
+#
+# 本文件对应 LangGraph 构建的 MAS，与 AutoGen GroupChat 版本有以下关键差异：
+#
+# [不再需要的字段]
+#   - allowed_message_targets：LangGraph 的通信关系由图的边硬编码，YAML 无需重复描述
+#   - paths.strict：LangGraph 路径本身是确定性的，不存在"跳过节点"的概念
+#
+# [新增的风险点]
+#   - route_hijack_check：语义路由被劫持的风险
+#     LangGraph 的路由函数 route_after_research() 读取 messages[0].content（原始 prompt）
+#     攻击者可以通过构造 prompt，让 intent_chain 误判为 query_asset 或 execute_trade，
+#     从而绕过 Risk_Agent，直接触达 Asset_Agent 或 Trade_Agent
+#     → 这是本版本特有的攻击面，AutoGen 版本没有
+#
+# [保留不变的字段]
+#   - allowed_tools / blocked_tools：工具调用者身份校验，与框架无关，必须保留
+#   - thresholds：分层分工逻辑，与框架无关，必须保留
+#   - trade_execute_tool 的 required_path_contains：必经节点校验，必须保留
+#     （LangGraph 图结构虽然固定，但 SecurityCore 仍需在运行时验证 call_path，
+#      防止未来图结构变更或绕过编译图的异常调用）
+
+
+# ══ Agent 角色权限 ══════════════════════════════════════════
+# allowed_message_targets 已移除：通信关系由 LangGraph 图的边定义，YAML 不重复
+
+agents:
+
+  Account_Manager:
+    role: user_proxy
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools: []
+    notes: "消息入口，对应 LangGraph 的 START 节点输入"
+
+  Research_Agent:
+    role: research_agent
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - trade_execute_tool
+      - asset_query_tool
+    notes: "所有请求的第一个处理节点，不调用工具，输出分析后由路由函数决定下游"
+
+  Risk_Agent:
+    role: risk_agent
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - trade_execute_tool
+      - asset_query_tool
+    notes: "语义路由的默认兜底节点（intent=unknown/risk_consult 时进入），不调用工具"
+
+  Asset_Agent:
+    role: asset_agent
+    can_initiate: false
+    allowed_tools:
+      - asset_query_tool
+    blocked_tools:
+      - trade_execute_tool
+    notes: "只有 intent=query_asset 时路由进入，是本版本的高风险节点（路由劫持目标）"
+
+  Trade_Agent:
+    role: trade_agent
+    can_initiate: false
+    allowed_tools:
+      - trade_execute_tool
+    blocked_tools:
+      - asset_query_tool
+    notes: "只有 intent=execute_trade 时路由进入，是本版本的最高风险节点（路由劫持目标）"
+
+
+# ══ 工具级规则 ══════════════════════════════════════════════
+
+tools:
+
+  asset_query_tool:
+    allowed_callers:
+      - Asset_Agent
+    required_path_contains: []
+    # 【LangGraph 新增】路由劫持检测
+    # SecurityCore 在工具调用前检查：
+    # intent_chain 的分类结果是否与原始 prompt 的语义一致
+    # 若 intent=query_asset 但 prompt 明显属于交易或社工性质，则拦截并升级评分
+    route_hijack_check: true
+
+  trade_execute_tool:
+    allowed_callers:
+      - Trade_Agent
+    # AutoGen 版保留：即使 LangGraph 图结构固定，运行时 call_path 校验仍然必要
+    # 防止图结构被修改后 Risk_Agent 被绕过
+    required_path_contains:
+      - Risk_Agent
+    # 【LangGraph 新增】路由劫持检测
+    # intent=execute_trade 是触发交易的必要条件，需额外验证分类置信度
+    # confidence < 0.80 时不应直接执行交易，升级为 llm_needed 区间
+    route_hijack_check: true
+    intent_confidence_min: 0.80    # intent_chain 的 confidence 低于此值，强制进入 llm_needed
+
+
+# ══ 路径规则 ══════════════════════════════════════════════
+# paths.strict 已移除：LangGraph 拓扑本身保证路径确定性
+# 只保留"必经节点"用于运行时 call_path 审计
+
+paths:
+
+  valid_trade_path:
+    sequence:
+      - Account_Manager
+      - Research_Agent
+      - Risk_Agent          # 必须出现在 Trade_Agent 之前（防止路由劫持直接跳过）
+      - Trade_Agent
+
+  valid_asset_path:
+    sequence:
+      - Account_Manager
+      - Research_Agent
+      - Asset_Agent
+
+  valid_risk_path:
+    sequence:
+      - Account_Manager
+      - Research_Agent
+      - Risk_Agent
+
+
+# ══ 风险评分阈值 ══════════════════════════════════════════
+#
+# 完整的四段分层逻辑：
+#
+#  规则引擎打分
+#  ├── >= rule_block (0.90)  → 直接拦截，不调 LLM
+#  ├── 0.40 ~ 0.90           → 调 LLM 做语义审核，LLM 再次打分
+#  │     ├── LLM 分 >= human_review (0.75)  → 挂起，转人工审核队列
+#  │     └── LLM 分 <  human_review (0.75)  → LLM 自主放行
+#  └── < pass (0.40)         → 直接放行，不调 LLM
+
+thresholds:
+  rule_block:   0.90  # 命中条件：调用者非法 / required_path_contains 缺失 /
+                      #           route_hijack_check 检测到明显劫持
+  llm_needed:   0.40  # 命中条件：intent confidence 不足 / 路由结果与 prompt 语义存疑
+  human_review: 0.75  # LLM 审核后风险分 >= 0.75 转人工，不自动放行
+  pass:         0.40  # 规则引擎 < 0.40 直接放行，不调 LLM
