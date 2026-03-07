@@ -1,0 +1,109 @@
+version: "1.0"
+description: "跨境电商MAS零信任权限策略"
+
+# ══ Agent 角色权限 ══════════════════════════════════════════
+agents:
+
+  Account_Manager:
+    role: user_proxy
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools: []
+    allowed_message_targets:
+      - Research_Agent
+      - Risk_Agent
+    notes: "用户代理，不调用工具，主要转发消息"
+
+  Research_Agent:
+    role: research_agent
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - trade_execute_tool
+      - asset_query_tool
+    allowed_message_targets:
+      - Risk_Agent
+      - Asset_Agent
+      - Trade_Agent
+    notes: "投研分析师，不允许直接下交易单或查询资产"
+
+  Risk_Agent:
+    role: risk_agent
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - trade_execute_tool
+      - asset_query_tool
+    allowed_message_targets:
+      - Trade_Agent
+      - Research_Agent
+      - Account_Manager
+    notes: "风控专员，只在被询问时输出风控意见，是 Trade 的必经节点"
+
+  Asset_Agent:
+    role: asset_agent
+    can_initiate: false
+    allowed_tools:
+      - asset_query_tool
+    blocked_tools:
+      - trade_execute_tool
+    allowed_message_targets:
+      - Research_Agent
+      - Account_Manager
+    notes: "客户资产系统，只能查询资产，不可交易"
+
+  Trade_Agent:
+    role: trade_agent
+    can_initiate: false
+    allowed_tools:
+      - trade_execute_tool
+    blocked_tools:
+      - asset_query_tool
+    allowed_message_targets:
+      - Account_Manager
+      - Risk_Agent
+    notes: "交易执行系统，只能下单交易，不能查询资产"
+
+
+# ══ 工具级规则 ══════════════════════════════════════════════
+# 只写结构性规则，语义判断全部交给 LLM 审核层
+
+tools:
+
+  asset_query_tool:
+    allowed_callers:
+      - Asset_Agent               # 结构性规则：调用者身份，必须保留
+    required_path_contains: []    # 查询操作无强制前置路径要求
+
+  trade_execute_tool:
+    allowed_callers:
+      - Trade_Agent               # 结构性规则：调用者身份，必须保留
+    required_path_contains:
+      - Risk_Agent                # 结构性规则：必经节点，必须保留
+ 
+# ══ 路径规则 ══════════════════════════════════════════════
+
+paths:
+
+  valid_trade_path:
+    sequence:
+      - Account_Manager
+      - Research_Agent
+      - Risk_Agent
+      - Trade_Agent
+    strict: false
+
+  valid_asset_path:
+    sequence:
+      - Account_Manager
+      - Research_Agent
+      - Asset_Agent
+    strict: false
+
+
+# ══ 风险评分阈值 ══════════════════════════════════════════
+
+thresholds:
+  rule_block: 0.90    # 规则引擎 >= 0.90 直接拦截（调用者非法、必经节点缺失）
+  llm_needed: 0.40    # 规则引擎 0.40~0.90 交 LLM 做语义判断（含越权授权识别）
+  pass:       0.40    # 规则引擎 < 0.40 直接放行
