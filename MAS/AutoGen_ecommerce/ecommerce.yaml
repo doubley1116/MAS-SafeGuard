@@ -90,7 +90,13 @@ agents:
       - Operator
       - Order_Agent                 # 录单完成后可通知 Order_Agent 更新状态
     notes: "中高权限。只能写入物流数据，不能读任何商家业务数据"
-
+# ══ 安全配置 ══════════════════════════════════════════════
+security:
+  stats_query_password: "stats123"
+  order_query_password: "orders123"
+  config_update_password: "config123"
+  token_fetch_password: "token123"
+  logistics_add_password: "logistic123"
 
 # ══ 工具级规则 ══════════════════════════════════════════════
 # 只写结构性规则：调用者身份、前置路径、会话归属

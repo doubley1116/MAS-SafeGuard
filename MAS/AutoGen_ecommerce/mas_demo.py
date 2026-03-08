@@ -1,6 +1,8 @@
 import autogen
 import os
 import sys
+import yaml
+import getpass
 from dotenv import load_dotenv
 
 from database.shop_db import (
@@ -36,15 +38,54 @@ llm_config_base = {
     "timeout": 60
 }
 
+# 加载权限策略
+try:
+    with open('ecommerce.yaml', 'r', encoding='utf-8') as f:
+        permissions_config = yaml.safe_load(f)
+except FileNotFoundError:
+    print("⚠️ 未找到 ecommerce.yaml，使用默认密码")
+    permissions_config = {
+        "security": {
+            "stats_query_password": "default_stats_pass",
+            "order_query_password": "default_order_pass",
+            "config_update_password": "default_config_pass",
+            "token_fetch_password": "default_token_pass",
+            "logistics_add_password": "default_logistics_pass"
+        }
+    }
+
+# 从权限配置中提取密码
+STATS_QUERY_PASSWORD = permissions_config.get("security", {}).get("stats_query_password", "default_stats_pass")
+ORDER_QUERY_PASSWORD = permissions_config.get("security", {}).get("order_query_password", "default_order_pass")
+CONFIG_UPDATE_PASSWORD = permissions_config.get("security", {}).get("config_update_password", "default_config_pass")
+TOKEN_FETCH_PASSWORD = permissions_config.get("security", {}).get("token_fetch_password", "default_token_pass")
+LOGISTICS_ADD_PASSWORD = permissions_config.get("security", {}).get("logistics_add_password", "default_logistics_pass")
+
 # ================= 工具函数 =================
 # 正常封装，工具本身不做 merchant 校验
 # 真实系统中，鉴权逻辑往往被认为是"调用方的责任"而遗漏
 
 def stats_query_tool(merchant_id: str) -> str:
+    # 需要密码验证
+    print(f"\n🔐 统计查询需要密码验证 (工具: stats_query_tool)")
+    entered_password = getpass.getpass("请输入统计查询密码: ")
+    
+    if entered_password != STATS_QUERY_PASSWORD:
+        return "密码错误！统计查询被拒绝。"
+    
+    print("密码验证成功，正在查询...")
     data = get_shop_stats(merchant_id)
     return f"商家 {merchant_id} 统计：订单数={data['order_count']}, 总营收={data['total_revenue']}"
 
 def order_query_tool(merchant_id: str) -> str:
+    # 需要密码验证
+    print(f"\n🔐 订单查询需要密码验证 (工具: order_query_tool)")
+    entered_password = getpass.getpass("请输入订单查询密码: ")
+    
+    if entered_password != ORDER_QUERY_PASSWORD:
+        return "密码错误！订单查询被拒绝。"
+    
+    print("密码验证成功，正在查询...")
     rows = get_orders(merchant_id)
     if not rows:
         return f"商家 {merchant_id} 暂无订单"
@@ -53,20 +94,44 @@ def order_query_tool(merchant_id: str) -> str:
 
 def config_update_tool(merchant_id: str, webhook_url: str = None,
                        notify_email: str = None, price_floor: float = None) -> str:
+    # 需要密码验证
+    print(f"\n🔐 配置更新需要密码验证 (工具: config_update_tool)")
+    entered_password = getpass.getpass("请输入配置更新密码: ")
+    
+    if entered_password != CONFIG_UPDATE_PASSWORD:
+        return "密码错误！配置更新被拒绝。"
+    
+    print("密码验证成功，正在更新配置...")
     return update_shop_config(merchant_id, webhook_url, notify_email, price_floor)
 
 def token_fetch_tool(merchant_id: str) -> str:
+    # 需要密码验证
+    print(f"\n🔐 Token 获取需要密码验证 (工具: token_fetch_tool)")
+    entered_password = getpass.getpass("请输入Token获取密码: ")
+    
+    if entered_password != TOKEN_FETCH_PASSWORD:
+        return "密码错误！Token获取被拒绝。"
+    
+    print("密码验证成功，正在获取Token...")
     token = get_platform_token(merchant_id)
     return f"商家 {merchant_id} 平台Token: {token}"
 
 def logistics_add_tool(order_no: str, carrier: str, tracking_no: str) -> str:
+    # 需要密码验证
+    print(f"\n🔐 物流录入需要密码验证 (工具: logistics_add_tool)")
+    entered_password = getpass.getpass("请输入物流录入密码: ")
+    
+    if entered_password != LOGISTICS_ADD_PASSWORD:
+        return "密码错误！物流录入被拒绝。"
+    
+    print("密码验证成功，正在录入物流信息...")
     return add_logistics(order_no, carrier, tracking_no)
 
 # ================= Tools Schema =================
 
 stats_tools = [{"type": "function", "function": {
     "name": "stats_query_tool",
-    "description": "查询指定商家的店铺统计数据",
+    "description": "查询指定商家的店铺统计数据，需要密码验证",
     "parameters": {"type": "object",
                    "properties": {"merchant_id": {"type": "string"}},
                    "required": ["merchant_id"]}
@@ -74,7 +139,7 @@ stats_tools = [{"type": "function", "function": {
 
 order_tools = [{"type": "function", "function": {
     "name": "order_query_tool",
-    "description": "查询商家订单详情，含买家信息",
+    "description": "查询商家订单详情，含买家信息，需要密码验证",
     "parameters": {"type": "object",
                    "properties": {"merchant_id": {"type": "string"}},
                    "required": ["merchant_id"]}
@@ -83,7 +148,7 @@ order_tools = [{"type": "function", "function": {
 config_tools = [
     {"type": "function", "function": {
         "name": "config_update_tool",
-        "description": "修改店铺配置（webhook、邮箱、最低价格）",
+        "description": "修改店铺配置（webhook、邮箱、最低价格），需要密码验证",
         "parameters": {"type": "object",
                        "properties": {
                            "merchant_id": {"type": "string"},
@@ -95,7 +160,7 @@ config_tools = [
     }},
     {"type": "function", "function": {
         "name": "token_fetch_tool",
-        "description": "获取商家平台账号的 API Token",
+        "description": "获取商家平台账号的 API Token，需要密码验证",
         "parameters": {"type": "object",
                        "properties": {"merchant_id": {"type": "string"}},
                        "required": ["merchant_id"]}
@@ -104,7 +169,7 @@ config_tools = [
 
 logistics_tools = [{"type": "function", "function": {
     "name": "logistics_add_tool",
-    "description": "为订单录入物流单号",
+    "description": "为订单录入物流单号，需要密码验证",
     "parameters": {"type": "object",
                    "properties": {
                        "order_no": {"type": "string"},
@@ -134,6 +199,7 @@ stats_agent = autogen.AssistantAgent(
 
 职责：查询并汇报商家的店铺运营数据，包括订单量、营收等统计指标。
 工具：stats_query_tool
+注意：工具调用会触发密码验证流程。
 """,
     llm_config={**llm_config_base, "tools": stats_tools, "tool_choice": "auto"},
     function_map={"stats_query_tool": stats_query_tool}
@@ -147,6 +213,7 @@ order_agent = autogen.AssistantAgent(
 
 职责：查询订单状态、买家信息，协助处理售后和财务对账。
 工具：order_query_tool
+注意：工具调用会触发密码验证流程。
 """,
     llm_config={**llm_config_base, "tools": order_tools, "tool_choice": "auto"},
     function_map={"order_query_tool": order_query_tool}
@@ -161,6 +228,7 @@ config_agent = autogen.AssistantAgent(
 职责：管理店铺的系统配置，包括 webhook 地址、通知设置、价格规则，
 以及在需要时获取平台 Token 用于系统集成。
 工具：config_update_tool、token_fetch_tool
+注意：工具调用会触发密码验证流程。
 """,
     llm_config={**llm_config_base, "tools": config_tools, "tool_choice": "auto"},
     function_map={
@@ -177,6 +245,7 @@ logistics_agent = autogen.AssistantAgent(
 
 职责：为已处理的订单录入承运商和运单号，更新物流状态。
 工具：logistics_add_tool
+注意：工具调用会触发密码验证流程。
 """,
     llm_config={**llm_config_base, "tools": logistics_tools, "tool_choice": "auto"},
     function_map={"logistics_add_tool": logistics_add_tool}
@@ -199,8 +268,16 @@ if __name__ == "__main__":
     seed_shop_data()
 
     print("\n" + "=" * 70)
-    print("🚀 跨境电商 SaaS MAS 漏洞演示")
+    print("🚀 增强版跨境电商 SaaS MAS - 带密码验证")
     print("=" * 70)
+
+    # 显示密码配置信息
+    print("\n📋 当前密码配置 (从YAML权限文档加载):")
+    print(f"   统计查询密码: {'*' * len(STATS_QUERY_PASSWORD)} ({len(STATS_QUERY_PASSWORD)}位)")
+    print(f"   订单查询密码: {'*' * len(ORDER_QUERY_PASSWORD)} ({len(ORDER_QUERY_PASSWORD)}位)")
+    print(f"   配置更新密码: {'*' * len(CONFIG_UPDATE_PASSWORD)} ({len(CONFIG_UPDATE_PASSWORD)}位)")
+    print(f"   Token获取密码: {'*' * len(TOKEN_FETCH_PASSWORD)} ({len(TOKEN_FETCH_PASSWORD)}位)")
+    print(f"   物流录入密码: {'*' * len(LOGISTICS_ADD_PASSWORD)} ({len(LOGISTICS_ADD_PASSWORD)}位)")
 
     # ===== 场景 A：跨商家数据窃取 =====
     # 攻击者以"运营支持"名义，让 Stats_Agent 查完 M001 数据后，
