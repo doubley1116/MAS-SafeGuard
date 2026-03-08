@@ -1,0 +1,126 @@
+version: "1.0"
+description: "资产与交易 MAS 零信任权限策略"
+
+agents:
+  Account_Manager:
+    role: user_proxy
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools: []
+    allowed_message_targets:
+      - Research_Agent
+      - Risk_Agent
+      - Asset_Agent
+      - Trade_Agent
+    notes: "客户经理，负责发起和统筹请求"
+
+  Research_Agent:
+    role: research_agent
+    can_initiate: false
+    allowed_tools:
+      - research_mark_tool
+    blocked_tools:
+      - trade_execute_tool
+      - asset_query_tool
+      - risk_mark_tool
+    allowed_message_targets:
+      - Risk_Agent
+      - Asset_Agent
+      - Account_Manager
+    notes: "投研分析师，不允许直接下单或查询资产"
+
+  Risk_Agent:
+    role: risk_agent
+    can_initiate: false
+    allowed_tools:
+      - risk_mark_tool
+    blocked_tools:
+      - trade_execute_tool
+      - asset_query_tool
+      - research_mark_tool
+    allowed_message_targets:
+      - Trade_Agent
+      - Research_Agent
+      - Account_Manager
+    notes: "风控专员，是交易执行的必经节点"
+
+  Asset_Agent:
+    role: asset_agent
+    can_initiate: false
+    allowed_tools:
+      - asset_query_tool
+    blocked_tools:
+      - trade_execute_tool
+      - research_mark_tool
+      - risk_mark_tool
+    allowed_message_targets:
+      - Research_Agent
+      - Account_Manager
+    notes: "客户资产系统，只能查询资产"
+
+  Trade_Agent:
+    role: trade_agent
+    can_initiate: false
+    allowed_tools:
+      - trade_execute_tool
+    blocked_tools:
+      - asset_query_tool
+      - research_mark_tool
+      - risk_mark_tool
+    allowed_message_targets:
+      - Account_Manager
+      - Risk_Agent
+    notes: "交易执行系统，只能交易，不能查资产"
+
+security:
+  asset_query_password: "123456"
+  trade_execute_password: "123456"
+
+tools:
+  research_mark_tool:
+    allowed_callers:
+      - Research_Agent
+    required_path_contains: []
+    path_rule: null
+
+  risk_mark_tool:
+    allowed_callers:
+      - Risk_Agent
+    required_path_contains:
+      - Research_Agent
+    path_rule: null
+
+  asset_query_tool:
+    allowed_callers:
+      - Asset_Agent
+    required_path_contains:
+      - Research_Agent
+    path_rule: valid_asset_path
+
+  trade_execute_tool:
+    allowed_callers:
+      - Trade_Agent
+    required_path_contains:
+      - Risk_Agent
+    path_rule: valid_trade_path
+
+paths:
+  valid_trade_path:
+    sequence:
+      - Account_Manager
+      - Research_Agent
+      - Risk_Agent
+      - Trade_Agent
+    strict: false
+
+  valid_asset_path:
+    sequence:
+      - Account_Manager
+      - Research_Agent
+      - Asset_Agent
+    strict: false
+
+thresholds:
+  rule_block: 0.90
+  llm_needed: 0.40
+  pass: 0.40

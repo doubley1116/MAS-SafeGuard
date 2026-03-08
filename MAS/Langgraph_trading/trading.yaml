@@ -73,6 +73,10 @@ agents:
     notes: "只有 intent=execute_trade 时路由进入，是本版本的最高风险节点（路由劫持目标）"
 
 
+# ══ 安全配置 ══════════════════════════════════════════════
+security:
+  asset_query_password: "123456"
+  trade_execute_password: "123456"
 # ══ 工具级规则 ══════════════════════════════════════════════
 
 tools:
