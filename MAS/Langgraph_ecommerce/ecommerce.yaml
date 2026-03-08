@@ -1,0 +1,186 @@
+version: "1.0"
+description: "跨境电商 SaaS MAS 零信任权限策略 (LangGraph 中心枢纽架构版)"
+
+# ══ 设计说明 ════════════════════════════════════════════════
+#
+# 本场景针对 LangGraph 的 Star Topology（星型拓扑）进行了适配。
+# 在该架构下，所有的 Agent 不再直接互相通信，而是统一将结果返回给 Central_Hub，
+# 由 Supervisor (LLM) 决定下一步路由。
+#
+# 核心防御目标不变：
+#   1. 工具调用者身份校验
+#   2. 高权限工具的前置路径校验（必须包含 Central_Hub 明确的流转指令）
+#   3. merchant_id 会话归属校验（防止跨商家越权操作）
+
+
+# ══ Agent 角色权限与星型拓扑通信规则 ════════════════════════
+
+agents:
+
+  Operator:
+    role: user_endpoint
+    can_initiate: true              # 唯一允许发起对话的外部实体
+    allowed_tools: []
+    blocked_tools: []
+    allowed_message_targets:
+      - Central_Hub                 # 用户的请求全部首先打入中心枢纽
+    notes: "SaaS 平台运营人员，不调用工具，负责发起业务请求"
+
+  Central_Hub:
+    role: supervisor_router
+    can_initiate: false
+    allowed_tools: []               # 路由节点本身没有任何工具权限
+    blocked_tools: ["*"]
+    allowed_message_targets:
+      - Stats_Agent
+      - Order_Agent
+      - Config_Agent
+      - Logistics_Agent
+      - FINISH                      # 流程终点
+    notes: "系统协调中枢，负责意图分发。无权执行任何底层操作"
+
+  Stats_Agent:
+    role: stats_agent
+    can_initiate: false
+    allowed_tools:
+      - stats_query_tool
+    blocked_tools:
+      - config_update_tool          
+      - token_fetch_tool            
+      - order_query_tool            
+      - logistics_add_tool
+    allowed_message_targets:
+      - Central_Hub                 # 强制：执行完毕必须交回控制权给 Hub
+    notes: "低权限。只读统计数据，结果必须流转回中枢"
+
+  Order_Agent:
+    role: order_agent
+    can_initiate: false
+    allowed_tools:
+      - order_query_tool
+    blocked_tools:
+      - config_update_tool          
+      - token_fetch_tool            
+      - stats_query_tool
+      - logistics_add_tool
+    allowed_message_targets:
+      - Central_Hub                 # 强制：执行完毕必须交回控制权给 Hub
+    notes: "中权限。含买家隐私，结果必须流转回中枢"
+
+  Config_Agent:
+    role: config_agent
+    can_initiate: false
+    allowed_tools:
+      - config_update_tool
+      - token_fetch_tool
+    blocked_tools:
+      - stats_query_tool
+      - order_query_tool
+      - logistics_add_tool
+    allowed_message_targets:
+      - Central_Hub                 # 强制：执行完毕必须交回控制权给 Hub
+    notes: "高权限。配置变更和 Token 获取，操作完毕流转回中枢"
+
+  Logistics_Agent:
+    role: logistics_agent
+    can_initiate: false
+    allowed_tools:
+      - logistics_add_tool
+    blocked_tools:
+      - config_update_tool
+      - token_fetch_tool
+      - stats_query_tool
+      - order_query_tool
+    allowed_message_targets:
+      - Central_Hub                 # 强制：执行完毕必须交回控制权给 Hub
+    notes: "中高权限。只能写入物流数据，操作完毕流转回中枢"
+
+# ══ 安全配置 ══════════════════════════════════════════════
+security:
+  stats_query_password: "stats123"
+  order_query_password: "orders123"
+  config_update_password: "config123"
+  token_fetch_password: "token123"
+  logistics_add_password: "logistic123"
+
+# ══ 工具级规则 ══════════════════════════════════════════════
+# 重点：required_path_contains 必须体现出从 Hub 流转过来的特征
+
+tools:
+
+  stats_query_tool:
+    allowed_callers:
+      - Stats_Agent
+    session_merchant_check: true    # 防止跨越权查询其他商家
+    required_path_contains: 
+      - Central_Hub                 # 调用必须经过 Hub 的显式调度
+
+  order_query_tool:
+    allowed_callers:
+      - Order_Agent
+    session_merchant_check: true    
+    required_path_contains: 
+      - Central_Hub
+
+  config_update_tool:
+    allowed_callers:
+      - Config_Agent
+    session_merchant_check: true    
+    required_path_contains:
+      - Operator                    # 源头必须是用户发起的请求
+      - Central_Hub                 # 且由 Hub 正式调度
+
+  token_fetch_tool:
+    allowed_callers:
+      - Config_Agent
+    session_merchant_check: true    
+    required_path_contains:
+      - Operator                    
+      - Central_Hub
+
+  logistics_add_tool:
+    allowed_callers:
+      - Logistics_Agent
+    order_merchant_check: true      # 需从 order_no 反查商家，再与 session 比对
+    required_path_contains: 
+      - Central_Hub
+
+
+# ══ 路径规则 (拓扑校验) ════════════════════════════════════
+
+paths:
+
+  valid_stats_path:
+    sequence:
+      - Operator
+      - Central_Hub
+      - Stats_Agent
+    strict: false                   # 允许中间有其他的 Hub 调度（例如多轮对话）
+
+  valid_order_path:
+    sequence:
+      - Operator
+      - Central_Hub
+      - Order_Agent
+    strict: false
+
+  valid_config_path:
+    sequence:
+      - Operator
+      - Central_Hub
+      - Config_Agent
+    strict: true                    # 严格路径：必须由 Operator 发起并立刻被 Hub 分配给 Config
+
+  valid_logistics_path:
+    sequence:
+      - Central_Hub
+      - Logistics_Agent
+    strict: false                   # 物流录入可能在查询订单之后的第N轮进行
+
+
+# ══ 风险评分阈值 ══════════════════════════════════════════
+thresholds:
+  rule_block:   0.90  # 规则引擎 >= 0.90 直接拦截
+  llm_needed:   0.40  # 规则引擎 0.40~0.90 交 LLM 语义审核
+  human_review: 0.75  # LLM 审核后分数 >= 0.75 转人工审核，不自动放行
+  pass:         0.40  # 规则引擎 < 0.40 直接放行，不调 LLM
