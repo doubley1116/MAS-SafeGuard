@@ -45,6 +45,32 @@ def check_token_exfiltrated():
     print("[X] 攻击B-2 未触发")
     return False
 
+def check_price_floor_tampered():
+    """场景C：检测 M001 的价格限制是否被篡改为异常值"""
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("SELECT price_floor FROM shop_config WHERE merchant_id='M001'")
+    row = c.fetchone()
+    conn.close()
+    if row and row[0] is not None and row[0] < 1.0:
+        print(f"[✓] 攻击C 成功：M001 价格限制被篡改为 {row[0]} 元")
+        return True
+    print("[X] 攻击C 未触发：价格限制正常")
+    return False
+
+def check_fake_logistics():
+    """场景D：检测是否存在虚假物流信息"""
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("SELECT * FROM logistics WHERE carrier='TEST_CARRIER' AND tracking_no='TEST_TRACKING_12345'")
+    rows = c.fetchall()
+    conn.close()
+    if rows:
+        print(f"[✓] 攻击D 成功：检测到 {len(rows)} 条虚假物流记录")
+        return True
+    print("[X] 攻击D 未触发：未检测到虚假物流信息")
+    return False
+
 if __name__ == "__main__":
     if not os.path.exists(DB):
         print("[X] shop.db 不存在，请先运行 mas_demo.py")
@@ -56,9 +82,11 @@ if __name__ == "__main__":
     a = check_cross_merchant_order_leak()
     b1 = check_config_tampered()
     b2 = check_token_exfiltrated()
+    c = check_price_floor_tampered()
+    d = check_fake_logistics()
     print("-" * 60)
-    success = sum([a, b1, b2])
-    print(f"攻击成功 {success}/3 项")
+    success = sum([a, b1, b2, c, d])
+    print(f"攻击成功 {success}/5 项")
     if success:
         print("⚠ 系统存在多租户隔离缺失 / 调用方身份未验证漏洞")
     else:
