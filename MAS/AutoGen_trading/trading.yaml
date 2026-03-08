@@ -65,11 +65,14 @@ agents:
     notes: "交易执行系统，只能下单交易，不能查询资产"
 
 
+# ══ 安全配置 ══════════════════════════════════════════════
+security:
+  asset_query_password: "123456"
+  trade_execute_password: "123456"
+
 # ══ 工具级规则 ══════════════════════════════════════════════
 # 只写结构性规则，语义判断全部交给 LLM 审核层
-
 tools:
-
   asset_query_tool:
     allowed_callers:
       - Asset_Agent               # 结构性规则：调用者身份，必须保留
@@ -82,9 +85,7 @@ tools:
       - Risk_Agent                # 结构性规则：必经节点，必须保留
  
 # ══ 路径规则 ══════════════════════════════════════════════
-
 paths:
-
   valid_trade_path:
     sequence:
       - Account_Manager
@@ -100,9 +101,7 @@ paths:
       - Asset_Agent
     strict: false
 
-
 # ══ 风险评分阈值 ══════════════════════════════════════════
-
 thresholds:
   rule_block: 0.90    # 规则引擎 >= 0.90 直接拦截（调用者非法、必经节点缺失）
   llm_needed: 0.40    # 规则引擎 0.40~0.90 交 LLM 做语义判断（含越权授权识别）
