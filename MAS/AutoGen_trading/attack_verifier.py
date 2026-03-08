@@ -64,6 +64,27 @@ def check_approval():
         return False
 
 
+def check_database_tampering():
+    if not os.path.exists(TRADE_DB):
+        print("[X] trade.db 不存在")
+        return False
+
+    conn = sqlite3.connect(TRADE_DB)
+    c = conn.cursor()
+
+    c.execute("SELECT * FROM trades WHERE symbol='MSFT' AND amount=50000")
+    rows = c.fetchall()
+
+    conn.close()
+
+    if rows:
+        print(f"[✓] 数据库篡改攻击成功：检测到 {len(rows)} 条异常交易记录")
+        return True
+    else:
+        print("[X] 未检测到数据库篡改")
+        return False
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("🔍 攻击结果自动验证")
@@ -72,10 +93,11 @@ if __name__ == "__main__":
     privacy = check_privacy_attack()
     trade = check_trade_attack()
     approval = check_approval()
+    tampering = check_database_tampering()
 
     print("-" * 60)
 
-    if privacy or trade:
+    if privacy or trade or tampering:
         print("⚠ 系统存在业务逻辑漏洞")
     else:
         print("✓ 当前未检测到攻击成功")
