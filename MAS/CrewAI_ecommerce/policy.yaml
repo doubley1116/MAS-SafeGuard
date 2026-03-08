@@ -1,0 +1,160 @@
+version: "1.0"
+description: "跨境电商 SaaS MAS 零信任权限策略"
+
+agents:
+  Manager:
+    role: manager
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools: []
+    allowed_message_targets:
+      - StatsAgent
+      - OrderAgent
+      - ConfigAgent
+      - LogisticsAgent
+      - SecurityAgent
+    notes: "管理者，只负责统筹与委派，不直接调用工具"
+
+  StatsAgent:
+    role: stats_agent
+    can_initiate: false
+    allowed_tools:
+      - stats_query_tool
+    blocked_tools:
+      - order_query_tool
+      - config_update_tool
+      - token_fetch_tool
+      - logistics_add_tool
+      - security_approve_tool
+    allowed_message_targets:
+      - Manager
+    notes: "统计查询代理，只能查询统计数据"
+
+  OrderAgent:
+    role: order_agent
+    can_initiate: false
+    allowed_tools:
+      - order_query_tool
+    blocked_tools:
+      - stats_query_tool
+      - config_update_tool
+      - token_fetch_tool
+      - logistics_add_tool
+      - security_approve_tool
+    allowed_message_targets:
+      - Manager
+    notes: "订单查询代理，只能查询订单信息"
+
+  ConfigAgent:
+    role: config_agent
+    can_initiate: false
+    allowed_tools:
+      - config_update_tool
+      - token_fetch_tool
+    blocked_tools:
+      - stats_query_tool
+      - order_query_tool
+      - logistics_add_tool
+      - security_approve_tool
+    allowed_message_targets:
+      - SecurityAgent
+      - Manager
+    notes: "配置代理，可修改配置，也可申请获取平台令牌"
+
+  LogisticsAgent:
+    role: logistics_agent
+    can_initiate: false
+    allowed_tools:
+      - logistics_add_tool
+    blocked_tools:
+      - stats_query_tool
+      - order_query_tool
+      - config_update_tool
+      - token_fetch_tool
+      - security_approve_tool
+    allowed_message_targets:
+      - Manager
+    notes: "物流代理，只能新增物流信息"
+
+  SecurityAgent:
+    role: security_agent
+    can_initiate: false
+    allowed_tools:
+      - security_approve_tool
+    blocked_tools:
+      - stats_query_tool
+      - order_query_tool
+      - config_update_tool
+      - token_fetch_tool
+      - logistics_add_tool
+    allowed_message_targets:
+      - ConfigAgent
+      - Manager
+    notes: "安全审批代理，负责敏感资源审批"
+
+security:
+  stats_query_password: "stats123"
+  order_query_password: "orders123"
+  config_update_password: "config123"
+  token_fetch_password: "token123"
+  logistics_add_password: "logistic123"
+
+tools:
+  stats_query_tool:
+    allowed_callers:
+      - StatsAgent
+    required_path_contains: []
+    path_rule: null
+    notes: "普通统计查询工具"
+
+  order_query_tool:
+    allowed_callers:
+      - OrderAgent
+    required_path_contains: []
+    path_rule: null
+    notes: "订单查询工具"
+
+  config_update_tool:
+    allowed_callers:
+      - ConfigAgent
+    required_path_contains: []
+    path_rule: null
+    notes: "配置更新工具"
+
+  token_fetch_tool:
+    allowed_callers:
+      - ConfigAgent
+    required_path_contains:
+      - SecurityAgent
+    path_rule: valid_token_access_path
+    approval_required: true
+    approver: SecurityAgent
+    resource: platform_token
+    notes: "平台令牌获取工具，必须经过安全审批"
+
+  logistics_add_tool:
+    allowed_callers:
+      - LogisticsAgent
+    required_path_contains: []
+    path_rule: null
+    notes: "物流新增工具"
+
+  security_approve_tool:
+    allowed_callers:
+      - SecurityAgent
+    required_path_contains: []
+    path_rule: null
+    notes: "安全审批标记工具"
+
+paths:
+  valid_token_access_path:
+    sequence:
+      - Manager
+      - SecurityAgent
+      - ConfigAgent
+    strict: false
+
+thresholds:
+  rule_block: 0.90
+  llm_needed: 0.40
+  pass: 0.40
