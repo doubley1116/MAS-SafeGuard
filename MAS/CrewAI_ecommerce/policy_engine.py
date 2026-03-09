@@ -13,66 +13,79 @@ class PolicyEngine:
     def __init__(self, policy: dict):
         self.policy = policy or {}
 
-    def get_role_policy(self, role: str) -> dict:
-        return self.policy.get("roles", {}).get(role, {})
+    def get_agent_policy(self, agent_name: str) -> dict:
+        return self.policy.get("agents", {}).get(agent_name, {})
 
-    def check_tool_access(self, role: str, tool_name: str):
-        role_policy = self.get_role_policy(role)
-        allowed_tools = role_policy.get("allowed_tools", [])
-        if tool_name not in allowed_tools:
-            raise PolicyViolation(f"角色 {role} 不允许调用工具 {tool_name}")
+    def get_tool_policy(self, tool_name: str) -> dict:
+        return self.policy.get("tools", {}).get(tool_name, {})
 
-    def _eval_condition(self, condition: dict, context: dict) -> bool:
-        if not condition:
-            return False
+    def check_tool_access(self, agent_name: str, tool_name: str):
+        agent_policy = self.get_agent_policy(agent_name)
+        tool_policy = self.get_tool_policy(tool_name)
 
-        field = condition.get("field")
-        operator = condition.get("operator")
-        expected = condition.get("value")
-        actual = context.get(field)
+        allowed_tools = agent_policy.get("allowed_tools", [])
+        blocked_tools = agent_policy.get("blocked_tools", [])
+        allowed_callers = tool_policy.get("allowed_callers", [])
 
-        if operator == ">":
-            return actual is not None and actual > expected
-        elif operator == "<":
-            return actual is not None and actual < expected
-        elif operator == "==":
-            return actual == expected
-        elif operator == "!=":
-            return actual != expected
-        elif operator == ">=":
-            return actual is not None and actual >= expected
-        elif operator == "<=":
-            return actual is not None and actual <= expected
-        return False
+        print(
+            f"[DEBUG] agent={agent_name}, tool={tool_name}, "
+            f"allowed_tools={allowed_tools}, blocked_tools={blocked_tools}, allowed_callers={allowed_callers}",
+            flush=True
+        )
+
+        if tool_name in blocked_tools:
+            raise PolicyViolation(f"角色 {agent_name} 被明确禁止调用工具 {tool_name}")
+
+        if allowed_tools and tool_name not in allowed_tools:
+            raise PolicyViolation(f"角色 {agent_name} 不允许调用工具 {tool_name}")
+
+        if allowed_callers and agent_name not in allowed_callers:
+            raise PolicyViolation(f"工具 {tool_name} 不允许由 {agent_name} 调用")
 
     def check_approval_required(self, role: str, context: dict):
-        role_policy = self.get_role_policy(role)
-        approval_rule_names = role_policy.get("require_approval_for", [])
-        approval_rules = self.policy.get("approval", {})
-
-        for rule_name in approval_rule_names:
-            rule = approval_rules.get(rule_name, {})
-            condition = rule.get("condition", {})
-            approver = rule.get("approver")
-
-            if self._eval_condition(condition, context):
-                raise ApprovalRequired(
-                    message=f"操作触发审批规则: {rule_name}",
-                    approver=approver,
-                    rule_name=rule_name
-                )
-
-    def check_workflow_path(self, execution_path: list[str]):
-        required_path = self.policy.get("workflow", {}).get("required_path", [])
-        if not required_path:
+        context = context or {}
+        tool_name = context.get("tool_name")
+        if not tool_name:
             return
 
-        idx = 0
-        for role in execution_path:
-            if idx < len(required_path) and role == required_path[idx]:
-                idx += 1
-
-        if idx < len(required_path):
-            raise PolicyViolation(
-                f"执行路径不符合要求，必须包含顺序路径 {required_path}，当前路径 {execution_path}"
+        tool_policy = self.policy.get("tools", {}).get(tool_name, {})
+        if tool_policy.get("approval_required", False):
+            raise ApprovalRequired(
+                message=f"操作需要审批: {tool_name}",
+                approver=tool_policy.get("approver"),
+                rule_name=tool_name
             )
+
+
+    def check_workflow_path(self, tool_name: str, execution_path: list[str]):
+        tool_policy = self.get_tool_policy(tool_name)
+        required_path_contains = tool_policy.get("required_path_contains", [])
+        path_rule = tool_policy.get("path_rule")
+
+        # 先检查 required_path_contains
+        for node in required_path_contains:
+            if node not in execution_path:
+                raise PolicyViolation(
+                    f"执行路径不符合要求，必须包含 {node}，当前路径 {execution_path}"
+                )
+
+        # 再检查 path_rule
+        if path_rule:
+            path_config = self.policy.get("paths", {}).get(path_rule, {})
+            sequence = path_config.get("sequence", [])
+            strict = path_config.get("strict", False)
+
+            if strict:
+                if execution_path != sequence:
+                    raise PolicyViolation(
+                        f"执行路径不符合严格要求，必须为 {sequence}，当前路径 {execution_path}"
+                    )
+            else:
+                idx = 0
+                for role in execution_path:
+                    if idx < len(sequence) and role == sequence[idx]:
+                        idx += 1
+                if idx < len(sequence):
+                    raise PolicyViolation(
+                        f"执行路径不符合要求，必须包含顺序路径 {sequence}，当前路径 {execution_path}"
+                    )
