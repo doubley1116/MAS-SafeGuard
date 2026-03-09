@@ -52,6 +52,7 @@ cache/
 # 攻击验证报告
 reports/
 attack_results/
+*.json
 *.jsonl
 # AutoGen 临时文件
 autogen_logs/
