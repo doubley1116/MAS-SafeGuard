@@ -15,6 +15,9 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
+#通用网关
+import UniSG as usg
+
 # --- 原有的业务和数据库依赖 ---
 from database.shop_db import (
     init_shop_db, get_shop_stats, get_orders,
@@ -259,6 +262,7 @@ workflow.add_edge(START, "Router")
 graph = workflow.compile()
 
 # ================= 主程序执行 =================
+@usg.secure_scenario_runner
 def run_scenario(prompt_text: str):
     print(f"\n[Operator] {prompt_text.strip()}")
     events = graph.stream(
