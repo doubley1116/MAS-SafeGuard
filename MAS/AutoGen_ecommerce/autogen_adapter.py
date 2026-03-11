@@ -52,6 +52,8 @@ class AutoGenAuditAdapter:
                      sender: str, 
                      receiver: str, 
                      content: str,
+                     call_path: Optional[List[str]] = None,
+                     history_summary: Optional[str] = None,
                      metadata: Optional[Dict[str, Any]] = None) -> AuditEvent:
         """发送消息事件"""
         
@@ -62,15 +64,19 @@ class AutoGenAuditAdapter:
         # 更新消息历史
         self.message_history.append(f"{sender}->{receiver}: {content[:50]}...")
         
+        # 使用传入参数或默认值
+        final_call_path = call_path or self.call_path.copy()
+        final_history_summary = history_summary or self.get_history_summary()
+        
         event = AuditEvent(
             event_type="message",
             sender=sender,
             receiver=receiver,
             tool_name=None,
             tool_args=None,
-            call_path=self.call_path.copy(),
+            call_path=final_call_path,
             content=content,
-            history_summary=self.get_history_summary(),
+            history_summary=final_history_summary,
             trace_id=self.trace_id,
             metadata=metadata or {}
         )
@@ -82,12 +88,18 @@ class AutoGenAuditAdapter:
                        sender: str,
                        tool_name: str,
                        tool_args: Optional[Dict[str, Any]] = None,
+                       call_path: Optional[List[str]] = None,
                        content: Optional[str] = None,
+                       history_summary: Optional[str] = None,
                        metadata: Optional[Dict[str, Any]] = None) -> AuditEvent:
         """发送工具调用事件"""
         
         # 净化工具参数
         clean_args = self.sanitize_payload(tool_args or {})
+        
+        # 使用传入参数或默认值
+        final_call_path = call_path or self.call_path.copy()
+        final_history_summary = history_summary or self.get_history_summary()
         
         event = AuditEvent(
             event_type="tool_call",
@@ -95,9 +107,9 @@ class AutoGenAuditAdapter:
             receiver=None,
             tool_name=tool_name,
             tool_args=clean_args,
-            call_path=self.call_path.copy(),
+            call_path=final_call_path,
             content=content,
-            history_summary=self.get_history_summary(),
+            history_summary=final_history_summary,
             trace_id=self.trace_id,
             metadata=metadata or {}
         )
@@ -109,8 +121,16 @@ class AutoGenAuditAdapter:
                          sender: str,
                          tool_name: str,
                          result: Any,
+                         call_path: Optional[List[str]] = None,
+                         content: Optional[str] = None,
+                         history_summary: Optional[str] = None,
                          metadata: Optional[Dict[str, Any]] = None) -> AuditEvent:
         """发送工具执行结果事件"""
+        
+        # 使用传入参数或默认值
+        final_call_path = call_path or self.call_path.copy()
+        final_content = content or str(result)
+        final_history_summary = history_summary or self.get_history_summary()
         
         event = AuditEvent(
             event_type="tool_result",
@@ -118,9 +138,9 @@ class AutoGenAuditAdapter:
             receiver=None,
             tool_name=tool_name,
             tool_args=None,
-            call_path=self.call_path.copy(),
-            content=str(result),
-            history_summary=self.get_history_summary(),
+            call_path=final_call_path,
+            content=final_content,
+            history_summary=final_history_summary,
             trace_id=self.trace_id,
             metadata=metadata or {}
         )
@@ -147,29 +167,45 @@ class AutoGenAuditAdapter:
 
 
 def audit_tool_execution(func: Callable) -> Callable:
-    """用于拦截工具调用的装饰器"""
+    """用于拦截工具调用的装饰器（修复sender标识问题）"""
     
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         # 获取工具名称和参数
         tool_name = func.__name__
         
+        # 从调用栈中获取调用者信息（通常是具体的Agent名称）
+        import inspect
+        caller_frame = inspect.currentframe().f_back
+        caller_locals = caller_frame.f_locals
+        
+        # 尝试获取调用者的名称
+        sender_name = "Unknown_Agent"
+        if 'self' in caller_locals:
+            # 如果是类方法调用，获取self的name属性
+            caller_self = caller_locals['self']
+            if hasattr(caller_self, 'name'):
+                sender_name = caller_self.name
+            elif hasattr(caller_self, '__class__'):
+                sender_name = caller_self.__class__.__name__
+        
         # 创建适配器实例
         adapter = AutoGenAuditAdapter(trace_id="tool_call_audit")
         
-        # 发送工具调用事件
+        # 发送工具调用事件（使用具体的Agent名称）
         adapter.emit_tool_call(
-            sender="Agent",
+            sender=sender_name,
             tool_name=tool_name,
-            tool_args=kwargs
+            tool_args=kwargs,
+            content=f"调用工具 {tool_name}"
         )
         
         # 执行原始函数
         result = func(*args, **kwargs)
         
-        # 发送工具结果事件
+        # 发送工具结果事件（使用具体的Agent名称）
         adapter.emit_tool_result(
-            sender="Agent",
+            sender=sender_name,
             tool_name=tool_name,
             result=result
         )
