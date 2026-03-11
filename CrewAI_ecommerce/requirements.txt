@@ -1,0 +1,4 @@
+crewai[tools]==1.10.1
+python-dotenv==1.1.1
+openai==2.8.1
+PyYAML==6.0.3
