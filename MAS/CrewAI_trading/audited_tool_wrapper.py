@@ -40,7 +40,7 @@ class AuditedToolWrapper:
 
     def __call__(self, *args, **kwargs) -> Any:
         sender = self.agent_name_getter()
-        call_path = list(self.call_path_getter() or [])
+        agent_call_path = list(self.call_path_getter() or [])
         history_summary = self.history_summary_getter()
         base_metadata = dict(self.metadata_getter() or {})
 
@@ -49,31 +49,39 @@ class AuditedToolWrapper:
             "kwargs": {k: self._safe_serialize(v) for k, v in kwargs.items()},
         }
 
+        tool_call_path = list(agent_call_path)
+        if not tool_call_path or tool_call_path[-1] != self.tool_name:
+            tool_call_path.append(self.tool_name)
+
         self.adapter.emit_tool_call(
             sender=sender,
             tool_name=self.tool_name,
             tool_args=safe_tool_args,
-            call_path=call_path,
+            call_path=tool_call_path,
             history_summary=history_summary,
             metadata={
                 **base_metadata,
                 "wrapper": "AuditedToolWrapper",
+                "agent_call_path": agent_call_path,
             },
         )
 
         try:
             result = self.tool(*args, **kwargs)
+            safe_result = self._safe_serialize(result)
 
             self.adapter.emit_tool_result(
                 sender=sender,
                 tool_name=self.tool_name,
-                result=self._safe_serialize(result),
-                call_path=call_path,
-                history_summary=history_summary,
+                result=safe_result,
+                call_path=tool_call_path,
+                history_summary=self.history_summary_getter(),
                 metadata={
                     **base_metadata,
                     "status": "success",
                     "wrapper": "AuditedToolWrapper",
+                    "agent_call_path": agent_call_path,
+                    "tool_args_snapshot": safe_tool_args,
                 },
             )
             return result
@@ -83,13 +91,16 @@ class AuditedToolWrapper:
                 sender=sender,
                 tool_name=self.tool_name,
                 result=f"{type(e).__name__}: {str(e)}",
-                call_path=call_path,
-                history_summary=history_summary,
+                call_path=tool_call_path,
+                history_summary=self.history_summary_getter(),
                 metadata={
                     **base_metadata,
                     "status": "error",
                     "exception_type": type(e).__name__,
+                    "exception_message": str(e),
                     "wrapper": "AuditedToolWrapper",
+                    "agent_call_path": agent_call_path,
+                    "tool_args_snapshot": safe_tool_args,
                 },
             )
             raise
@@ -112,7 +123,10 @@ class AuditedToolWrapper:
             return [AuditedToolWrapper._safe_serialize(v) for v in value]
 
         if isinstance(value, dict):
-            return {str(k): AuditedToolWrapper._safe_serialize(v) for k, v in value.items()}
+            return {
+                str(k): AuditedToolWrapper._safe_serialize(v)
+                for k, v in value.items()
+            }
 
         try:
             return str(value)
