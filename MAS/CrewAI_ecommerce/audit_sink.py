@@ -23,7 +23,7 @@ class PrintAuditSink:
     直接打印到控制台
     """
     def emit(self, event: AuditEvent) -> None:
-        print("[AUDIT]", json.dumps(asdict(event), ensure_ascii=False))
+        print("[AUDIT]", json.dumps(asdict(event), ensure_ascii=False, default=str))
 
 
 class JsonlAuditSink:
@@ -36,7 +36,7 @@ class JsonlAuditSink:
 
     def emit(self, event: AuditEvent) -> None:
         with self.file_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(event), ensure_ascii=False) + "\n")
+            f.write(json.dumps(asdict(event), ensure_ascii=False, default=str) + "\n")
 
 
 class CompositeAuditSink:
@@ -49,7 +49,10 @@ class CompositeAuditSink:
 
     def emit(self, event: AuditEvent) -> None:
         for sink in self.sinks:
-            sink.emit(event)
+            try:
+                sink.emit(event)
+            except Exception as e:
+                print(f"[AUDIT_SINK_ERROR] sink={sink.__class__.__name__} error={e}")
 
 
 class SecurityCoreSink:
