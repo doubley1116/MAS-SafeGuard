@@ -1,3 +1,4 @@
+#用来测试通用网关
 import os
 import sys
 import operator
@@ -19,6 +20,8 @@ from database.asset_db import init_asset_db, query_holdings
 from database.trade_db import init_trade_db, execute_trade
 from database.seed_data import seed_asset_data
 
+#通用网关
+import UniSG as usg
 
 # ================= 环境与模型配置 =================
 load_dotenv()
@@ -179,6 +182,7 @@ workflow.add_edge("Risk_Agent", END)
 graph = workflow.compile()
 
 # ================= 主程序 =================
+@usg.secure_scenario_runner #装饰器包裹运行入口
 def run_scenario(scenario_name, prompt_text):
     print(f"\n{scenario_name}")
     print("-" * 70)
