@@ -7,12 +7,6 @@ from database.asset_db import init_asset_db, query_holdings
 from database.trade_db import init_trade_db, execute_trade
 from database.seed_data import seed_asset_data
 
-from policy_loader import load_policy
-from policy_engine import PolicyEngine, PolicyViolation
-from workflow_guard import WorkflowGuard
-from password_guard import PasswordGuard, PasswordError
-from secure_executor import SecureExecutor
-
 load_dotenv()
 
 llm = LLM(
@@ -21,7 +15,168 @@ llm = LLM(
     base_url=os.getenv("BASE_URL")
 )
 
-# 初始化零信任安全组件
+import yaml
+
+
+def load_policy(path: str = "trading.yaml") -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        print("⚠️ 未找到 trade.yaml，使用默认空策略")
+        return {}
+
+class PolicyViolation(Exception):
+    pass
+
+
+class PolicyEngine:
+    def __init__(self, policy: dict):
+        self.policy = policy or {}
+
+    def get_agent_policy(self, agent_name: str) -> dict:
+        return self.policy.get("agents", {}).get(agent_name, {})
+
+    def get_tool_policy(self, tool_name: str) -> dict:
+        return self.policy.get("tools", {}).get(tool_name, {})
+
+    def check_tool_access(self, agent_name: str, tool_name: str):
+        tool_policy = self.get_tool_policy(tool_name)
+        allowed_callers = tool_policy.get("allowed_callers", [])
+        if allowed_callers and agent_name not in allowed_callers:
+            raise PolicyViolation(f"{agent_name} 不允许调用工具 {tool_name}")
+
+    def check_required_path_contains(self, tool_name: str, execution_path: list[str]):
+        tool_policy = self.get_tool_policy(tool_name)
+        required_nodes = tool_policy.get("required_path_contains", [])
+
+        for node in required_nodes:
+            if node not in execution_path:
+                raise PolicyViolation(
+                    f"工具 {tool_name} 缺少必经节点 {node}，当前路径: {execution_path}"
+                )
+
+    def _is_subsequence(self, seq: list[str], path: list[str]) -> bool:
+        idx = 0
+        for item in path:
+            if idx < len(seq) and item == seq[idx]:
+                idx += 1
+        return idx == len(seq)
+
+    def check_path_rule(self, tool_name: str, execution_path: list[str]):
+        tool_policy = self.get_tool_policy(tool_name)
+        path_rule_name = tool_policy.get("path_rule")
+
+        if not path_rule_name:
+            return
+
+        path_rule = self.policy.get("paths", {}).get(path_rule_name, {})
+        required_sequence = path_rule.get("sequence", [])
+        strict = path_rule.get("strict", False)
+
+        if not required_sequence:
+            return
+
+        if strict:
+            if execution_path != required_sequence:
+                raise PolicyViolation(
+                    f"工具 {tool_name} 执行路径不符合严格路径要求，"
+                    f"要求: {required_sequence}，当前: {execution_path}"
+                )
+        else:
+            if not self._is_subsequence(required_sequence, execution_path):
+                raise PolicyViolation(
+                    f"工具 {tool_name} 执行路径不符合要求，"
+                    f"要求包含顺序路径: {required_sequence}，当前: {execution_path}"
+                )
+
+import threading
+
+
+class PasswordError(Exception):
+    pass
+
+
+class PasswordGuard:
+    _input_lock = threading.Lock()
+
+    def __init__(self, policy: dict):
+        self.policy = policy or {}
+        self.security = self.policy.get("security", {})
+        self.verified_tools = set()
+
+    def get_password_for_tool(self, tool_name: str):
+        mapping = {
+            "asset_query_tool": "asset_query_password",
+            "trade_execute_tool": "trade_execute_password",
+        }
+        key = mapping.get(tool_name)
+        if not key:
+            return None
+        return self.security.get(key)
+
+    def verify(self, tool_name: str, display_name: str = None):
+        if tool_name in self.verified_tools:
+            return
+
+        expected = self.get_password_for_tool(tool_name)
+        if expected is None:
+            return
+
+        shown_name = display_name or tool_name
+
+        with self._input_lock:
+            if tool_name in self.verified_tools:
+                return
+
+            print(f"\n🔐 工具调用需要密码验证: {shown_name}", flush=True)
+            entered = input("请输入密码: ").strip()
+
+            if entered != expected:
+                raise PasswordError(f"密码错误！工具 {tool_name} 调用被拒绝。")
+
+            print("✅ 密码验证成功", flush=True)
+            self.verified_tools.add(tool_name)
+
+    def reset(self):
+        self.verified_tools.clear()
+
+class SecureExecutor:
+    def __init__(self, policy_engine, workflow_guard, password_guard):
+        self.policy_engine = policy_engine
+        self.workflow_guard = workflow_guard
+        self.password_guard = password_guard
+
+    def execute_tool(self, agent_name: str, tool_name: str, tool_func, password_label=None, **kwargs):
+        # 1. 工具调用权限
+        self.policy_engine.check_tool_access(agent_name, tool_name)
+
+        # 2. 路径约束
+        current_path = self.workflow_guard.get_path()
+        self.policy_engine.check_required_path_contains(tool_name, current_path)
+        self.policy_engine.check_path_rule(tool_name, current_path)
+
+        # 3. 密码验证
+        self.password_guard.verify(tool_name, password_label)
+
+        # 4. 实际执行
+        return tool_func(**kwargs)
+
+class WorkflowGuard:
+    def __init__(self):
+        self.execution_path = []
+
+    def enter(self, role: str):
+        self.execution_path.append(role)
+
+    def get_path(self):
+        return list(self.execution_path)
+
+    def reset(self):
+        self.execution_path = []
+
+
+
 policy = load_policy("trading.yaml")
 policy_engine = PolicyEngine(policy)
 workflow_guard = WorkflowGuard()
