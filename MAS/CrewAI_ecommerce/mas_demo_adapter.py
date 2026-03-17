@@ -3,11 +3,11 @@ from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import BaseTool
 import uuid
-from crewai_execute_task_patch import patch_agent_execute_task
+from crewai_adapter import patch_agent_execute_task
 
 from audit_sink import PrintAuditSink, JsonlAuditSink, CompositeAuditSink
 from crewai_adapter import CrewAIAuditAdapter
-from audited_tool_wrapper import AuditedToolWrapper
+from crewai_adapter import AuditedToolWrapper
 
 from database.shop_db import (
     init_shop_db, get_shop_stats, get_orders,
@@ -15,11 +15,7 @@ from database.shop_db import (
 )
 from database.seed_data import seed_shop_data
 
-from policy_loader import load_policy
-from policy_engine import PolicyEngine, PolicyViolation, ApprovalRequired
-from secure_executor import SecureExecutor
-from workflow_guard import WorkflowGuard
-from password_guard import PasswordGuard, PasswordError
+import yaml
 
 load_dotenv()
 
@@ -30,8 +26,210 @@ llm = LLM(
 )
 
 # =========================
+# 密码层
+# =========================
+import sys
+import threading
+class PasswordError(Exception):
+    pass
+
+class PasswordGuard:
+    _input_lock = threading.Lock()
+
+    def __init__(self, policy: dict):
+        self.policy = policy or {}
+        self.security = self.policy.get("security", {})
+        self.verified_tools = set()
+
+    def get_password_for_tool(self, tool_name: str) -> str | None:
+        mapping = {
+            "stats_query_tool": "stats_query_password",
+            "order_query_tool": "order_query_password",
+            "config_update_tool": "config_update_password",
+            "token_fetch_tool": "token_fetch_password",
+            "logistics_add_tool": "logistics_add_password",
+        }
+        key = mapping.get(tool_name)
+        if not key:
+            return None
+
+        value = self.security.get(key)
+        if value is None:
+            return None
+
+        return str(value).strip()
+
+    def verify(self, tool_name: str, display_name: str = None):
+        expected = self.get_password_for_tool(tool_name)
+        if expected is None:
+            return
+
+        shown_name = display_name or tool_name
+
+        with self._input_lock:
+            print(f"\n🔐 工具调用需要密码验证: {shown_name} ({tool_name})", flush=True)
+            print("请输入密码: ", end="", flush=True)
+
+            entered = sys.stdin.readline()
+            if entered is None:
+                entered = ""
+            entered = entered.rstrip("\r\n").strip()
+
+            print(
+                f"[DEBUG] tool={tool_name}, entered={repr(entered)}, expected={repr(expected)}, match={entered == expected}",
+                flush=True
+            )
+
+            if entered != expected:
+                raise PasswordError(f"密码错误！工具 {tool_name} 调用被拒绝。")
+
+            print(f"✅ 密码验证成功: {tool_name}", flush=True)
+
+# =========================
 # 策略初始化
 # =========================
+
+class SecureExecutor:
+    def __init__(self, policy_engine, workflow_guard=None):
+        self.policy_engine = policy_engine
+        self.workflow_guard = workflow_guard
+
+    def execute_tool(self, role: str, tool_name: str, tool_func, **kwargs):
+        # 1. 工具权限检查
+        self.policy_engine.check_tool_access(role, tool_name)
+
+        # 2. 审批检查
+        self.policy_engine.check_approval_required(role, kwargs)
+
+        # 3. 真正执行
+        return tool_func(**kwargs)
+
+class WorkflowGuard:
+    def __init__(self, policy_engine):
+        self.policy_engine = policy_engine
+        self.execution_path: list[str] = []
+
+    def enter(self, role: str) -> None:
+        self.execution_path.append(role)
+
+    def reset(self) -> None:
+        self.execution_path = []
+
+    def validate(self, tool_name: str) -> None:
+        print(f"[WORKFLOW] validating tool={tool_name}, path={self.execution_path}", flush=True)
+        self.policy_engine.check_workflow_path(
+            tool_name=tool_name,
+            execution_path=self.execution_path
+        )
+
+
+def load_policy(path: str = "policy.yaml") -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        print("⚠️ 未找到 policy.yaml，使用默认策略")
+        return {
+            "security": {
+                "stats_query_password": "default_stats_pass",
+                "order_query_password": "default_order_pass",
+                "config_update_password": "default_config_pass",
+                "token_fetch_password": "default_token_pass",
+                "logistics_add_password": "default_logistics_pass"
+            }
+        }
+
+class PolicyViolation(Exception):
+    pass
+
+class ApprovalRequired(Exception):
+    def __init__(self, message: str, approver: str = None, rule_name: str = None):
+        super().__init__(message)
+        self.approver = approver
+        self.rule_name = rule_name
+
+class PolicyEngine:
+    def __init__(self, policy: dict):
+        self.policy = policy or {}
+
+    def get_agent_policy(self, agent_name: str) -> dict:
+        return self.policy.get("agents", {}).get(agent_name, {})
+
+    def get_tool_policy(self, tool_name: str) -> dict:
+        return self.policy.get("tools", {}).get(tool_name, {})
+
+    def check_tool_access(self, agent_name: str, tool_name: str):
+        agent_policy = self.get_agent_policy(agent_name)
+        tool_policy = self.get_tool_policy(tool_name)
+
+        allowed_tools = agent_policy.get("allowed_tools", [])
+        blocked_tools = agent_policy.get("blocked_tools", [])
+        allowed_callers = tool_policy.get("allowed_callers", [])
+
+        print(
+            f"[DEBUG] agent={agent_name}, tool={tool_name}, "
+            f"allowed_tools={allowed_tools}, blocked_tools={blocked_tools}, allowed_callers={allowed_callers}",
+            flush=True
+        )
+
+        if tool_name in blocked_tools:
+            raise PolicyViolation(f"角色 {agent_name} 被明确禁止调用工具 {tool_name}")
+
+        if allowed_tools and tool_name not in allowed_tools:
+            raise PolicyViolation(f"角色 {agent_name} 不允许调用工具 {tool_name}")
+
+        if allowed_callers and agent_name not in allowed_callers:
+            raise PolicyViolation(f"工具 {tool_name} 不允许由 {agent_name} 调用")
+
+    def check_approval_required(self, role: str, context: dict):
+        context = context or {}
+        tool_name = context.get("tool_name")
+        if not tool_name:
+            return
+
+        tool_policy = self.policy.get("tools", {}).get(tool_name, {})
+        if tool_policy.get("approval_required", False):
+            raise ApprovalRequired(
+                message=f"操作需要审批: {tool_name}",
+                approver=tool_policy.get("approver"),
+                rule_name=tool_name
+            )
+
+
+    def check_workflow_path(self, tool_name: str, execution_path: list[str]):
+        tool_policy = self.get_tool_policy(tool_name)
+        required_path_contains = tool_policy.get("required_path_contains", [])
+        path_rule = tool_policy.get("path_rule")
+
+        # 先检查 required_path_contains
+        for node in required_path_contains:
+            if node not in execution_path:
+                raise PolicyViolation(
+                    f"执行路径不符合要求，必须包含 {node}，当前路径 {execution_path}"
+                )
+
+        # 再检查 path_rule
+        if path_rule:
+            path_config = self.policy.get("paths", {}).get(path_rule, {})
+            sequence = path_config.get("sequence", [])
+            strict = path_config.get("strict", False)
+
+            if strict:
+                if execution_path != sequence:
+                    raise PolicyViolation(
+                        f"执行路径不符合严格要求，必须为 {sequence}，当前路径 {execution_path}"
+                    )
+            else:
+                idx = 0
+                for role in execution_path:
+                    if idx < len(sequence) and role == sequence[idx]:
+                        idx += 1
+                if idx < len(sequence):
+                    raise PolicyViolation(
+                        f"执行路径不符合要求，必须包含顺序路径 {sequence}，当前路径 {execution_path}"
+                    )
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 policy_path = os.path.join(BASE_DIR, "policy.yaml")
 policy = load_policy(policy_path)   
@@ -52,7 +250,6 @@ audit_adapter = CrewAIAuditAdapter(
     sink=audit_sink,
     trace_id=""   # 每次 kickoff 前动态赋值
 )
-
 
 # =========================
 # 包装函数
@@ -93,7 +290,6 @@ def set_current_trace(task_description: str, expected_output: str = "") -> str:
     audit_adapter.trace_id = CURRENT_TRACE_ID
     return CURRENT_TRACE_ID
 
-
 def get_history_summary() -> str:
     """
     给 AuditEvent.history_summary 提供最基础的上下文
@@ -104,7 +300,6 @@ def get_history_summary() -> str:
     if CURRENT_EXPECTED_OUTPUT:
         parts.append(f"expected_output={CURRENT_EXPECTED_OUTPUT.strip()}")
     return " | ".join(parts)
-
 
 def get_call_path(role: str) -> list[str]:
     """
@@ -147,9 +342,6 @@ patch_agent_execute_task(
     include_manager_events=False,
 )
 
-
-
-
 def build_tool_wrapper(
     role: str,
     tool_name: str,
@@ -174,7 +366,6 @@ def build_tool_wrapper(
         tool_name=tool_name
     )
 
-
 def kickoff_with_audit(crew: Crew, task: Task, scenario_name: str) -> None:
     """
     在 crew.kickoff() 前发一个 task_delegation 事件
@@ -198,7 +389,6 @@ def kickoff_with_audit(crew: Crew, task: Task, scenario_name: str) -> None:
     )
 
     crew.kickoff()
-
 
 # =========================
 # 工具定义
@@ -371,8 +561,6 @@ class LogisticsAddTool(BaseTool):
             return f"[策略拦截] {str(e)}"
 
 
-
-
 class SecurityApproveTool(BaseTool):
     name: str = "security_approve_tool"
     description: str = "执行安全审批记录"
@@ -392,6 +580,7 @@ class SecurityApproveTool(BaseTool):
             return runner()
         except Exception as e:
             return f"[审批异常] {str(e)}"
+
 
 
 
