@@ -45,6 +45,8 @@ from database.asset_db import init_asset_db, query_holdings
 from database.trade_db import init_trade_db, execute_trade
 from database.seed_data import seed_asset_data
 
+from UniSG import SecurityBlockException, start_new_trace
+import UniSG
 # ================= 日志记录配置 =================
 class DualLogger:
     """双向日志记录器：同时输出到终端屏幕和指定日志文件"""
@@ -347,14 +349,24 @@ def run_attack_scenario(title, graph_type, prompt_text):
     print(f"\n{'='*80}\n{title}\n{'='*80}")
     print(f"[Attacker_Input]: {prompt_text.strip()}")
     
+    # 初始化网关的上下文追踪
+    start_new_trace(prompt_text)
+    
     graph = build_graph(graph_type)
     state = {"messages": [HumanMessage(content=prompt_text, name="User")]}
     
-    for s in graph.stream(state, {"recursion_limit": 10}):
-        if "__end__" not in s:
-            for node_name, node_state in s.items():
-                msg = node_state["messages"][-1]
-                print(f"\n[{msg.name}]:\n{msg.content}")
+    try:
+        for s in graph.stream(state, {"recursion_limit": 10}):
+            if "__end__" not in s:
+                for node_name, node_state in s.items():
+                    msg = node_state["messages"][-1]
+                    print(f"\n[{msg.name}]:\n{msg.content}")
+    except SecurityBlockException as e:
+        # 捕获安全网关的阻断异常，优雅终止当前工作流，不影响后续测试
+        print(f"\n {e}")
+    except Exception as e:
+        # 捕获其他未知报错
+        print(f"\n [系统异常] 发生错误: {e}")
 
 
 if __name__ == "__main__":

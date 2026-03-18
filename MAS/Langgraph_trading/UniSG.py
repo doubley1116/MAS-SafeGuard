@@ -10,6 +10,7 @@ import uuid
 import functools
 import contextvars
 import inspect
+import random #测试随机返回AuditDecision
 from dataclasses import asdict
 from typing import Optional, Dict, Any, List
 
@@ -51,7 +52,7 @@ def get_history_summary(n: int = 3) -> str:
 # ================= 核心网关裁决逻辑 =================
 def evaluate_audit_event(event: AuditEvent, prefix: str) -> AuditDecision:
     event_dict = asdict(event)
-    print(f"\n🛡️[ 通用网关 | {prefix}] -> 捕获事件:\n{json.dumps(event_dict, indent=2, ensure_ascii=False)}")
+    print(f"\n[ 通用网关 | {prefix}] -> 捕获事件:\n{json.dumps(event_dict, indent=2, ensure_ascii=False)}")
     
     try:
         with open(AUDIT_LOG_FILE, 'r', encoding='utf-8') as f:
@@ -64,12 +65,31 @@ def evaluate_audit_event(event: AuditEvent, prefix: str) -> AuditDecision:
     with open(AUDIT_LOG_FILE, 'w', encoding='utf-8') as f:
         json.dump(events, f, indent=2, ensure_ascii=False)
 
-    decision = AuditDecision(
-        allow=True,
-        risk_score=0.1,  
-        reason="验证阶段：记录 Event 并放行",
-        blocking_risk_types=[]
-    )
+    # decision = AuditDecision(
+    #     allow=True,
+    #     risk_score=0.1,  
+    #     reason="验证阶段：记录 Event 并放行",
+    #     blocking_risk_types=[]
+    # )
+    
+    # 随机生成 True 或 False (可以根据需要调整权重，比如 random.random() > 0.3 表示 70% 概率放行)
+    is_allowed = random.choice([True, False])
+
+    if is_allowed:
+        decision = AuditDecision(
+            allow=True,
+            risk_score=round(random.uniform(0.0, 0.3), 2),  # 模拟低风险分数
+            reason="随机测试：网关评估通过，放行",
+            blocking_risk_types=[]
+        )
+    else:
+        decision = AuditDecision(
+            allow=False,
+            risk_score=round(random.uniform(0.8, 1.0), 2),  # 模拟高风险分数
+            reason="随机测试：触发随机阻断策略",
+            blocking_risk_types=["Random_Test_Block"]
+        )
+
     return decision
 
 # ================= 脏数据清洗 =================
