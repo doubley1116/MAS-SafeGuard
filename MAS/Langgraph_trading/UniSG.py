@@ -120,12 +120,14 @@ class SyncSecurityCallback(BaseCallbackHandler):
     """处理同步执行的回调"""
     raise_error: bool = True 
 
+    #监听工具调用
     def on_tool_start(self, serialized: Optional[Dict[str, Any]], input_str: str, **kwargs: Any) -> Any:
         serialized = serialized or {}
         tool_name = serialized.get("name") or kwargs.get("name") or "UnknownTool"
         payload = sanitize_payload(kwargs.get("inputs", input_str))
         _audit_action("tool_call", tool_name, payload)
 
+    #监听节点流转
     def on_chain_start(self, serialized: Optional[Dict[str, Any]], inputs: Dict[str, Any], **kwargs: Any) -> Any:
         serialized = serialized or {}
         name = serialized.get("name") or kwargs.get("name") or "UnknownNode"
@@ -140,11 +142,13 @@ class SyncSecurityCallback(BaseCallbackHandler):
 
         _audit_action("node_state", name, sanitize_payload(inputs))
 
+    #监听大模型输入
     def on_chat_model_start(self, serialized: Optional[Dict[str, Any]], messages: List[List[Any]], **kwargs: Any) -> Any:
         last_msg = messages[0][-1] if messages and messages[0] else None
         content = getattr(last_msg, "content", str(last_msg)) if last_msg else ""
         _audit_action("llm_request", "ChatModel", content)
 
+    #监听大模型输出
     def on_chat_model_end(self, response: Any, **kwargs: Any) -> Any:
         if response.generations and response.generations[0]:
             text = response.generations[0][0].text
@@ -200,10 +204,12 @@ class AsyncSecurityCallback(AsyncCallbackHandler):
 # ================= 核心：Config 级联注入器 =================
 def _inject_security_callback(config: Optional[Any], is_async: bool) -> Any:
     """透明地将网关 Callback 塞进 LangChain 运行时配置中"""
-    # 批量执行场景
+    
+    # 如果使用batch或abatch同时处理多个请求，config可能是一个列表，我们需要对每个元素都进行注入
     if isinstance(config, list):
         return [_inject_security_callback(c, is_async) for c in config]
         
+    #窃听器
     handler = AsyncSecurityCallback() if is_async else SyncSecurityCallback()
     
     if config is None:
@@ -218,6 +224,7 @@ def _inject_security_callback(config: Optional[Any], is_async: bool) -> Any:
         if raw_callbacks is None:
             handlers =[]
         elif isinstance(raw_callbacks, list):
+            #如果是列表
             handlers = list(raw_callbacks)
         elif hasattr(raw_callbacks, "handlers"): 
             # 如果是 LangChain 的 CallbackManager，提取出它内部的 handlers 列表
@@ -226,7 +233,7 @@ def _inject_security_callback(config: Optional[Any], is_async: bool) -> Any:
             # 如果是单个普通的 BaseCallbackHandler
             handlers = [raw_callbacks]
             
-        # 防止网关 Callback 被重复注入
+        # 防止Agent调用subAgent注入函数触发两次（复读）
         if not any(isinstance(c, (SyncSecurityCallback, AsyncSecurityCallback)) for c in handlers):
             handlers.append(handler)
             
@@ -237,10 +244,10 @@ def _inject_security_callback(config: Optional[Any], is_async: bool) -> Any:
 
 # ================= 底层入口猴子补丁 (Monkey Patching) =================
 # 1. 代理 CompiledStateGraph 的所有入口
-original_cg_invoke = CompiledStateGraph.invoke
-original_cg_ainvoke = CompiledStateGraph.ainvoke
-original_cg_stream = CompiledStateGraph.stream
-original_cg_astream = CompiledStateGraph.astream
+original_cg_invoke = CompiledStateGraph.invoke #同步单次调用
+original_cg_ainvoke = CompiledStateGraph.ainvoke #异步单次调用
+original_cg_stream = CompiledStateGraph.stream #同步流式输出
+original_cg_astream = CompiledStateGraph.astream #异步流式输出
 
 def secure_cg_invoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> Any:
     return original_cg_invoke(self, input, _inject_security_callback(config, False), **kwargs)
@@ -261,7 +268,7 @@ CompiledStateGraph.ainvoke = secure_cg_ainvoke
 CompiledStateGraph.stream = secure_cg_stream
 CompiledStateGraph.astream = secure_cg_astream
 
-# (可选扩展) 覆盖 astream_events 事件流
+# (可选扩展) 覆盖 细粒度事件流 
 if hasattr(CompiledStateGraph, "astream_events"):
     original_cg_astream_events = CompiledStateGraph.astream_events
     async def secure_cg_astream_events(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> Any:
