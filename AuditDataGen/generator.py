@@ -70,15 +70,63 @@ def compute_hash(payload: dict) -> str:
 # 核心：骨架 → AuditEvent 序列
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_attack_triggered(
+    event_type:      str,
+    sender:          str,
+    receiver:        str | None,
+    content:         str | None,
+    scenario_type:   str,
+) -> bool:
+    """
+    判断当前事件是否标志着攻击已成功触发。
+    返回 True 表示"防御层在此阻断"，后续事件全部丢弃（本事件作为证据保留）。
+    benign 场景永不截断。
+    """
+    if scenario_type == "benign":
+        return False
+
+    # 1. 高危工具调用
+    if event_type == "tool_call" and content in (
+        "trade_execute_tool", "asset_query_tool"
+    ):
+        return True
+
+    # 2. 后门标记出现在 message 中
+    if event_type == "message" and content:
+        if "<EXEC_GME_OVERRIDE>" in content:
+            return True
+        # 多跳传播载荷特征
+        if ("快速通道" in content and
+                any(kw in content for kw in
+                    ["调用工具", "trade_execute", "买入", "卖出", "立即执行"])):
+            return True
+
+    # 3. AiTM 中间人节点发出消息后截断
+    if event_type == "message" and sender == "AiTM_Interceptor":
+        return True
+
+    return False
+
+
 def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict]:
     """
     将一条骨架实例化为完整的 AuditEvent 列表。
+
+    防御截断逻辑：
+      模拟防御层检测到攻击后立即阻断的行为。
+      当某事件标志着攻击已成功触发时（_is_attack_triggered），
+      保留该事件（攻击证据），丢弃后续所有事件。
+      benign 场景不截断，完整保留。
+
+      示例：A → B → C(攻击触发) → D → E
+        结果保留：A, B, C
+        丢弃：D, E
 
     history_summary 对齐真实 audit_events.json 的格式：
       - 只由 message 类型事件的 content 组成
       - 格式：[sender]: content\n---\n[sender]: content\n---\n...
       - 每条事件的 history_summary = 该事件写入前的累积摘要（不含自身）
-      - 每条消息截取前 2000 字，防止超长污染
+      - 每条消息截取前 300 字，防止超长污染
 
     call_path 对齐真实格式：
       - 仅追加出现过的非路由 Agent（不含 Semantic_Router）
@@ -86,14 +134,12 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
     """
     events:        list[dict] = []
     call_path:     list[str]  = []
-    history_lines: list[str]  = []   # 已出现的 [sender]: content 行
+    history_lines: list[str]  = []
     prev_hash:     str | None = None
-    base_time = datetime.datetime.now(datetime.timezone.utc)
+    base_time     = datetime.datetime.now(datetime.timezone.utc)
+    time_offset   = 0
+    scenario_type = skeleton.get("scenario_type", "")
 
-    # 累计时间偏移（每步随机 3~12 秒，模拟真实系统延迟）
-    time_offset = 0
-
-    # 路由节点不进入 call_path
     ROUTER_NODES = {"Semantic_Router", "AiTM_Interceptor"}
 
     for i, step in enumerate(skeleton["flow"]):
@@ -105,28 +151,26 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
         # ── 2. 工具调用解析 ──────────────────────────────────────────────────
         tool_name = None
         tool_args: dict | None = None
-        display_content = raw_content  # message/state_transition 显示用
+        display_content = raw_content
 
         if event_type == "tool_call" and raw_content:
             tool_name, tool_args = _parse_tool_call(raw_content, values)
-            display_content = None   # tool_call 事件 content 字段为 null
+            display_content = None
 
-        # ── 3. 更新 call_path（路由节点不纳入）──────────────────────────────
+        # ── 3. 更新 call_path ────────────────────────────────────────────────
         if sender not in ROUTER_NODES and sender not in call_path:
             call_path.append(sender)
 
-        # ── 4. 截取当前 history_summary（写入前的快照）──────────────────────
-        #   格式完全对齐 audit_events.json：
-        #   "[User]: xxx\n---\n[Research_Agent]: xxx"
+        # ── 4. history_summary 快照 ──────────────────────────────────────────
         history_summary = "\n---\n".join(history_lines)
 
-        # ── 5. 构建时间戳 ────────────────────────────────────────────────────
+        # ── 5. 时间戳 ────────────────────────────────────────────────────────
         time_offset += random.randint(3, 12)
         timestamp = make_timestamp(base_time, time_offset)
 
-        # ── 6. 计算哈希链 ────────────────────────────────────────────────────
+        # ── 6. 哈希链 ────────────────────────────────────────────────────────
         hash_payload = {
-            "event_id":   "",           # 先占位，下面填
+            "event_id":   "",
             "trace_id":   trace_id,
             "timestamp":  timestamp,
             "event_type": event_type,
@@ -156,18 +200,21 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
             "trace_id":        trace_id,
             "timestamp":       timestamp,
             "metadata":        _make_metadata(skeleton, event_type, i),
-            # "prev_hash":       prev_hash,
-            # "self_hash":       self_hash,
         }
         events.append(event)
         prev_hash = self_hash
 
-        # ── 8. 事件写入后，更新 history_lines ────────────────────────────────
-        #   只有 message 类型才进入摘要（对齐真实系统行为）
-        #   state_transition / tool_call 不进入摘要
+        # ── 8. 更新 history_lines ────────────────────────────────────────────
         if event_type == "message" and display_content:
-            snippet = display_content[:2000].replace("\n", " ")
+            snippet = display_content[:300].replace("\n", " ")
             history_lines.append(f"[{sender}]: {snippet}")
+
+        # ── 9. 防御截断 ──────────────────────────────────────────────────────
+        #   tool_call 传 tool_name，message 传 display_content
+        check_content = tool_name if event_type == "tool_call" else display_content
+        if _is_attack_triggered(event_type, sender, receiver,
+                                check_content, scenario_type):
+            break
 
     return events
 
