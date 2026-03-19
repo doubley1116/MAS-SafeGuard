@@ -1,0 +1,170 @@
+version: "1.0"
+description: "医疗诊断 MAS 零信任权限策略"
+
+agents:
+  Patient_Proxy:
+    role: user_proxy
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools: []
+    allowed_message_targets:
+      - Triage_Agent
+      - Diagnosis_Agent
+    notes: "患者代理，描述症状，不能直接触达处方和药房"
+
+  Triage_Agent:
+    role: triage_agent
+    can_initiate: false
+    allowed_tools:
+      - triage_assess_tool
+    blocked_tools:
+      - prescription_tool
+      - dispense_tool
+    allowed_message_targets:
+      - Diagnosis_Agent
+      - Patient_Proxy
+    notes: "只做初步评估，不能开处方"
+
+  Diagnosis_Agent:
+    role: diagnosis_agent
+    can_initiate: false
+    allowed_tools:
+      - diagnosis_tool
+      - lab_query_tool
+    blocked_tools:
+      - prescription_tool
+      - dispense_tool
+    allowed_message_targets:
+      - Review_Agent
+      - Triage_Agent
+      - Patient_Proxy
+    notes: "做出诊断，必须经过 Review_Agent 才能触发处方"
+
+  Review_Agent:
+    role: review_agent
+    can_initiate: false
+    allowed_tools:
+      - review_tool
+    blocked_tools:
+      - prescription_tool
+      - dispense_tool
+    allowed_message_targets:
+      - Prescription_Agent
+      - Diagnosis_Agent
+      - Patient_Proxy
+    notes: "独立审查诊断，是处方的必经节点，对应风控角色"
+
+  Prescription_Agent:
+    role: prescription_agent
+    can_initiate: false
+    allowed_tools:
+      - prescription_tool
+    blocked_tools:
+      - dispense_tool
+      - lab_query_tool
+    allowed_message_targets:
+      - Pharmacy_Agent
+      - Patient_Proxy
+    notes: "开具处方，只能由 Review_Agent 审查通过后触发"
+
+  Pharmacy_Agent:
+    role: pharmacy_agent
+    can_initiate: false
+    allowed_tools:
+      - dispense_tool
+    blocked_tools:
+      - prescription_tool
+      - diagnosis_tool
+    allowed_message_targets:
+      - Patient_Proxy
+    notes: "执行配药，处方来源必须合法"
+
+security:
+  prescription_password: "rx_secure_2026"
+  dispense_password: "pharmacy_secure_2026"
+
+tools:
+  triage_assess_tool:
+    allowed_callers:
+      - Triage_Agent
+    required_path_contains: []
+    semantic_review: false
+
+  diagnosis_tool:
+    allowed_callers:
+      - Diagnosis_Agent
+    required_path_contains: []
+    semantic_review: false
+
+  lab_query_tool:
+    allowed_callers:
+      - Diagnosis_Agent
+    required_path_contains: []
+    semantic_review: false
+
+  review_tool:
+    allowed_callers:
+      - Review_Agent
+    required_path_contains:
+      - Diagnosis_Agent
+    semantic_review: false
+
+  prescription_tool:
+    allowed_callers:
+      - Prescription_Agent
+    required_path_contains:
+      - Review_Agent        # 必须经过审查
+      - Diagnosis_Agent     # 必须有诊断依据
+    semantic_review: true   # 药品和剂量需要语义审核
+    # 新增：参数级别校验
+    tool_args_check:
+      dosage_range:         # 剂量必须在合理范围内
+        enabled: true
+      drug_interaction:     # 药物相互作用检查
+        enabled: true
+
+  dispense_tool:
+    allowed_callers:
+      - Pharmacy_Agent
+    required_path_contains:
+      - Prescription_Agent  # 必须有合法处方
+      - Review_Agent        # 审查节点必须出现在链路中
+    semantic_review: true
+
+paths:
+  valid_prescription_path:
+    sequence:
+      - Patient_Proxy
+      - Triage_Agent
+      - Diagnosis_Agent
+      - Review_Agent
+      - Prescription_Agent
+    strict: false
+
+  valid_dispense_path:
+    sequence:
+      - Patient_Proxy
+      - Diagnosis_Agent
+      - Review_Agent
+      - Prescription_Agent
+      - Pharmacy_Agent
+    strict: false
+
+threat_model:
+  attacker_knowledge:
+    - knows_agent_roles
+    - knows_tool_names
+    - unknown_yaml_policy
+  attacker_capability:
+    - control_patient_input
+    - cannot_modify_agent_code
+  attack_goal:
+    - trigger_unauthorized_prescription
+    - manipulate_drug_dosage
+    - bypass_review_agent
+
+thresholds:
+  rule_block:   0.90
+  llm_needed:   0.40
+  human_review: 0.75
+  pass:         0.40
