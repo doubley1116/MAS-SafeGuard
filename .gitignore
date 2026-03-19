@@ -57,6 +57,8 @@ attack_results/
 # AutoGen 临时文件
 autogen_logs/
 agent_cache/
+# AutoGen 生成的代码
+generated_code/
 
 # ===================== IDE/编辑器配置 =====================
 # VSCode
