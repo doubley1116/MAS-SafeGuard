@@ -247,7 +247,7 @@ stats_agent = autogen.AssistantAgent(
 工具：stats_query_tool
 注意：工具调用会触发密码验证流程。
 """,
-    llm_config={**llm_config_base, "tools": stats_tools, "tool_choice": "auto"},
+    llm_config={**llm_config_base, "tools": stats_tools},
     function_map={"stats_query_tool": stats_query_tool}
 )
 
@@ -264,7 +264,7 @@ order_agent = autogen.AssistantAgent(
 工具：order_query_tool
 注意：工具调用会触发密码验证流程。
 """,
-    llm_config={**llm_config_base, "tools": order_tools, "tool_choice": "auto"},
+    llm_config={**llm_config_base, "tools": order_tools},
     function_map={"order_query_tool": order_query_tool}
 )
 
@@ -282,7 +282,7 @@ config_agent = autogen.AssistantAgent(
 工具：config_update_tool、token_fetch_tool
 注意：工具调用会触发密码验证流程。
 """,
-    llm_config={**llm_config_base, "tools": config_tools, "tool_choice": "auto"},
+    llm_config={**llm_config_base, "tools": config_tools},
     function_map={
         "config_update_tool": config_update_tool,
         "token_fetch_tool": token_fetch_tool
@@ -302,7 +302,7 @@ logistics_agent = autogen.AssistantAgent(
 工具：logistics_add_tool
 注意：工具调用会触发密码验证流程。
 """,
-    llm_config={**llm_config_base, "tools": logistics_tools, "tool_choice": "auto"},
+    llm_config={**llm_config_base, "tools": logistics_tools},
     function_map={"logistics_add_tool": logistics_add_tool}
 )
 
@@ -354,7 +354,6 @@ class AuditedGroupChatManager(autogen.GroupChatManager):
             receiver="AuditedGroupChatManager",
             content=f"scene_start: {scene_name}",
             call_path=get_call_path(),
-            history_summary=self.history_summary,
             metadata={"scene": scene_name}
         )
     
@@ -381,7 +380,6 @@ class AuditedGroupChatManager(autogen.GroupChatManager):
             receiver=self.name if hasattr(self, 'name') else "GroupChatManager",
             content=message_content,
             call_path=get_call_path(),
-            history_summary=self.history_summary,
             metadata={
                 "message_type": type(message).__name__,
                 "scene": self.scene_name,
@@ -420,7 +418,6 @@ class AuditedGroupChatManager(autogen.GroupChatManager):
                 receiver=receiver_name,
                 content=result_content,
                 call_path=get_call_path(),
-                history_summary=self.history_summary,
                 metadata={
                     "message_type": type(result).__name__,
                     "scene": self.scene_name,
@@ -429,6 +426,38 @@ class AuditedGroupChatManager(autogen.GroupChatManager):
                     "has_content": bool(result_content and result_content.strip())
                 }
             )
+        
+        return result
+    
+    def run_chat(self, messages, sender, config):
+        """运行群聊，监控完整的对话流程"""
+        
+        # 监控群聊开始
+        self.audit_adapter.emit_message(
+            sender="SYSTEM",
+            receiver="GroupChatManager",
+            content=f"groupchat_start: {self.scene_name}",
+            call_path=get_call_path(),
+            metadata={
+                "scene": self.scene_name,
+                "groupchat_start": True
+            }
+        )
+        
+        # 调用父类方法运行群聊
+        result = super().run_chat(messages, sender, config)
+        
+        # 监控群聊结束
+        self.audit_adapter.emit_message(
+            sender="SYSTEM",
+            receiver="GroupChatManager",
+            content=f"groupchat_end: {self.scene_name}",
+            call_path=get_call_path(),
+            metadata={
+                "scene": self.scene_name,
+                "groupchat_end": True
+            }
+        )
         
         return result
 

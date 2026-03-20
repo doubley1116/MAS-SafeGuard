@@ -1,36 +1,34 @@
 """
 autogen_adapter.py - AutoGen框架的审计适配器
 
-负责监控AutoGen框架中的消息传递和工具调用，转换为标准AuditEvent格式
+基于audit_events.json格式和CrewAI设计模式，实现完整的审计功能
 """
 
 from __future__ import annotations
 
 import functools
 import json
+import uuid
+from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable
 from audit_models import AuditEvent
 
 
 class AutoGenAuditAdapter:
     """
-    AutoGen框架的审计适配器
+    AutoGen框架的审计适配器（完全重写版）
     
-    负责：
-    - 监控Agent间的消息传递
-    - 监控工具调用和执行
-    - 转换为标准AuditEvent格式
-    
-    不负责：
-    - 权限决策
-    - 策略判断
-    - 拦截执行
+    基于audit_events.json格式和CrewAI设计模式，实现：
+    - 完整的对话历史记录
+    - 精确的调用路径跟踪
+    - 标准化的输出格式
+    - 丰富的元数据支持
     """
     
     def __init__(self, trace_id: str = ""):
-        self.trace_id = trace_id
+        self.trace_id = trace_id or str(uuid.uuid4())
         self.call_path: List[str] = []
-        self.message_history: List[str] = []
+        self.conversation_history: List[Dict[str, str]] = []  # 完整的对话历史
         
     def sanitize_payload(self, payload: Any) -> Any:
         """递归净化数据，防止复杂对象导致JSON序列化崩溃"""
@@ -43,10 +41,32 @@ class AutoGenAuditAdapter:
         else:
             return f"<Object: {type(payload).__name__}>"
     
-    def get_history_summary(self, max_messages: int = 5) -> str:
-        """获取最近消息的摘要"""
-        recent_messages = self.message_history[-max_messages:]
-        return " | ".join(recent_messages) if recent_messages else ""
+    def build_history_summary(self) -> str:
+        """构建完整的对话历史摘要（基于audit_events.json格式）"""
+        if not self.conversation_history:
+            return ""
+        
+        history_lines = []
+        for entry in self.conversation_history:
+            sender = entry.get('sender', 'Unknown')
+            content = entry.get('content', '')
+            # 使用audit_events.json中的格式：[Agent]: 内容
+            history_lines.append(f"[{sender}]: {content}")
+        
+        return "\n---\n".join(history_lines)
+    
+    def add_conversation_entry(self, sender: str, content: str):
+        """添加对话历史条目"""
+        self.conversation_history.append({
+            'sender': sender,
+            'content': content,
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    def update_call_path(self, agent_name: str):
+        """更新调用路径"""
+        if agent_name not in self.call_path:
+            self.call_path.append(agent_name)
     
     def emit_message(self, 
                      sender: str, 
@@ -55,18 +75,15 @@ class AutoGenAuditAdapter:
                      call_path: Optional[List[str]] = None,
                      history_summary: Optional[str] = None,
                      metadata: Optional[Dict[str, Any]] = None) -> AuditEvent:
-        """发送消息事件"""
+        """发送消息事件（基于audit_events.json格式）"""
         
-        # 更新调用路径
-        if sender not in self.call_path:
-            self.call_path.append(sender)
-        
-        # 更新消息历史
-        self.message_history.append(f"{sender}->{receiver}: {content[:50]}...")
+        # 更新调用路径和对话历史
+        self.update_call_path(sender)
+        self.add_conversation_entry(sender, content)
         
         # 使用传入参数或默认值
         final_call_path = call_path or self.call_path.copy()
-        final_history_summary = history_summary or self.get_history_summary()
+        final_history_summary = history_summary or self.build_history_summary()
         
         event = AuditEvent(
             event_type="message",
@@ -81,6 +98,10 @@ class AutoGenAuditAdapter:
             metadata=metadata or {}
         )
         
+        # 添加event_id和timestamp（符合audit_events.json格式）
+        event.event_id = str(uuid.uuid4())
+        event.timestamp = datetime.now().isoformat()
+        
         self.print_audit(event, f"消息监控 ({sender} -> {receiver})")
         return event
     
@@ -92,14 +113,17 @@ class AutoGenAuditAdapter:
                        content: Optional[str] = None,
                        history_summary: Optional[str] = None,
                        metadata: Optional[Dict[str, Any]] = None) -> AuditEvent:
-        """发送工具调用事件"""
+        """发送工具调用事件（基于audit_events.json格式）"""
         
         # 净化工具参数
         clean_args = self.sanitize_payload(tool_args or {})
         
+        # 更新调用路径
+        self.update_call_path(sender)
+        
         # 使用传入参数或默认值
         final_call_path = call_path or self.call_path.copy()
-        final_history_summary = history_summary or self.get_history_summary()
+        final_history_summary = history_summary or self.build_history_summary()
         
         event = AuditEvent(
             event_type="tool_call",
@@ -114,6 +138,10 @@ class AutoGenAuditAdapter:
             metadata=metadata or {}
         )
         
+        # 添加event_id和timestamp
+        event.event_id = str(uuid.uuid4())
+        event.timestamp = datetime.now().isoformat()
+        
         self.print_audit(event, f"工具调用监控 ({sender} -> {tool_name})")
         return event
     
@@ -125,12 +153,16 @@ class AutoGenAuditAdapter:
                          content: Optional[str] = None,
                          history_summary: Optional[str] = None,
                          metadata: Optional[Dict[str, Any]] = None) -> AuditEvent:
-        """发送工具执行结果事件"""
+        """发送工具执行结果事件（基于audit_events.json格式）"""
+        
+        # 更新调用路径和对话历史
+        self.update_call_path(sender)
+        self.add_conversation_entry(sender, str(result))
         
         # 使用传入参数或默认值
         final_call_path = call_path or self.call_path.copy()
         final_content = content or str(result)
-        final_history_summary = history_summary or self.get_history_summary()
+        final_history_summary = history_summary or self.build_history_summary()
         
         event = AuditEvent(
             event_type="tool_result",
@@ -145,24 +177,34 @@ class AutoGenAuditAdapter:
             metadata=metadata or {}
         )
         
+        # 添加event_id和timestamp
+        event.event_id = str(uuid.uuid4())
+        event.timestamp = datetime.now().isoformat()
+        
         self.print_audit(event, f"工具结果监控 ({sender} -> {tool_name})")
         return event
     
     def print_audit(self, event: AuditEvent, prefix: str):
-        """将标准化事件输出到终端"""
+        """将标准化事件输出到终端（基于audit_events.json格式）"""
         print(f"\n[ 审计系统 | {prefix} ] ->")
-        print(f"事件类型: {event.event_type}")
-        print(f"发送方: {event.sender}")
-        if event.receiver:
-            print(f"接收方: {event.receiver}")
-        if event.tool_name:
-            print(f"工具名称: {event.tool_name}")
-        if event.tool_args:
-            print(f"工具参数: {json.dumps(event.tool_args, indent=2, ensure_ascii=False)}")
-        if event.content:
-            print(f"内容: {event.content[:200]}...")
-        if event.call_path:
-            print(f"调用路径: {' -> '.join(event.call_path)}")
+        
+        # 构建完整的JSON输出（符合audit_events.json格式）
+        audit_data = {
+            "event_type": event.event_type,
+            "sender": event.sender,
+            "receiver": event.receiver,
+            "tool_name": event.tool_name,
+            "tool_args": event.tool_args,
+            "call_path": event.call_path,
+            "content": event.content,
+            "history_summary": event.history_summary,
+            "event_id": getattr(event, 'event_id', str(uuid.uuid4())),
+            "trace_id": event.trace_id,
+            "timestamp": getattr(event, 'timestamp', datetime.now().isoformat()),
+            "metadata": event.metadata
+        }
+        
+        print(json.dumps(audit_data, indent=2, ensure_ascii=False))
         print("-" * 50)
 
 
@@ -197,7 +239,9 @@ def audit_tool_execution(func: Callable) -> Callable:
             sender=sender_name,
             tool_name=tool_name,
             tool_args=kwargs,
-            content=f"调用工具 {tool_name}"
+            call_path=None,
+            content=f"调用工具 {tool_name}",
+            history_summary=None
         )
         
         # 执行原始函数
@@ -207,7 +251,10 @@ def audit_tool_execution(func: Callable) -> Callable:
         adapter.emit_tool_result(
             sender=sender_name,
             tool_name=tool_name,
-            result=result
+            result=result,
+            call_path=None,
+            content=None,
+            history_summary=None
         )
         
         return result
@@ -216,7 +263,7 @@ def audit_tool_execution(func: Callable) -> Callable:
 
 
 def create_audited_agent_wrapper(agent, adapter: AutoGenAuditAdapter):
-    """创建带审计功能的Agent包装器"""
+    """创建带审计功能的Agent包装器（完全重写版）"""
     
     def audited_reply_function(messages, sender, config):
         # 获取最后一条消息

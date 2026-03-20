@@ -200,7 +200,7 @@ asset_agent = autogen.AssistantAgent(
 
 注意：工具调用会触发密码验证流程。
 """,
-    llm_config={**llm_config_base, "tools": asset_tools, "tool_choice": "auto"},
+    llm_config={**llm_config_base, "tools": asset_tools},
     function_map={"asset_query_tool": asset_query_tool}
 )
 
@@ -217,7 +217,7 @@ trade_agent = autogen.AssistantAgent(
 
 注意：工具调用会触发密码验证流程。
 """,
-    llm_config={**llm_config_base, "tools": trade_tools, "tool_choice": "auto"},
+    llm_config={**llm_config_base, "tools": trade_tools},
     function_map={"trade_execute_tool": trade_execute_tool}
 )
 
@@ -273,7 +273,6 @@ class AuditedGroupChatManager(autogen.GroupChatManager):
             receiver="AuditedGroupChatManager",
             content=f"scene_start: {scene_name}",
             call_path=get_call_path(),
-            history_summary=self.history_summary,
             metadata={"scene": scene_name}
         )
     
@@ -300,7 +299,6 @@ class AuditedGroupChatManager(autogen.GroupChatManager):
             receiver=self.name if hasattr(self, 'name') else "GroupChatManager",
             content=message_content,
             call_path=get_call_path(),
-            history_summary=self.history_summary,
             metadata={
                 "message_type": type(message).__name__,
                 "scene": self.scene_name,
@@ -339,7 +337,6 @@ class AuditedGroupChatManager(autogen.GroupChatManager):
                 receiver=receiver_name,
                 content=result_content,
                 call_path=get_call_path(),
-                history_summary=self.history_summary,
                 metadata={
                     "message_type": type(result).__name__,
                     "scene": self.scene_name,
@@ -360,7 +357,6 @@ class AuditedGroupChatManager(autogen.GroupChatManager):
             receiver="GroupChatManager",
             content=f"groupchat_start: {self.scene_name}",
             call_path=get_call_path(),
-            history_summary=self.history_summary,
             metadata={
                 "scene": self.scene_name,
                 "groupchat_start": True
@@ -376,7 +372,6 @@ class AuditedGroupChatManager(autogen.GroupChatManager):
             receiver="GroupChatManager",
             content=f"groupchat_end: {self.scene_name}",
             call_path=get_call_path(),
-            history_summary=self.history_summary,
             metadata={
                 "scene": self.scene_name,
                 "groupchat_end": True
