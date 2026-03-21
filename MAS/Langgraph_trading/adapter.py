@@ -1,26 +1,3 @@
-"""
-adapter.py — MAS-SafeBench LangGraph 适配器  v2
-
-变更说明 (v1 → v2):
-  1. 新增 User message 事件 — HumanMessage 现在作为 sender="User",
-     receiver="Router" 的 message 事件记录，是每条 trace 的第一个事件
-  2. 新增 state_transition 事件 — Router 的路由决策（intent 分类结果）
-     现在作为独立事件记录，包含 confidence / reason / intent 字段
-  3. history_summary 格式改为 "[role]: content\n---\n[role]: content"
-     与目标格式对齐，更易阅读
-  4. metadata 中增加 skeleton_id 字段（格式: "LLM-{trace_id[:8]}"）
-  5. event_type 扩展 "state_transition"（运行时 str，不破坏 dataclass）
-
-事件序列（每条 trace）:
-  1. message          User → Router           用户原始输入
-  2. state_transition Router → Agent          Router 路由决策（含 confidence/reason）
-  3. tool_call        Agent → None            Agent 发起工具调用（含 blocking_risks）
-  4. tool_result      Tool_Node → Agent       工具执行结果
-  5. message          Agent → Router          Agent 文字回复
-  6. state_transition Router → next/FINISH    下一步路由决策
-  ...
-"""
-
 from __future__ import annotations
 
 import json
