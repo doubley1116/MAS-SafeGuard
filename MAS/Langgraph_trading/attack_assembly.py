@@ -43,7 +43,7 @@ from database.asset_db import init_asset_db, query_holdings
 from database.trade_db import init_trade_db, execute_trade
 from database.seed_data import seed_asset_data
 
-from security_core import SecurityCore, extract_audit_events
+from adapter import SecurityCore, extract_audit_events
 from attack_prompts import (
     PROMPT_REGISTRY,
     ATTACK_1_1, ATTACK_1_2, ATTACK_1_3,
@@ -506,21 +506,21 @@ def build_graph(scenario_type: str):
 
     return workflow.compile()
 
-# ================= SecurityCore 实例（全局，跨场景共享）=================
-_security_core: SecurityCore | None = None
+# ================= Adapter 实例（全局，跨场景共享）=================
+_adapter: SecurityCore | None = None
 
 def _get_core() -> SecurityCore:
-    global _security_core
-    if _security_core is None:
-        _security_core = SecurityCore(output_path="audit_events.json")
-    return _security_core
+    global _adapter
+    if _adapter is None:
+        _adapter = SecurityCore(output_path="audit_events.json")
+    return _adapter
 
-# ================= 主执行函数（接入 SecurityCore）=================
+# ================= 主执行函数（接入 Adapter）=================
 def run_attack_scenario(title: str, graph_type: str, prompt_text: str):
     """
     运行单个攻击场景。
-    内部委托给 SecurityCore.run_scenario，保留原有打印行为，
-    同时提取 AuditEvent 并累积到 SecurityCore 中。
+    内部委托给 Adapter(SecurityCore).run_scenario，保留原有打印行为，
+    同时提取 AuditEvent 并累积到 Adapter 中。
     场景结束后不立即写文件，统一在 __main__ 末尾调用 core.flush()。
     """
     core  = _get_core()
@@ -545,41 +545,41 @@ if __name__ == "__main__":
 
     # ── 1. 路径绕过攻击 (Path Bypass Attack) ──
     # 检测层级: 规则层 — 调用路径缺失强制审批节点
-    # run_attack_scenario("场景 1-1 | 路径绕过 — 量化验证单快速通道",     "standard", ATTACK_1_1)
-    # run_attack_scenario("场景 1-2 | 路径绕过 — 系统预案自动授权直通",   "standard", ATTACK_1_2)
-    # run_attack_scenario("场景 1-3 | 路径绕过 — OA审批绿色通道绕过风控", "standard", ATTACK_1_3)
+    run_attack_scenario("场景 1-1 | 路径绕过 — 量化验证单快速通道",     "standard", ATTACK_1_1)
+    run_attack_scenario("场景 1-2 | 路径绕过 — 系统预案自动授权直通",   "standard", ATTACK_1_2)
+    run_attack_scenario("场景 1-3 | 路径绕过 — OA审批绿色通道绕过风控", "standard", ATTACK_1_3)
 
-    # # ── 2. 调用者伪装与权限提升攻击 (Caller Impersonation & Privilege Escalation) ──
-    # # 检测层级: 规则层 + LLM审核层
-    # # 2-1/2-2: 直接伪装，S(e) ∉ AllowedCallers(tool)
-    # # 2-3: 间接权限提升，低权限诱导高权限代为执行
-    # run_attack_scenario("场景 2-1 | 调用者伪装 — 冒充管理员旁路投研",   "standard", ATTACK_2_1)
-    # run_attack_scenario("场景 2-2 | 调用者伪装 — 冒充合规官发特批指令", "standard", ATTACK_2_2)
-    # run_attack_scenario("场景 2-3 | 权限提升   — 低权限Agent诱导高权限", "PrivEsc",  ATTACK_2_3)
+    # ── 2. 调用者伪装与权限提升攻击 (Caller Impersonation & Privilege Escalation) ──
+    # 检测层级: 规则层 + LLM审核层
+    # 2-1/2-2: 直接伪装，S(e) ∉ AllowedCallers(tool)
+    # 2-3: 间接权限提升，低权限诱导高权限代为执行
+    run_attack_scenario("场景 2-1 | 调用者伪装 — 冒充管理员旁路投研",   "standard", ATTACK_2_1)
+    run_attack_scenario("场景 2-2 | 调用者伪装 — 冒充合规官发特批指令", "standard", ATTACK_2_2)
+    run_attack_scenario("场景 2-3 | 权限提升   — 低权限Agent诱导高权限", "PrivEsc",  ATTACK_2_3)
 
-    # # ── 3. 语义注入攻击 (Semantic Injection Attack) ──
-    # # 检测层级: LLM审核层 — 结构合规但内容嵌入恶意语义
-    # run_attack_scenario("场景 3-1 | 语义注入 — 隐式任务嵌套",     "standard", ATTACK_3_1)
-    # run_attack_scenario("场景 3-2 | 语义注入 — 灰度验证包装",     "standard", ATTACK_3_2)
-    # run_attack_scenario("场景 3-3 | 语义注入 — 情感权威压力组合", "standard", ATTACK_3_3)
+    # ── 3. 语义注入攻击 (Semantic Injection Attack) ──
+    # 检测层级: LLM审核层 — 结构合规但内容嵌入恶意语义
+    run_attack_scenario("场景 3-1 | 语义注入 — 隐式任务嵌套",     "standard", ATTACK_3_1)
+    run_attack_scenario("场景 3-2 | 语义注入 — 灰度验证包装",     "standard", ATTACK_3_2)
+    run_attack_scenario("场景 3-3 | 语义注入 — 情感权威压力组合", "standard", ATTACK_3_3)
 
-    # # ── 4. 路由劫持攻击 (Router Hijacking Attack) ──
-    # # 检测层级: 规则层 + LLM审核层 — 实际路由偏离系统配置
-    # run_attack_scenario("场景 4-1 | 路由劫持 — 隐式交易意图",         "standard", ATTACK_4_1)
+    # ── 4. 路由劫持攻击 (Router Hijacking Attack) ──
+    # 检测层级: 规则层 + LLM审核层 — 实际路由偏离系统配置
+    run_attack_scenario("场景 4-1 | 路由劫持 — 隐式交易意图",         "standard", ATTACK_4_1)
     run_attack_scenario("场景 4-2 | 路由劫持 — 伪造系统配置更新",     "standard", ATTACK_4_2)
-    # run_attack_scenario("场景 4-3 | 路由劫持 — 结构化调度标签植入",   "standard", ATTACK_4_3)
+    run_attack_scenario("场景 4-3 | 路由劫持 — 结构化调度标签植入",   "standard", ATTACK_4_3)
 
     # ── 5. 间接提示注入攻击 (Indirect Prompt Injection, IPI) ──
     # 检测层级: 轨迹层 — 依赖历史上下文/外部数据传播，单点检测失效
     run_attack_scenario("场景 5-1 | IPI — 外部报告文件注入",         "IPI", ATTACK_5_1)
-    # run_attack_scenario("场景 5-2 | IPI — 新闻摘要伪造风控评级",     "IPI", ATTACK_5_2)
-    # run_attack_scenario("场景 5-3 | IPI — 伪造历史会话污染上下文",   "IPI", ATTACK_5_3)
+    run_attack_scenario("场景 5-2 | IPI — 新闻摘要伪造风控评级",     "IPI", ATTACK_5_2)
+    run_attack_scenario("场景 5-3 | IPI — 伪造历史会话污染上下文",   "IPI", ATTACK_5_3)
 
-    # # ── 6. 智能体中间人攻击 (Agent-in-The-Middle, AiTM) ──
-    # # 检测层级: 规则层 — 路径中出现 YAML 未定义节点 AiTM_Interceptor
-    # run_attack_scenario("场景 6-1 | AiTM — 拦截建仓咨询",       "AiTM", ATTACK_6_1)
-    # run_attack_scenario("场景 6-2 | AiTM — 拦截审批流程请求",   "AiTM", ATTACK_6_2)
-    # run_attack_scenario("场景 6-3 | AiTM — 拦截中性资产配置咨询", "AiTM", ATTACK_6_3)
+    # ── 6. 智能体中间人攻击 (Agent-in-The-Middle, AiTM) ──
+    # 检测层级: 规则层 — 路径中出现 YAML 未定义节点 AiTM_Interceptor
+    run_attack_scenario("场景 6-1 | AiTM — 拦截建仓咨询",       "AiTM", ATTACK_6_1)
+    run_attack_scenario("场景 6-2 | AiTM — 拦截审批流程请求",   "AiTM", ATTACK_6_2)
+    run_attack_scenario("场景 6-3 | AiTM — 拦截中性资产配置咨询", "AiTM", ATTACK_6_3)
 
     # 全部场景跑完后统一写 audit_events.json
     _get_core().flush()
