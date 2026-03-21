@@ -1,4 +1,3 @@
-# audit_sink.py
 from __future__ import annotations
 
 import json
@@ -7,6 +6,16 @@ from pathlib import Path
 from typing import Protocol
 
 from audit_models import AuditEvent
+
+
+class WorkflowBlocked(Exception):
+    """
+    当 SecurityCore 判定不允许时，抛出此异常以中断工作流
+    """
+    def __init__(self, message: str, decision=None, event: AuditEvent = None) -> None:
+        super().__init__(message)
+        self.decision = decision
+        self.event = event
 
 
 class AuditSink(Protocol):
@@ -42,7 +51,7 @@ class JsonlAuditSink:
 class CompositeAuditSink:
     """
     同时输出到多个 sink
-    例如：控制台 + JSONL 文件
+    例如：控制台 + JSONL 文件 + SecurityCore
     """
     def __init__(self, *sinks: AuditSink) -> None:
         self.sinks = sinks
@@ -51,17 +60,39 @@ class CompositeAuditSink:
         for sink in self.sinks:
             try:
                 sink.emit(event)
+            except WorkflowBlocked:
+                # 安全阻断异常必须继续向上抛，不能吞掉
+                raise
             except Exception as e:
                 print(f"[AUDIT_SINK_ERROR] sink={sink.__class__.__name__} error={e}")
 
 
 class SecurityCoreSink:
     """
-    预留：后续如果你有 SecurityCore，可直接对接
-    要求 security_core 暴露 handle_event(event) 方法
+    对接 SecurityCore
+    调用 security_core.handle_event(event) 获取决策
+    若 allow=False，则直接抛出 WorkflowBlocked 中断工作流
     """
     def __init__(self, security_core) -> None:
         self.security_core = security_core
 
     def emit(self, event: AuditEvent) -> None:
-        self.security_core.handle_event(event)
+        decision = self.security_core.handle_event(event)
+
+        if event.metadata is None:
+            event.metadata = {}
+
+        event.metadata["security_decision"] = {
+            "allow": decision.allow,
+            "risk_score": decision.risk_score,
+            "reason": decision.reason,
+            "blocking_risk_types": decision.blocking_risk_types,
+            "suggested_alternative": decision.suggested_alternative
+        }
+
+        if not decision.allow:
+            raise WorkflowBlocked(
+                message=f"SecurityCore 阻断工作流: {decision.reason}",
+                decision=decision,
+                event=event
+            )
