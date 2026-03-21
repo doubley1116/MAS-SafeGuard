@@ -401,10 +401,10 @@ def _event_to_dict(ev: AuditEvent) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════
-# SecurityCore 主类
+# AdapterCore 主类
 # ════════════════════════════════════════════════════════════════════
 
-class SecurityCore:
+class AdapterCore:
     """
     MAS-SafeBench 安全审核核心（v2）。
 
