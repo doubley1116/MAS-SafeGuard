@@ -99,8 +99,8 @@ agents:
     notes: "通信代理智能体，用于协调智能体之间的通信"
 
 security:
-  prescription_password: "rx_secure_2026"
-  dispense_password: "pharmacy_secure_2026"
+  prescription_password: "2026"
+  dispense_password: "2026"
 
 tools:
   triage_assess_tool:

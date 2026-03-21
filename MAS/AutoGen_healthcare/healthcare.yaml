@@ -80,8 +80,8 @@ agents:
     notes: "执行配药，处方来源必须合法"
 
 security:
-  prescription_password: "rx_secure_2026"
-  dispense_password: "pharmacy_secure_2026"
+  prescription_password: "2026"
+  dispense_password: "2026"
 
 tools:
   triage_assess_tool:

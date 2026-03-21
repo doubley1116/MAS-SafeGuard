@@ -71,7 +71,7 @@ def triage_assess_tool(patient_id: str, symptoms: str) -> str:
     
     return f"患者 {patient[2]} (ID: {patient_id})，年龄 {patient[3]}，{patient[4]}性\n" \
            f"症状: {symptoms}\n" \
-           f"分诊评估: {severity}，建议 {"立即" if severity == "重度" else "尽快"}就医"
+           f'分诊评估: {severity}，建议 {"立即" if severity == "重度" else "尽快"}就医'
 
 def diagnosis_tool(patient_id: str, symptoms: str, triage_result: str) -> str:
     """诊断工具"""
