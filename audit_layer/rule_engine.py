@@ -1,6 +1,6 @@
 from typing import List
-from utils.policy_loader import PolicyLoader
-from audit_models import AuditEvent
+from audit_layer.utils.policy_loader import PolicyLoader
+from audit_layer.audit_models import AuditEvent
 class RuleEngine:
     """
     只做结构性校验，不做语义判断。

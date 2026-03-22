@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 from typing import Optional
 from openai import OpenAI
 
-from audit_models import AuditEvent
+from audit_layer.audit_models import AuditEvent
 
 # ══════════════════════════════════════════════════════════════
 # Prompt 模板
