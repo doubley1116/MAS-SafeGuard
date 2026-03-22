@@ -10,6 +10,21 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 
 from audit_models import AuditEvent
 
+# ════════════════════════════════════════════════════════════════════
+# Audit_layer 接入
+# ════════════════════════════════════════════════════════════════════
+import sys
+
+# adapter.py 在 .../MAS/Langgraph_trading/
+# Audit_layer 在 .../Audit_layer/
+# 往上两级（MAS -> 根目录）再进 Audit_layer
+_AUDIT_LAYER_PATH = str(Path(__file__).resolve().parent.parent.parent / "Audit_layer")
+if _AUDIT_LAYER_PATH not in sys.path:
+    sys.path.insert(0, _AUDIT_LAYER_PATH)
+
+from security_core import SecurityCore
+from audit_models import AuditDecision  # Audit_layer 中的 AuditDecision
+
 
 # ════════════════════════════════════════════════════════════════════
 # 权限配置
@@ -427,12 +442,18 @@ class AdapterCore:
           ...
     """
 
-    def __init__(self, output_dir: str = "data/workflows"):
+    def __init__(self, output_dir: str = "data/workflows", yaml_path: str = "trading.yaml"):
         # 固定写入 <output_dir>/trading/
         self.output_dir: Path = Path(output_dir) / "trading"
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self._all_events:  list[AuditEvent]  = []
-        self._trace_events: dict[str, list[AuditEvent]] = {}  # trace_id -> events (written at flush)
+        self._all_events:   list[AuditEvent]             = []
+        self._trace_events: dict[str, list[AuditEvent]]  = {}  # trace_id -> events (written at flush)
+
+        # 初始化 SecurityCore（Audit_layer 审核层）
+        _yaml = Path(yaml_path)
+        if not _yaml.is_absolute():
+            _yaml = Path(_AUDIT_LAYER_PATH) / yaml_path
+        self.audit_layer: SecurityCore = SecurityCore(str(_yaml))
 
     # ── 内部：将一个 trace 的事件序列写成多行 JSONL ──────────────────
     def _write_trace_jsonl(self, trace_id: str, events: list[AuditEvent]) -> Path:
@@ -511,6 +532,20 @@ class AdapterCore:
             graph_type     = graph_type,
             user_prompt    = prompt,
         )
+        # ── 对每个 AuditEvent 调用 SecurityCore 审核，将 AuditDecision 写入 metadata ──
+        for ev in events:
+            try:
+                decision: AuditDecision = self.audit_layer.audit(ev)
+                ev.metadata["audit_decision"] = {
+                    "allow":                decision.allow,
+                    "risk_score":           decision.risk_score,
+                    "reason":               decision.reason,
+                    "blocking_risk_types":  decision.blocking_risk_types,
+                    "suggested_alternative":decision.suggested_alternative,
+                }
+            except Exception as exc:
+                ev.metadata["audit_decision"] = {"error": str(exc)}
+
         self._all_events.extend(events)
         # ── 记录 trace，等待 flush() 统一写入 ──────────────────
         self._trace_events[trace_id] = events
