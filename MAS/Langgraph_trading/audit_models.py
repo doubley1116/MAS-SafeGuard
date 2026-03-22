@@ -23,8 +23,6 @@ class AuditEvent:
         "message",          # Agent 间消息传递
         "tool_call",        # 工具调用
         "tool_result",      # 工具执行结果
-        "state_transition", # 状态转移（如 LangGraph 节点跳转）
-        "task_delegation",  # 任务委派（如 CrewAI 任务分配）
     ]
 
     sender: str                      # 发送方 Agent 名称，权限验证的主体
