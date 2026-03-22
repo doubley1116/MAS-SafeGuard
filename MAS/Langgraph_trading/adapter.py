@@ -427,12 +427,9 @@ class AdapterCore:
           ...
     """
 
-    def __init__(self, output_dir: str = "data/workflows", output_path: str = None):
-        # 兼容旧参数 output_path：若传入则以其父目录作为 output_dir
-        if output_path is not None:
-            output_dir = str(Path(output_path).parent) or "."
+    def __init__(self, output_dir: str = "data/workflows"):
         # 固定写入 <output_dir>/trading/
-        self.output_dir: Path = Path(output_dir) / "data/workflows"
+        self.output_dir: Path = Path(output_dir) / "trading"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._all_events:  list[AuditEvent]  = []
         self._trace_events: dict[str, list[AuditEvent]] = {}  # trace_id -> events (written at flush)
@@ -448,8 +445,8 @@ class AdapterCore:
         {"event_type": "tool_call", ...}
         ...
         """
-        # trace_id 形如 trading_path_bypass_001，文件名取去掉 "trading_" 前缀的部分
-        filename = trace_id.removeprefix("trading_") + ".jsonl"
+        # trace_id 形如 trading_bypass_001，直接作为文件名
+        filename = trace_id + ".jsonl"
         path = self.output_dir / filename
         lines_out = [json.dumps(_event_to_dict(ev), ensure_ascii=False) for ev in events]
         path.write_text("\n".join(lines_out) + "\n", encoding="utf-8")
