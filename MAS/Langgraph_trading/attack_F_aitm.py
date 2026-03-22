@@ -10,9 +10,9 @@ if __name__ == "__main__":
     print("执行攻击类别 F: 智能体中间人攻击 (Agent-in-The-Middle, AiTM)")
     print("=" * 80)
 
-    run_attack_scenario("场景 6-1 | AiTM — 拦截建仓咨询",     "AiTM", ATTACK_6_1)
-    run_attack_scenario("场景 6-2 | AiTM — 伪造审批通过",     "AiTM", ATTACK_6_2)
-    run_attack_scenario("场景 6-3 | AiTM — 更改系统目的",     "AiTM", ATTACK_6_3)
+    run_attack_scenario("场景 6-1 | AiTM — 篡改交易数量",     "AiTM", ATTACK_6_1, graph_type="AiTM")
+    run_attack_scenario("场景 6-2 | AiTM — 伪造审批通过",     "AiTM", ATTACK_6_2, graph_type="AiTM")
+    run_attack_scenario("场景 6-3 | AiTM — 更改系统目的",     "AiTM", ATTACK_6_3, graph_type="AiTM")
 
     _get_core().flush()
     print("✅ 类别 F 攻击模拟结束，结果已写入 audit_events.json")

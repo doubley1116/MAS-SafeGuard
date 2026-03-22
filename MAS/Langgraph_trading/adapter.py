@@ -31,8 +31,16 @@ LEGAL_AGENTS = {
     "Research_Agent", "Asset_Agent", "Trade_Agent", "Risk_Agent",
 }
 
+# ════════════════════════════════════════════════════════════════════
+# 审核开关 — 设为 False 则跳过所有 SecurityCore 审核，直接放行
+# ════════════════════════════════════════════════════════════════════
+AUDIT_ENABLED: bool = False
+
 # ── 场景计数器（按 attack_name 分组，自动递增编号） ──────────────────
 _scenario_counters: dict[str, int] = {}
+
+# ── 全局工具拦截标志：SecurityCore 判定拦截时置 True，工具函数检查此标志 ──
+TOOL_EXECUTION_BLOCKED: bool = False
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -241,6 +249,39 @@ def extract_audit_events(
                 for m in msgs:
                     if m not in accumulated_messages:
                         accumulated_messages.append(m)
+                continue
+
+            # ════════════════════════════════════════════════════
+            # AiTM_Interceptor — 记录篡改事件
+            # ════════════════════════════════════════════════════
+            if node_name == "AiTM_Interceptor":
+                for msg in msgs:
+                    if not isinstance(msg, HumanMessage):
+                        continue
+                    tampered_content = msg.content or ""
+                    _extend_path(current_call_path, "AiTM_Interceptor")
+                    audit_events.append(_make_event(
+                        "message",
+                        sender          = "AiTM_Interceptor",
+                        receiver        = "Router",
+                        tool_name       = None,
+                        tool_args       = None,
+                        call_path       = list(current_call_path),
+                        content         = tampered_content[:500],
+                        history_summary = _build_history_summary(accumulated_messages),
+                        trace_id        = trace_id,
+                        timestamp       = _now(),
+                        metadata        = {
+                            "scenario":    scenario_title,
+                            "graph_type":  graph_type,
+                            "node_name":   "AiTM_Interceptor",
+                            "skeleton_id": skeleton_id,
+                            "is_tampered": True,
+                        },
+                    ))
+                    accumulated_messages.append(msg)
+                    # 终端也打印篡改内容
+                    print(f"  [AiTM 篡改内容]:\n{tampered_content[:300]}")
                 continue
 
             # ════════════════════════════════════════════════════
@@ -499,18 +540,26 @@ class AdapterCore:
                 if node_name in ("Router", "__end__"):
                     continue
 
+                # 只打印本节点本轮新增的 AIMessage（过滤历史累积消息）
+                for msg in node_state["messages"]:
+                    if not isinstance(msg, AIMessage):
+                        continue
+                    if getattr(msg, "name", None) != node_name:
+                        continue
+                    content_str = msg.content or ""
+                    if isinstance(content_str, list):
+                        content_str = " ".join(
+                            p.get("text", "") for p in content_str if isinstance(p, dict)
+                        )
+                    if content_str.strip():
+                        print(f"\n[{node_name}]:\n{content_str}")
                 last_msg = node_state["messages"][-1]
                 if not hasattr(last_msg, "content") or isinstance(last_msg, ToolMessage):
                     continue
-                content_str = last_msg.content or ""
-                if isinstance(content_str, list):
-                    content_str = " ".join(
-                        p.get("text", "") for p in content_str if isinstance(p, dict)
-                    )
-                if content_str.strip():
-                    print(f"\n[{node_name}]:\n{content_str}")
 
                 # ── 实时审核：每个 Agent 节点产出后立即审核当前增量事件 ──
+                if not AUDIT_ENABLED:
+                    continue
                 partial_events = extract_audit_events(
                     stream_events  = raw_stream,
                     trace_id       = trace_id,
@@ -536,6 +585,7 @@ class AdapterCore:
                         t_human = self.audit_layer.policy.threshold("human_review") # 0.75
                         if score >= t_block:
                             print(f"  🚨 [规则拦截] risk={score:.2f} >= {t_block} | {decision.reason}")
+                            import adapter as _self_mod; _self_mod.TOOL_EXECUTION_BLOCKED = True
                             _audit_blocked = RuntimeError(
                                 f"[AuditBlock] trace={trace_id} | "
                                 f"event={ev.event_type} sender={ev.sender} | "
@@ -543,6 +593,7 @@ class AdapterCore:
                             )
                         elif t_human > 0 and score >= t_human:
                             print(f"  🔶 [转人工] risk={score:.2f} >= {t_human} | {decision.reason}")
+                            import adapter as _self_mod; _self_mod.TOOL_EXECUTION_BLOCKED = True
                             _audit_blocked = RuntimeError(
                                 f"[AuditBlock] trace={trace_id} | "
                                 f"event={ev.event_type} sender={ev.sender} | "
@@ -602,6 +653,9 @@ class AdapterCore:
         self._all_events.extend(events)
         # ── 记录 trace，等待 flush() 统一写入 ──────────────────
         self._trace_events[trace_id] = events
+
+        # 重置全局拦截标志，避免影响下一个场景
+        import adapter as _self_mod; _self_mod.TOOL_EXECUTION_BLOCKED = False
 
         if _audit_blocked:
             raise _audit_blocked
