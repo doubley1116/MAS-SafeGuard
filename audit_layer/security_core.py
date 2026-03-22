@@ -13,10 +13,10 @@ SecurityCore — MAS 审核中间层
 from __future__ import annotations
 import yaml
 from typing import List
-from utils.policy_loader import PolicyLoader
-from rule_engine import RuleEngine
-from audit_models import AuditEvent, AuditDecision
-from llm_reviewer import LLMReviewer
+from audit_layer.utils.policy_loader import PolicyLoader
+from audit_layer.rule_engine import RuleEngine
+from audit_layer.audit_models import AuditEvent, AuditDecision
+from audit_layer.llm_reviewer import LLMReviewer
 # ══════════════════════════════════════════════════════════════
 # SecurityCore 主入口
 # ══════════════════════════════════════════════════════════════
