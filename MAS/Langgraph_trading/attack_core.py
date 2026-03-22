@@ -462,15 +462,16 @@ _adapter: AdapterCore | None = None
 def _get_core() -> AdapterCore:
     global _adapter
     if _adapter is None:
-        _adapter = AdapterCore(output_path="audit_events.json")
+        _adapter = AdapterCore(output_dir="data/workflows")
     return _adapter
 
-def run_attack_scenario(title: str, graph_type: str, prompt_text: str):
+def run_attack_scenario(title: str, attack_name: str, prompt_text: str, graph_type: str = "standard"):
     core  = _get_core()
     graph = build_graph(graph_type)
     core.run_scenario(
-        title      = title,
-        graph_type = graph_type,
-        graph      = graph,
-        prompt     = prompt_text,
+        title       = title,
+        graph_type  = graph_type,
+        graph       = graph,
+        prompt      = prompt_text,
+        attack_name = attack_name,
     )
