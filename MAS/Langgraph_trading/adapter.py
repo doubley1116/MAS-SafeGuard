@@ -5,26 +5,12 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
-
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-
-from audit_models import AuditEvent
-
-# ════════════════════════════════════════════════════════════════════
-# Audit_layer 接入
-# ════════════════════════════════════════════════════════════════════
 import sys
-
-# adapter.py 在 .../MAS/Langgraph_trading/
-# Audit_layer 在 .../Audit_layer/
-# 往上两级（MAS -> 根目录）再进 Audit_layer
-_AUDIT_LAYER_PATH = str(Path(__file__).resolve().parent.parent.parent / "Audit_layer")
-if _AUDIT_LAYER_PATH not in sys.path:
-    sys.path.insert(0, _AUDIT_LAYER_PATH)
-
-from security_core import SecurityCore
-from audit_models import AuditDecision  # Audit_layer 中的 AuditDecision
-
+# 把项目根目录加入路径
+sys.path.append(str(Path(__file__).parents[2])) 
+from audit_layer.security_core import SecurityCore
+from audit_layer.audit_models import AuditDecision, AuditEvent
 
 # ════════════════════════════════════════════════════════════════════
 # 权限配置
@@ -450,11 +436,9 @@ class AdapterCore:
         self._trace_events: dict[str, list[AuditEvent]]  = {}  # trace_id -> events (written at flush)
 
         # 初始化 SecurityCore（Audit_layer 审核层）
-        _yaml = Path(yaml_path)
-        if not _yaml.is_absolute():
-            _yaml = Path(_AUDIT_LAYER_PATH) / yaml_path
-        self.audit_layer: SecurityCore = SecurityCore(str(_yaml))
-
+        current_dir = Path(__file__).parent
+        yaml_file = current_dir / yaml_path
+        self.audit_layer = SecurityCore(str(yaml_file))
     # ── 内部：将一个 trace 的事件序列写成多行 JSONL ──────────────────
     def _write_trace_jsonl(self, trace_id: str, events: list[AuditEvent]) -> Path:
         """
