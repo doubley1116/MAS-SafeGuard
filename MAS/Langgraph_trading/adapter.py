@@ -474,6 +474,7 @@ class AdapterCore:
 
         raw_stream:     list[dict] = []
         tool_calls_log: list[dict] = []
+        _audit_blocked: RuntimeError | None = None   # 流内拦截标志
 
         print(f"\n{'='*80}\n{title}\n{'='*80}")
         print(f"[Attacker_Input]:\n{prompt.strip()}\n")
@@ -509,6 +510,59 @@ class AdapterCore:
                 if content_str.strip():
                     print(f"\n[{node_name}]:\n{content_str}")
 
+                # ── 实时审核：每个 Agent 节点产出后立即审核当前增量事件 ──
+                partial_events = extract_audit_events(
+                    stream_events  = raw_stream,
+                    trace_id       = trace_id,
+                    scenario_title = title,
+                    graph_type     = graph_type,
+                    user_prompt    = prompt,
+                )
+                for ev in partial_events:
+                    if "audit_decision" in ev.metadata:
+                        continue  # 已审核过，跳过
+                    try:
+                        decision: AuditDecision = self.audit_layer.audit(ev)
+                        ev.metadata["audit_decision"] = {
+                            "allow":                decision.allow,
+                            "risk_score":           decision.risk_score,
+                            "reason":               decision.reason,
+                            "blocking_risk_types":  decision.blocking_risk_types,
+                            "suggested_alternative":decision.suggested_alternative,
+                        }
+                        score = decision.risk_score
+                        t_block = self.audit_layer.policy.threshold("rule_block")   # 0.90
+                        t_llm   = self.audit_layer.policy.threshold("llm_needed")   # 0.40
+                        t_human = self.audit_layer.policy.threshold("human_review") # 0.75
+                        if score >= t_block:
+                            print(f"  🚨 [规则拦截] risk={score:.2f} >= {t_block} | {decision.reason}")
+                            _audit_blocked = RuntimeError(
+                                f"[AuditBlock] trace={trace_id} | "
+                                f"event={ev.event_type} sender={ev.sender} | "
+                                f"risk={score:.2f} | {decision.reason}"
+                            )
+                        elif t_human > 0 and score >= t_human:
+                            print(f"  🔶 [转人工] risk={score:.2f} >= {t_human} | {decision.reason}")
+                            _audit_blocked = RuntimeError(
+                                f"[AuditBlock] trace={trace_id} | "
+                                f"event={ev.event_type} sender={ev.sender} | "
+                                f"risk={score:.2f} | {decision.reason}"
+                            )
+                        elif score >= t_llm:
+                            print(f"  🟡 [LLM审核] risk={score:.2f} >= {t_llm} | {decision.reason}")
+                        else:
+                            pass  # 低风险，静默放行
+                    except RuntimeError:
+                        raise
+                    except Exception as exc:
+                        ev.metadata["audit_decision"] = {"error": str(exc)}
+                if _audit_blocked:
+                    break  # 中断内层 for node_name
+
+            if _audit_blocked:
+                break  # 中断外层 for event，stream 不再继续
+
+        # ── 提取完整事件序列（含已中断部分） ────────────────────────────
         events = extract_audit_events(
             stream_events  = raw_stream,
             trace_id       = trace_id,
@@ -516,8 +570,14 @@ class AdapterCore:
             graph_type     = graph_type,
             user_prompt    = prompt,
         )
-        # ── 对每个 AuditEvent 调用 SecurityCore 审核，将 AuditDecision 写入 metadata ──
+
+        # ── 对流内未审核的事件补充审核（按阈值分级记录） ────────────
+        t_block = self.audit_layer.policy.threshold("rule_block")
+        t_human = self.audit_layer.policy.threshold("human_review")
+        t_llm   = self.audit_layer.policy.threshold("llm_needed")
         for ev in events:
+            if "audit_decision" in ev.metadata:
+                continue  # 流内已审核，跳过
             try:
                 decision: AuditDecision = self.audit_layer.audit(ev)
                 ev.metadata["audit_decision"] = {
@@ -527,12 +587,24 @@ class AdapterCore:
                     "blocking_risk_types":  decision.blocking_risk_types,
                     "suggested_alternative":decision.suggested_alternative,
                 }
+                score = decision.risk_score
+                if score >= t_block:
+                    ev.metadata["audit_decision"]["level"] = "block"
+                elif t_human > 0 and score >= t_human:
+                    ev.metadata["audit_decision"]["level"] = "human_review"
+                elif score >= t_llm:
+                    ev.metadata["audit_decision"]["level"] = "llm_needed"
+                else:
+                    ev.metadata["audit_decision"]["level"] = "pass"
             except Exception as exc:
                 ev.metadata["audit_decision"] = {"error": str(exc)}
 
         self._all_events.extend(events)
         # ── 记录 trace，等待 flush() 统一写入 ──────────────────
         self._trace_events[trace_id] = events
+
+        if _audit_blocked:
+            raise _audit_blocked
 
         sep = "-" * 60
         print(f"\n{sep}")

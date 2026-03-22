@@ -468,10 +468,16 @@ def _get_core() -> AdapterCore:
 def run_attack_scenario(title: str, attack_name: str, prompt_text: str, graph_type: str = "standard"):
     core  = _get_core()
     graph = build_graph(graph_type)
-    core.run_scenario(
-        title       = title,
-        graph_type  = graph_type,
-        graph       = graph,
-        prompt      = prompt_text,
-        attack_name = attack_name,
-    )
+    try:
+        core.run_scenario(
+            title       = title,
+            graph_type  = graph_type,
+            graph       = graph,
+            prompt      = prompt_text,
+            attack_name = attack_name,
+        )
+    except RuntimeError as e:
+        if str(e).startswith("[AuditBlock]"):
+            print(f"  🔒 已拦截: {e}")
+        else:
+            raise
