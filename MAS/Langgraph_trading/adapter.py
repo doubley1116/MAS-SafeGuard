@@ -30,6 +30,9 @@ LEGAL_AGENTS = {
     "Research_Agent", "Asset_Agent", "Trade_Agent", "Risk_Agent",
 }
 
+# ── 场景计数器（按 attack_name 分组，自动递增编号） ──────────────────
+_scenario_counters: dict[str, int] = {}
+
 
 # ════════════════════════════════════════════════════════════════════
 # 辅助函数
@@ -107,13 +110,13 @@ def extract_audit_events(
     Parameters
     ----------
     stream_events   : graph.stream() 迭代结果列表（预先收集）
-    trace_id        : 本次场景的唯一标识
+    trace_id        : 本次场景的唯一标识，格式 trading_<attack_name>_<NNN>
     scenario_title  : 场景标题
     graph_type      : 图类型（standard/IPI/AiTM/PrivEsc）
     user_prompt     : 用户原始输入，用于生成首个 User message 事件
     """
     audit_events: list[AuditEvent] = []
-    skeleton_id   = f"LLM-{trace_id[:8]}"
+    skeleton_id   = f"LLM-{trace_id}"
     accumulated_messages: list[BaseMessage] = []
     current_call_path:    list[str]         = ["User"]
     pending_tool_calls:   dict[str, tuple]  = {}   # tc_id → (caller, tool_name, args)
@@ -164,6 +167,34 @@ def extract_audit_events(
                     nxt = node_state.get("next", "")
                     if nxt:
                         _router_decision["next"] = nxt
+                        # 纯路由状态也要生成 state_transition 事件
+                        if nxt not in emitted_transitions:
+                            emitted_transitions.add(nxt)
+                            intent = intent_label_map.get(nxt, nxt.lower())
+                            conf   = _router_decision.get("confidence", 0.0)
+                            reason = _router_decision.get("reason", f"意图分类结果，目标={nxt}")
+                            _extend_path(current_call_path, "Router", nxt if nxt != "FINISH" else None)
+                            audit_events.append(_make_event(
+                                "state_transition",
+                                sender          = "Router",
+                                receiver        = nxt,
+                                tool_name       = None,
+                                tool_args       = None,
+                                call_path       = list(current_call_path),
+                                content         = f"意图跳转: {intent}",
+                                history_summary = _build_history_summary(accumulated_messages),
+                                trace_id        = trace_id,
+                                timestamp       = _now(),
+                                metadata        = {
+                                    "scenario":    scenario_title,
+                                    "graph_type":  graph_type,
+                                    "node_name":   "Router",
+                                    "skeleton_id": skeleton_id,
+                                    "intent":      intent,
+                                    "confidence":  conf,
+                                    "reason":      reason,
+                                },
+                            ))
                 continue
 
             msgs: list[BaseMessage] = node_state["messages"]
@@ -387,11 +418,43 @@ class AdapterCore:
 
     每条 trace 事件序列:
       User message → state_transition(Router决策) → Agent events → ... → state_transition(FINISH)
+
+    输出目录结构:
+      <output_dir>/
+        trading/
+          <attack_name>_001.jsonl   # 每个文件一个完整工作流（每行一个 AuditEvent）
+          <attack_name>_002.jsonl
+          ...
     """
 
-    def __init__(self, output_path: str = "audit_events.json"):
-        self.output_path = Path(output_path)
-        self._all_events: list[AuditEvent] = []
+    def __init__(self, output_dir: str = "data/workflows", output_path: str = None):
+        # 兼容旧参数 output_path：若传入则以其父目录作为 output_dir
+        if output_path is not None:
+            output_dir = str(Path(output_path).parent) or "."
+        # 固定写入 <output_dir>/trading/
+        self.output_dir: Path = Path(output_dir) / "data/workflows"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._all_events:  list[AuditEvent]  = []
+        self._trace_events: dict[str, list[AuditEvent]] = {}  # trace_id -> events (written at flush)
+
+    # ── 内部：将一个 trace 的事件序列写成多行 JSONL ──────────────────
+    def _write_trace_jsonl(self, trace_id: str, events: list[AuditEvent]) -> Path:
+        """
+        将同一 trace 的所有 AuditEvent 每行一条写入 .jsonl 文件。
+        文件名格式: <attack_name>_<NNN>.jsonl，与 trace_id 保持一致。
+
+        文件内容（每行一个 AuditEvent）:
+        {"event_type": "message", ...}
+        {"event_type": "tool_call", ...}
+        ...
+        """
+        # trace_id 形如 trading_path_bypass_001，文件名取去掉 "trading_" 前缀的部分
+        filename = trace_id.removeprefix("trading_") + ".jsonl"
+        path = self.output_dir / filename
+        lines_out = [json.dumps(_event_to_dict(ev), ensure_ascii=False) for ev in events]
+        path.write_text("\n".join(lines_out) + "\n", encoding="utf-8")
+        return path
+
 
     def run_scenario(
         self,
@@ -399,9 +462,13 @@ class AdapterCore:
         graph_type:      str,
         graph,
         prompt:          str,
+        attack_name:     str = "attack",
         recursion_limit: int = 30,
     ) -> tuple[list[AuditEvent], list[dict]]:
-        trace_id = str(uuid.uuid4())
+        # ── 生成结构化 trace_id：trading_<attack_name>_<NNN> ──
+        _scenario_counters[attack_name] = _scenario_counters.get(attack_name, 0) + 1
+        seq = f"{_scenario_counters[attack_name]:03d}"
+        trace_id = f"trading_{attack_name}_{seq}"
 
         raw_stream:     list[dict] = []
         tool_calls_log: list[dict] = []
@@ -448,6 +515,8 @@ class AdapterCore:
             user_prompt    = prompt,
         )
         self._all_events.extend(events)
+        # ── 记录 trace，等待 flush() 统一写入 ──────────────────
+        self._trace_events[trace_id] = events
 
         sep = "-" * 60
         print(f"\n{sep}")
@@ -466,23 +535,24 @@ class AdapterCore:
                 print(f"  ✅ 攻击被防御 — 无危险工具调用")
         else:
             print("  ✅ 攻击被防御 — 未触发任何工具调用")
-        print(f"  📋 AuditEvent 生成: {len(events)} 条 (trace_id: {trace_id[:8]}...)")
+        print(f"  📋 AuditEvent 生成: {len(events)} 条  (trace_id: {trace_id})")
         print(sep)
 
         return events, tool_calls_log
 
     def flush(self):
-        output = {
-            "schema_version": "1.1",
-            "generated_at":   datetime.utcnow().isoformat(),
-            "total_events":   len(self._all_events),
-            "audit_events":   [_event_to_dict(ev) for ev in self._all_events],
-        }
-        self.output_path.write_text(
-            json.dumps(output, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        print(f"\n📁 audit_events.json 写入完成: {len(self._all_events)} 条事件 → {self.output_path}")
+        """将所有场景按 trace 拆分，每个 trace 写入一个 .jsonl 文件（每行一个 AuditEvent）。"""
+        written: list[tuple] = []
+        for tid, evts in self._trace_events.items():
+            path = self._write_trace_jsonl(tid, evts)
+            written.append((tid, path, len(evts)))
+
+        print(f"\n{'='*60}")
+        print(f"📁 工作流写入完成，共 {len(written)} 个场景，{len(self._all_events)} 条事件")
+        print(f"   输出目录: {self.output_dir}")
+        for tid, path, n in written:
+            print(f"   • {path.name}  ({n} events)")
+        print(f"{'='*60}")
 
     @property
     def events(self) -> list[AuditEvent]:
