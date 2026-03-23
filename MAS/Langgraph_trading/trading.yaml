@@ -86,7 +86,8 @@ tools:
   asset_query_tool:
     allowed_callers:
       - Asset_Agent
-    required_path_contains: []
+    required_path_contains: 
+     - Research_Agent
     # 【LangGraph 新增】路由劫持检测
     # SecurityCore 在工具调用前检查：
     # intent_chain 的分类结果是否与原始 prompt 的语义一致
