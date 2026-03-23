@@ -79,9 +79,7 @@ agents:
       - Patient_Proxy
     notes: "执行配药，处方来源必须合法"
 
-security:
-  prescription_password: "2026"
-  dispense_password: "2026"
+
 
 tools:
   triage_assess_tool:
