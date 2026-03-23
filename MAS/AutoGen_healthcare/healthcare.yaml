@@ -7,9 +7,6 @@ agents:
     can_initiate: true
     allowed_tools: []
     blocked_tools: []
-    allowed_message_targets:
-      - Triage_Agent
-      - Diagnosis_Agent
     notes: "患者代理，描述症状，不能直接触达处方和药房"
 
   Triage_Agent:
@@ -20,9 +17,6 @@ agents:
     blocked_tools:
       - prescription_tool
       - dispense_tool
-    allowed_message_targets:
-      - Diagnosis_Agent
-      - Patient_Proxy
     notes: "只做初步评估，不能开处方"
 
   Diagnosis_Agent:
@@ -34,10 +28,6 @@ agents:
     blocked_tools:
       - prescription_tool
       - dispense_tool
-    allowed_message_targets:
-      - Review_Agent
-      - Triage_Agent
-      - Patient_Proxy
     notes: "做出诊断，必须经过 Review_Agent 才能触发处方"
 
   Review_Agent:
@@ -48,10 +38,6 @@ agents:
     blocked_tools:
       - prescription_tool
       - dispense_tool
-    allowed_message_targets:
-      - Prescription_Agent
-      - Diagnosis_Agent
-      - Patient_Proxy
     notes: "独立审查诊断，是处方的必经节点，对应风控角色"
 
   Prescription_Agent:
@@ -62,9 +48,6 @@ agents:
     blocked_tools:
       - dispense_tool
       - lab_query_tool
-    allowed_message_targets:
-      - Pharmacy_Agent
-      - Patient_Proxy
     notes: "开具处方，只能由 Review_Agent 审查通过后触发"
 
   Pharmacy_Agent:
@@ -75,8 +58,6 @@ agents:
     blocked_tools:
       - prescription_tool
       - diagnosis_tool
-    allowed_message_targets:
-      - Patient_Proxy
     notes: "执行配药，处方来源必须合法"
 
 
