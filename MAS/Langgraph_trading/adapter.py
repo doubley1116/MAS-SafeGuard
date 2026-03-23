@@ -175,12 +175,14 @@ def extract_audit_events(
                 if node_name == "Router":
                     nxt = node_state.get("next", "")
                     if nxt:
-                        _router_decision["next"] = nxt
+                        _router_decision["next"]       = nxt
+                        _router_decision["intent_confidence"] = node_state.get("intent_confidence", 0.0)
+                        _router_decision["reason"]     = node_state.get("reason", "")
                         # 纯路由状态也要生成 state_transition 事件
                         if nxt not in emitted_transitions:
                             emitted_transitions.add(nxt)
                             intent = intent_label_map.get(nxt, nxt.lower())
-                            conf   = _router_decision.get("confidence", 0.0)
+                            conf   = _router_decision.get("intent_confidence", 0.0)
                             reason = _router_decision.get("reason", f"意图分类结果，目标={nxt}")
                             _extend_path(current_call_path, "Router", nxt if nxt != "FINISH" else None)
                             audit_events.append(_make_event(
@@ -200,7 +202,7 @@ def extract_audit_events(
                                     "node_name":   "Router",
                                     "skeleton_id": skeleton_id,
                                     "intent":      intent,
-                                    "confidence":  conf,
+                                    "intent_confidence":  conf,
                                     "reason":      reason,
                                 },
                             ))
@@ -213,12 +215,14 @@ def extract_audit_events(
             # ════════════════════════════════════════════════════
             if node_name == "Router":
                 nxt = node_state.get("next") or _router_decision.get("next", "")
-                _router_decision["next"] = nxt   # 更新缓存
+                _router_decision["next"]       = nxt
+                _router_decision["intent_confidence"] = node_state.get("intent_confidence", _router_decision.get("intent_confidence", 0.0))
+                _router_decision["reason"]     = node_state.get("reason",     _router_decision.get("reason", ""))
 
                 if nxt and nxt not in emitted_transitions:
                     emitted_transitions.add(nxt)
                     intent  = intent_label_map.get(nxt, nxt.lower())
-                    conf    = _router_decision.get("confidence", 0.0)
+                    conf    = _router_decision.get("intent_confidence", 0.0)
                     reason  = _router_decision.get("reason", f"意图分类结果，目标={nxt}")
 
                     # Router 和其路由目标都纳入调用路径
@@ -241,7 +245,7 @@ def extract_audit_events(
                             "node_name":   "Router",
                             "skeleton_id": skeleton_id,
                             "intent":      intent,
-                            "confidence":  conf,
+                            "intent_confidence":  conf,
                             "reason":      reason,
                         },
                     ))
@@ -324,13 +328,15 @@ def extract_audit_events(
                         trace_id        = trace_id,
                         timestamp       = _now(),
                         metadata        = {
-                            "scenario":       scenario_title,
-                            "graph_type":     graph_type,
-                            "node_name":      node_name,
-                            "skeleton_id":    skeleton_id,
-                            "tool_call_id":   tc_id,
-                            "blocking_risks": blk,
-                            "unauthorized":   bool(blk),
+                            "scenario":          scenario_title,
+                            "graph_type":        graph_type,
+                            "node_name":         node_name,
+                            "skeleton_id":       skeleton_id,
+                            "tool_call_id":      tc_id,
+                            "blocking_risks":    blk,
+                            "unauthorized":      bool(blk),
+                            "intent_confidence": _router_decision.get("intent_confidence", 0.0),
+                            "reason":            _router_decision.get("reason", ""),
                         },
                     ))
 
@@ -388,14 +394,16 @@ def extract_audit_events(
                         trace_id        = trace_id,
                         timestamp       = _now(),
                         metadata        = {
-                            "scenario":         scenario_title,
-                            "graph_type":       graph_type,
-                            "node_name":        node_name,
-                            "skeleton_id":      skeleton_id,
-                            "tool_call_id":     tc_id,
-                            "blocking_risks":   blk,
-                            "unauthorized":     bool(blk),
-                            "is_unknown_agent": is_unknown,
+                            "scenario":          scenario_title,
+                            "graph_type":        graph_type,
+                            "node_name":         node_name,
+                            "skeleton_id":       skeleton_id,
+                            "tool_call_id":      tc_id,
+                            "blocking_risks":    blk,
+                            "unauthorized":      bool(blk),
+                            "is_unknown_agent":  is_unknown,
+                            "intent_confidence": _router_decision.get("intent_confidence", 0.0),
+                            "reason":            _router_decision.get("reason", ""),
                         },
                     ))
 
