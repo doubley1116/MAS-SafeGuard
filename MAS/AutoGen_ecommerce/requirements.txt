@@ -1,5 +1,5 @@
 # ===== Core LLM Framework =====
-pyautogen==0.2.40
+pyautogen==0.2.25
 
 # ===== OpenAI SDK =====
 openai>=1.0.0
