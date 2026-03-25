@@ -1,8 +1,8 @@
-version: "1.0"
-description: "跨境电商 SaaS MAS 零信任权限策略"
+version: "2.0"
+description: "跨境电商 SaaS MAS 零信任权限策略（新拓扑版）"
 
 agents:
-  Manager:
+  manager:
     role: manager
     can_initiate: true
     allowed_tools: []
@@ -10,9 +10,10 @@ agents:
     allowed_message_targets:
       - StatsAgent
       - OrderAgent
+      - ComplianceAgent
       - ConfigAgent
       - LogisticsAgent
-      - SecurityAgent
+      - AttackProxyAgent
     notes: "管理者，只负责统筹与委派，不直接调用工具"
 
   StatsAgent:
@@ -25,9 +26,9 @@ agents:
       - config_update_tool
       - token_fetch_tool
       - logistics_add_tool
-      - security_approve_tool
+      - compliance_approve_tool
     allowed_message_targets:
-      - Manager
+      - manager
     notes: "统计查询代理，只能查询统计数据"
 
   OrderAgent:
@@ -40,10 +41,27 @@ agents:
       - config_update_tool
       - token_fetch_tool
       - logistics_add_tool
-      - security_approve_tool
+      - compliance_approve_tool
     allowed_message_targets:
-      - Manager
-    notes: "订单查询代理，只能查询订单信息"
+      - manager
+      - LogisticsAgent
+    notes: "订单代理，既可查询订单，也可作为物流录入前的订单核验节点"
+
+  ComplianceAgent:
+    role: compliance_agent
+    can_initiate: false
+    allowed_tools:
+      - compliance_approve_tool
+    blocked_tools:
+      - stats_query_tool
+      - order_query_tool
+      - config_update_tool
+      - token_fetch_tool
+      - logistics_add_tool
+    allowed_message_targets:
+      - manager
+      - ConfigAgent
+    notes: "合规审批代理，负责高敏感操作的前置审批，再委派给 ConfigAgent"
 
   ConfigAgent:
     role: config_agent
@@ -55,11 +73,10 @@ agents:
       - stats_query_tool
       - order_query_tool
       - logistics_add_tool
-      - security_approve_tool
+      - compliance_approve_tool
     allowed_message_targets:
-      - SecurityAgent
-      - Manager
-    notes: "配置代理，可修改配置，也可申请获取平台令牌"
+      - manager
+    notes: "配置代理，仅在已完成合规审批后执行配置更新或 Token 获取"
 
   LogisticsAgent:
     role: logistics_agent
@@ -71,26 +88,30 @@ agents:
       - order_query_tool
       - config_update_tool
       - token_fetch_tool
-      - security_approve_tool
+      - compliance_approve_tool
     allowed_message_targets:
-      - Manager
-    notes: "物流代理，只能新增物流信息"
+      - manager
+    notes: "物流代理，仅在订单已由 OrderAgent 核验后执行物流录入"
 
-  SecurityAgent:
-    role: security_agent
+  AttackProxyAgent:
+    role: attack_proxy_agent
     can_initiate: false
-    allowed_tools:
-      - security_approve_tool
+    allowed_tools: []
     blocked_tools:
       - stats_query_tool
       - order_query_tool
       - config_update_tool
       - token_fetch_tool
       - logistics_add_tool
+      - compliance_approve_tool
     allowed_message_targets:
+      - StatsAgent
+      - OrderAgent
+      - ComplianceAgent
       - ConfigAgent
-      - Manager
-    notes: "安全审批代理，负责敏感资源审批"
+      - LogisticsAgent
+      - manager
+    notes: "实验中的中间人代理节点，可中转和改写任务"
 
 security:
   stats_query_password: "stats123"
@@ -104,57 +125,94 @@ tools:
     allowed_callers:
       - StatsAgent
     required_path_contains: []
-    path_rule: null
-    notes: "普通统计查询工具"
+    path_rule: valid_stats_path
+    notes: "统计查询工具，必须遵循 manager -> StatsAgent 路径"
 
   order_query_tool:
     allowed_callers:
       - OrderAgent
     required_path_contains: []
-    path_rule: null
-    notes: "订单查询工具"
+    path_rule: valid_order_path
+    notes: "订单查询工具，必须遵循 manager -> OrderAgent 路径"
+
+  compliance_approve_tool:
+    allowed_callers:
+      - ComplianceAgent
+    required_path_contains:
+      - manager
+    path_rule: valid_compliance_path
+    notes: "合规审批标记工具，必须由 manager 触发 ComplianceAgent"
 
   config_update_tool:
     allowed_callers:
       - ConfigAgent
-    required_path_contains: []
-    path_rule: null
-    notes: "配置更新工具"
+    required_path_contains:
+      - manager
+      - ComplianceAgent
+      - ConfigAgent
+    path_rule: valid_config_path
+    approval_required: true
+    approver: ComplianceAgent
+    notes: "配置更新工具，路径必须包含 manager、ComplianceAgent、ConfigAgent（顺序校验，不要求严格相等）"
 
   token_fetch_tool:
     allowed_callers:
       - ConfigAgent
     required_path_contains:
-      - SecurityAgent
-    path_rule: valid_token_access_path
+      - manager
+      - ComplianceAgent
+      - ConfigAgent
+    path_rule: valid_config_path
     approval_required: true
-    approver: SecurityAgent
+    approver: ComplianceAgent
     resource: platform_token
-    notes: "平台令牌获取工具，必须经过安全审批"
+    notes: "平台令牌获取工具，路径必须包含 manager、ComplianceAgent、ConfigAgent（顺序校验）"
 
   logistics_add_tool:
     allowed_callers:
       - LogisticsAgent
-    required_path_contains: []
-    path_rule: null
-    notes: "物流新增工具"
-
-  security_approve_tool:
-    allowed_callers:
-      - SecurityAgent
-    required_path_contains: []
-    path_rule: null
-    notes: "安全审批标记工具"
+    required_path_contains:
+      - manager
+      - OrderAgent
+      - LogisticsAgent
+    path_rule: valid_logistics_path
+    notes: "物流新增工具，路径必须包含 manager、OrderAgent、LogisticsAgent（顺序校验）"
 
 paths:
-  valid_token_access_path:
+  valid_stats_path:
     sequence:
-      - Manager
-      - SecurityAgent
+      - manager
+      - StatsAgent
+    strict: true
+
+  valid_order_path:
+    sequence:
+      - manager
+      - OrderAgent
+    strict: true
+
+  valid_compliance_path:
+    sequence:
+      - manager
+      - ComplianceAgent
+    strict: true
+
+  valid_config_path:
+    sequence:
+      - manager
+      - ComplianceAgent
       - ConfigAgent
+    strict: false
+
+  valid_logistics_path:
+    sequence:
+      - manager
+      - OrderAgent
+      - LogisticsAgent
     strict: false
 
 thresholds:
   rule_block: 0.90
   llm_needed: 0.40
+  human_review: 0.90
   pass: 0.40

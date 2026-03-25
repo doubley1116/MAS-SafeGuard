@@ -582,6 +582,9 @@ def patch_agent_execute_task(
     history_summary_getter: Optional[Callable[[], str]] = None,
     include_manager_events: bool = False,
     debug: bool = True,
+    on_execute_task_start: Optional[Callable[[str], None]] = None,
+    on_execute_task_end: Optional[Callable[[str], None]] = None,
+    is_blocked_checker: Optional[Callable[[], bool]] = None,
 ):
     """
     monkey patch CrewAI Agent.execute_task，用于诊断和补齐：
@@ -667,12 +670,24 @@ def patch_agent_execute_task(
 
     def patched_execute_task(self, task, *args, **kwargs):
         role = _get_agent_role(self)
+
+        # ── 全局阻断短路 ──
+        if is_blocked_checker is not None and is_blocked_checker():
+            _dbg(f"SHORT_CIRCUIT execute_task role={role!r} — SecurityCore 已阻断")
+            return "[会话已终止] SecurityCore 已阻断本次工作流，后续操作全部短路。"
+
         task_description = _get_task_description(task)
         expected_output = _get_task_expected_output(task)
         history_summary = _safe_history_summary()
         task_meta = _get_task_metadata(task)
 
         is_manager = role == manager_name
+
+        if on_execute_task_start is not None:
+            try:
+                on_execute_task_start(role)
+            except Exception as e:
+                _dbg(f"on_execute_task_start failed role={role!r}: {type(e).__name__}: {e}")
 
         _dbg(
             "HIT execute_task "
@@ -785,16 +800,6 @@ def patch_agent_execute_task(
 
             return result
 
-        except Exception as e:
-            error_call_path = _safe_call_path(
-                role,
-                fallback=[manager_name, role] if not is_manager else [role],
-            )
-            _dbg(
-                "ERROR execute_task "
-                f"role={role!r} is_manager={is_manager} "
-                f"error_type={type(e).__name__} error={e}"
-            )
         except WorkflowBlocked:
             _dbg(
                 "BLOCKED execute_task "
@@ -837,6 +842,13 @@ def patch_agent_execute_task(
                     f"role={role!r}: {type(emit_err).__name__}: {emit_err}"
                 )
             raise
+
+        finally:
+            if on_execute_task_end is not None:
+                try:
+                    on_execute_task_end(role)
+                except Exception as e:
+                    _dbg(f"on_execute_task_end failed role={role!r}: {type(e).__name__}: {e}")
 
 
     patched_execute_task._audit_patched = True  # type: ignore[attr-defined]

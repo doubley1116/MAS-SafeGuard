@@ -71,10 +71,27 @@ class SecurityCoreSink:
     """
     对接 SecurityCore
     调用 security_core.handle_event(event) 获取决策
-    若 allow=False，则直接抛出 WorkflowBlocked 中断工作流
+    若 allow=False，设置全局阻断标志并抛出 WorkflowBlocked
+
+    全局阻断标志 blocked / blocked_reason / blocked_event 可被外部检查，
+    用于在 CrewAI 框架吞掉异常后仍能短路后续所有操作。
     """
     def __init__(self, security_core) -> None:
         self.security_core = security_core
+        self.blocked: bool = False
+        self.blocked_reason: str = ""
+        self.blocked_event: AuditEvent | None = None
+        self.blocked_decision = None
+
+    def reset(self) -> None:
+        """每个场景开始前调用，清除上一轮的阻断状态"""
+        self.blocked = False
+        self.blocked_reason = ""
+        self.blocked_event = None
+        self.blocked_decision = None
+
+    def is_blocked(self) -> bool:
+        return self.blocked
 
     def emit(self, event: AuditEvent) -> None:
         decision = self.security_core.handle_event(event)
@@ -91,8 +108,12 @@ class SecurityCoreSink:
         }
 
         if not decision.allow:
+            self.blocked = True
+            self.blocked_reason = f"SecurityCore 阻断工作流: {decision.reason}"
+            self.blocked_event = event
+            self.blocked_decision = decision
             raise WorkflowBlocked(
-                message=f"SecurityCore 阻断工作流: {decision.reason}",
+                message=self.blocked_reason,
                 decision=decision,
                 event=event
             )
