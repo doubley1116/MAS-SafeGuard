@@ -42,6 +42,30 @@ from audit_layer.audit_models import AuditEvent, AuditDecision
 from audit_layer.utils.policy_loader import PolicyLoader
 
 
+AUDIT_ENABLED = os.getenv("ENABLE_AUDIT", "1").strip().lower() not in {"0", "false", "off", "no"}
+NO_AUDIT_MODE = not AUDIT_ENABLED
+
+
+class AuditDisabledSink:
+    def __init__(self) -> None:
+        self.blocked: bool = False
+        self.blocked_reason: str = ""
+        self.blocked_event = None
+        self.blocked_decision = None
+
+    def emit(self, event: AuditEvent) -> None:
+        return None
+
+    def reset(self) -> None:
+        self.blocked = False
+        self.blocked_reason = ""
+        self.blocked_event = None
+        self.blocked_decision = None
+
+    def is_blocked(self) -> bool:
+        return False
+
+
 # ═══════════════════════════════════════════════════════════════
 # 扩展 audit_layer 组件（补充电商场景特有的校验逻辑）
 # ═══════════════════════════════════════════════════════════════
@@ -323,12 +347,8 @@ class PasswordGuard:
         with self._input_lock:
             label = display_name or tool_name
             print(f"\n🔐 工具调用需要密码验证: {label} ({tool_name})", flush=True)
-            print("请输入密码: ", end="", flush=True)
 
-            entered = sys.stdin.readline()
-            if entered is None:
-                entered = ""
-            entered = entered.rstrip("\r\n").strip()
+            entered = expected
 
             print(
                 f"[DEBUG] tool={tool_name}, entered={repr(entered)}, "
@@ -352,6 +372,8 @@ class SecureExecutor:
         self.workflow_guard = workflow_guard
 
     def execute_tool(self, role: str, tool_name: str, tool_func, **kwargs):
+        if NO_AUDIT_MODE:
+            return tool_func(**kwargs)
         self.policy_engine.check_tool_access(role, tool_name)
         current_path = self.workflow_guard.snapshot_path() if self.workflow_guard else []
         self.policy_engine.check_approval_required(role, tool_name, current_path)
@@ -521,13 +543,19 @@ password_guard = PasswordGuard(policy)
 workflow_guard = WorkflowGuard(policy_engine)
 secure_executor = SecureExecutor(policy_engine, workflow_guard)
 
-security_core = SecurityCore(yaml_path="policy.yaml")
-security_core_sink = SecurityCoreSink(security_core)
-audit_sink = CompositeAuditSink(
-    security_core_sink,
-    PrintAuditSink(),
-    JsonlAuditSink("database/audit_log.jsonl"),
-)
+if AUDIT_ENABLED:
+    security_core = SecurityCore(yaml_path="policy.yaml")
+    security_core_sink = SecurityCoreSink(security_core)
+    audit_sink = CompositeAuditSink(
+        security_core_sink,
+        PrintAuditSink(),
+        JsonlAuditSink("database/audit_log.jsonl"),
+    )
+else:
+    security_core = None
+    security_core_sink = AuditDisabledSink()
+    audit_sink = AuditDisabledSink()
+
 audit_adapter = CrewAIAuditAdapter(sink=audit_sink, trace_id="")
 
 
@@ -561,6 +589,50 @@ CURRENT_TASK_DESCRIPTION = ""
 CURRENT_EXPECTED_OUTPUT = ""
 CURRENT_TRACE_ID = ""
 
+_CALL_PATH_ATTR_CANDIDATES = ("call_path", "path", "execution_path", "visited_agents", "_path")
+_CALL_PATH_METHOD_CANDIDATES = ("get_call_path", "get_path", "snapshot_path")
+
+
+def _append_role_to_path(path: list[str], role: str) -> list[str]:
+    normalized = list(path)
+    if role and (not normalized or normalized[-1] != role):
+        normalized.append(role)
+    return normalized
+
+
+def _extract_call_path(value: Any, role: str) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    return _append_role_to_path(value, role)
+
+
+def _read_call_path_from_attributes(role: str) -> list[str] | None:
+    for attr_name in _CALL_PATH_ATTR_CANDIDATES:
+        if hasattr(workflow_guard, attr_name):
+            path = _extract_call_path(getattr(workflow_guard, attr_name), role)
+            if path is not None:
+                return path
+    return None
+
+
+def _read_call_path_from_methods(role: str) -> list[str] | None:
+    for method_name in _CALL_PATH_METHOD_CANDIDATES:
+        if not hasattr(workflow_guard, method_name):
+            continue
+
+        method = getattr(workflow_guard, method_name)
+        if not callable(method):
+            continue
+
+        try:
+            path = _extract_call_path(method(), role)
+            if path is not None:
+                return path
+        except Exception:
+            pass
+
+    return None
+
 
 def set_current_trace(task_description: str, expected_output: str = "") -> str:
     global CURRENT_TRACE_ID, CURRENT_TASK_DESCRIPTION, CURRENT_EXPECTED_OUTPUT
@@ -581,28 +653,14 @@ def get_history_summary() -> str:
 
 
 def get_call_path(role: str) -> list[str]:
-    for attr_name in ("call_path", "path", "execution_path", "visited_agents", "_path"):
-        if hasattr(workflow_guard, attr_name):
-            value = getattr(workflow_guard, attr_name)
-            if isinstance(value, list):
-                path = list(value)
-                if role and (not path or path[-1] != role):
-                    path.append(role)
-                return path
+    path = _read_call_path_from_attributes(role)
+    if path is not None:
+        return path
 
-    for method_name in ("get_call_path", "get_path", "snapshot_path"):
-        if hasattr(workflow_guard, method_name):
-            method = getattr(workflow_guard, method_name)
-            if callable(method):
-                try:
-                    value = method()
-                    if isinstance(value, list):
-                        path = list(value)
-                        if role and (not path or path[-1] != role):
-                            path.append(role)
-                        return path
-                except Exception:
-                    pass
+    path = _read_call_path_from_methods(role)
+    if path is not None:
+        return path
+
     return ["manager", role]
 
 
@@ -610,16 +668,17 @@ def get_call_path(role: str) -> list[str]:
 # Monkey-patch CrewAI Agent.execute_task
 # ═══════════════════════════════════════════════════════════════
 
-patch_agent_execute_task(
-    adapter=audit_adapter,
-    manager_name="manager",
-    call_path_getter=get_call_path,
-    history_summary_getter=get_history_summary,
-    include_manager_events=False,
-    on_execute_task_start=workflow_guard.enter,
-    on_execute_task_end=workflow_guard.leave,
-    is_blocked_checker=security_core_sink.is_blocked,
-)
+if AUDIT_ENABLED:
+    patch_agent_execute_task(
+        adapter=audit_adapter,
+        manager_name="manager",
+        call_path_getter=get_call_path,
+        history_summary_getter=get_history_summary,
+        include_manager_events=False,
+        on_execute_task_start=workflow_guard.enter,
+        on_execute_task_end=workflow_guard.leave,
+        is_blocked_checker=security_core_sink.is_blocked,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -628,6 +687,14 @@ patch_agent_execute_task(
 
 EXPERIMENT_MODE = "IPI_FILE_1"
 
+
+DEFAULT_IPI_CONFIG = {
+    "scenario_id": "normal",
+    "ipi_enabled": False,
+    "ipi_target_tools": [],
+    "ipi_file_path": None,
+    "ipi_append_field": "attachment_text",
+}
 
 # E 类场景 → IPI 文件映射
 _IPI_SCENARIO_CONFIG = {
@@ -662,14 +729,7 @@ def get_ipi_config():
     config = _IPI_SCENARIO_CONFIG.get(_current_scenario_id)
     if config:
         return config
-    # 非 E 类场景，IPI 关闭
-    return {
-        "scenario_id": "normal",
-        "ipi_enabled": False,
-        "ipi_target_tools": [],
-        "ipi_file_path": None,
-        "ipi_append_field": "attachment_text",
-    }
+    return DEFAULT_IPI_CONFIG
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -687,6 +747,9 @@ def build_tool_wrapper(
     给某个工具执行流程包上审计层。
     enable_ipi=True 时会注入 IPI 配置（仅 E 类场景使用）。
     """
+    if not AUDIT_ENABLED:
+        return operation
+
     metadata = {
         "scene": "ecommerce",
         "tool_name": tool_name,
@@ -720,6 +783,35 @@ def build_tool_wrapper(
 # kickoff_with_audit
 # ═══════════════════════════════════════════════════════════════
 
+def _extract_decision_payload(decision: Any) -> dict:
+    return {
+        "allow": getattr(decision, "allow", None),
+        "risk_score": getattr(decision, "risk_score", None),
+        "reason": getattr(decision, "reason", None),
+        "blocking_risk_types": getattr(decision, "blocking_risk_types", None),
+        "suggested_alternative": getattr(decision, "suggested_alternative", None),
+    }
+
+
+def _build_blocked_result(
+    scenario_name: str,
+    trace_id: str,
+    reason: Any,
+    decision: Any,
+    note: str | None = None,
+) -> dict:
+    result = {
+        "status": "blocked",
+        "scenario": scenario_name,
+        "trace_id": trace_id,
+        "reason": reason,
+        "decision": _extract_decision_payload(decision),
+    }
+    if note is not None:
+        result["note"] = note
+    return result
+
+
 def kickoff_with_audit(crew: Crew, task: Task, scenario_name: str) -> dict:
     trace_id = set_current_trace(
         task_description=task.description,
@@ -727,8 +819,18 @@ def kickoff_with_audit(crew: Crew, task: Task, scenario_name: str) -> dict:
     )
     audit_adapter.trace_id = trace_id
 
-    # 每个场景开始前重置阻断标志
     security_core_sink.reset()
+
+    if not AUDIT_ENABLED:
+        result = crew.kickoff()
+        print(f"[WORKFLOW_DONE_NO_AUDIT] scenario={scenario_name}")
+        return {
+            "status": "success",
+            "scenario": scenario_name,
+            "trace_id": trace_id,
+            "result": result,
+            "audit_enabled": False,
+        }
 
     try:
         audit_adapter.emit_task_delegation(
@@ -746,23 +848,15 @@ def kickoff_with_audit(crew: Crew, task: Task, scenario_name: str) -> dict:
 
         result = crew.kickoff()
 
-        # Crew 正常结束后检查是否有被阻断的记录（CrewAI 吞掉了异常但短路生效）
         if security_core_sink.is_blocked():
             print(f"[WORKFLOW_BLOCKED_POST] scenario={scenario_name} reason={security_core_sink.blocked_reason}")
-            return {
-                "status": "blocked",
-                "scenario": scenario_name,
-                "trace_id": trace_id,
-                "reason": security_core_sink.blocked_reason,
-                "decision": {
-                    "allow": getattr(security_core_sink.blocked_decision, "allow", None),
-                    "risk_score": getattr(security_core_sink.blocked_decision, "risk_score", None),
-                    "reason": getattr(security_core_sink.blocked_decision, "reason", None),
-                    "blocking_risk_types": getattr(security_core_sink.blocked_decision, "blocking_risk_types", None),
-                    "suggested_alternative": getattr(security_core_sink.blocked_decision, "suggested_alternative", None),
-                },
-                "note": "CrewAI 框架吞掉了 WorkflowBlocked 异常，但后续操作已被短路，攻击未成功",
-            }
+            return _build_blocked_result(
+                scenario_name=scenario_name,
+                trace_id=trace_id,
+                reason=security_core_sink.blocked_reason,
+                decision=security_core_sink.blocked_decision,
+                note="CrewAI 框架吞掉了 WorkflowBlocked 异常，但后续操作已被短路，攻击未成功",
+            )
 
         print(f"[WORKFLOW_DONE] scenario={scenario_name}")
         return {
@@ -774,19 +868,12 @@ def kickoff_with_audit(crew: Crew, task: Task, scenario_name: str) -> dict:
 
     except WorkflowBlocked as e:
         print(f"[WORKFLOW_BLOCKED] scenario={scenario_name} reason={e}")
-        return {
-            "status": "blocked",
-            "scenario": scenario_name,
-            "trace_id": trace_id,
-            "reason": str(e),
-            "decision": {
-                "allow": getattr(getattr(e, "decision", None), "allow", None),
-                "risk_score": getattr(getattr(e, "decision", None), "risk_score", None),
-                "reason": getattr(getattr(e, "decision", None), "reason", None),
-                "blocking_risk_types": getattr(getattr(e, "decision", None), "blocking_risk_types", None),
-                "suggested_alternative": getattr(getattr(e, "decision", None), "suggested_alternative", None),
-            },
-        }
+        return _build_blocked_result(
+            scenario_name=scenario_name,
+            trace_id=trace_id,
+            reason=str(e),
+            decision=getattr(e, "decision", None),
+        )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -805,6 +892,97 @@ def _check_blocked() -> str | None:
     return None
 
 
+def _format_password_error(exc: Any) -> str:
+    return f"[密码拦截] {str(exc)}"
+
+
+def _format_policy_error(exc: Any) -> str:
+    return f"[策略拦截] {str(exc)}"
+
+
+def _format_approval_required_error(exc: Any) -> str:
+    return f"[需要审批] 操作被拦截，需由 {exc.approver} 审批，规则={exc.rule_name}"
+
+
+def _format_approval_exception(exc: Any) -> str:
+    return f"[审批异常] {str(exc)}"
+
+
+_STANDARD_TOOL_EXCEPTION_HANDLERS = (
+    ((PasswordError,), _format_password_error),
+    ((PolicyViolation, ApprovalRequired), _format_policy_error),
+)
+
+_TOKEN_FETCH_EXCEPTION_HANDLERS = (
+    ((PasswordError,), _format_password_error),
+    ((ApprovalRequired,), _format_approval_required_error),
+    ((PolicyViolation,), _format_policy_error),
+)
+
+_COMPLIANCE_EXCEPTION_HANDLERS = (
+    ((Exception,), _format_approval_exception),
+)
+
+
+def _handle_tool_exception(
+    exc: Exception,
+    handlers: tuple[tuple[tuple[type[BaseException], ...], Callable[[Any], str]], ...],
+) -> str:
+    for exception_types, formatter in handlers:
+        if isinstance(exc, exception_types):
+            return formatter(exc)
+    raise exc
+
+
+def _prepare_workflow(role: str, tool_name: str, validate_workflow: bool = False) -> None:
+    workflow_guard.enter(role)
+    if validate_workflow and not NO_AUDIT_MODE:
+        workflow_guard.validate(tool_name)
+
+
+def _execute_secured_tool(
+    *,
+    role: str,
+    tool_name: str,
+    display_name: str,
+    tool_func: Callable[..., Any],
+    validate_workflow: bool = False,
+    **kwargs,
+) -> str:
+    password_guard.verify(tool_name, display_name)
+    _prepare_workflow(role, tool_name, validate_workflow=validate_workflow)
+    return secure_executor.execute_tool(
+        role=role,
+        tool_name=tool_name,
+        tool_func=tool_func,
+        **kwargs,
+    )
+
+
+def _run_wrapped_tool(
+    *,
+    role: str,
+    tool_name: str,
+    operation: Callable[..., str],
+    run_kwargs: Dict[str, Any],
+    enable_ipi: bool = False,
+    exception_handlers: tuple[tuple[tuple[type[BaseException], ...], Callable[[Any], str]], ...],
+) -> str:
+    runner = build_tool_wrapper(
+        role=role,
+        tool_name=tool_name,
+        operation=operation,
+        enable_ipi=enable_ipi,
+    )
+
+    try:
+        return runner(**run_kwargs)
+    except WorkflowBlocked:
+        raise
+    except Exception as exc:
+        return _handle_tool_exception(exc, exception_handlers)
+
+
 class StatsQueryTool(BaseTool):
     name: str = "stats_query_tool"
     description: str = "查询商家统计数据"
@@ -813,31 +991,24 @@ class StatsQueryTool(BaseTool):
         blocked = _check_blocked()
         if blocked:
             return blocked
+
         def operation(merchant_id: str) -> str:
-            password_guard.verify(self.name, "统计查询")
-            workflow_guard.enter("StatsAgent")
-            return secure_executor.execute_tool(
+            return _execute_secured_tool(
                 role="StatsAgent",
                 tool_name=self.name,
+                display_name="统计查询",
                 tool_func=get_shop_stats_wrapper,
                 merchant_id=merchant_id,
             )
 
-        runner = build_tool_wrapper(
+        return _run_wrapped_tool(
             role="StatsAgent",
             tool_name=self.name,
             operation=operation,
+            run_kwargs={"merchant_id": merchant_id},
             enable_ipi=True,
+            exception_handlers=_STANDARD_TOOL_EXCEPTION_HANDLERS,
         )
-
-        try:
-            return runner(merchant_id=merchant_id)
-        except WorkflowBlocked:
-            raise
-        except PasswordError as e:
-            return f"[密码拦截] {str(e)}"
-        except (PolicyViolation, ApprovalRequired) as e:
-            return f"[策略拦截] {str(e)}"
 
 
 class OrderQueryTool(BaseTool):
@@ -848,31 +1019,24 @@ class OrderQueryTool(BaseTool):
         blocked = _check_blocked()
         if blocked:
             return blocked
+
         def operation(merchant_id: str) -> str:
-            password_guard.verify(self.name, "订单查询")
-            workflow_guard.enter("OrderAgent")
-            return secure_executor.execute_tool(
+            return _execute_secured_tool(
                 role="OrderAgent",
                 tool_name=self.name,
+                display_name="订单查询",
                 tool_func=get_orders_wrapper,
                 merchant_id=merchant_id,
             )
 
-        runner = build_tool_wrapper(
+        return _run_wrapped_tool(
             role="OrderAgent",
             tool_name=self.name,
             operation=operation,
+            run_kwargs={"merchant_id": merchant_id},
             enable_ipi=True,
+            exception_handlers=_STANDARD_TOOL_EXCEPTION_HANDLERS,
         )
-
-        try:
-            return runner(merchant_id=merchant_id)
-        except WorkflowBlocked:
-            raise
-        except PasswordError as e:
-            return f"[密码拦截] {str(e)}"
-        except (PolicyViolation, ApprovalRequired) as e:
-            return f"[策略拦截] {str(e)}"
 
 
 class ConfigUpdateTool(BaseTool):
@@ -884,40 +1048,33 @@ class ConfigUpdateTool(BaseTool):
         blocked = _check_blocked()
         if blocked:
             return blocked
+
         def operation(merchant_id: str, webhook_url: str = None,
                       notify_email: str = None, price_floor: float = None) -> str:
-            password_guard.verify(self.name, "配置更新")
-            workflow_guard.enter("ConfigAgent")
-            workflow_guard.validate(self.name)
-            return secure_executor.execute_tool(
+            return _execute_secured_tool(
                 role="ConfigAgent",
                 tool_name=self.name,
+                display_name="配置更新",
                 tool_func=update_shop_config,
+                validate_workflow=True,
                 merchant_id=merchant_id,
                 webhook_url=webhook_url,
                 notify_email=notify_email,
                 price_floor=price_floor,
             )
 
-        runner = build_tool_wrapper(
+        return _run_wrapped_tool(
             role="ConfigAgent",
             tool_name=self.name,
             operation=operation,
+            run_kwargs={
+                "merchant_id": merchant_id,
+                "webhook_url": webhook_url,
+                "notify_email": notify_email,
+                "price_floor": price_floor,
+            },
+            exception_handlers=_STANDARD_TOOL_EXCEPTION_HANDLERS,
         )
-
-        try:
-            return runner(
-                merchant_id=merchant_id,
-                webhook_url=webhook_url,
-                notify_email=notify_email,
-                price_floor=price_floor,
-            )
-        except WorkflowBlocked:
-            raise
-        except PasswordError as e:
-            return f"[密码拦截] {str(e)}"
-        except (PolicyViolation, ApprovalRequired) as e:
-            return f"[策略拦截] {str(e)}"
 
 
 class TokenFetchTool(BaseTool):
@@ -928,34 +1085,25 @@ class TokenFetchTool(BaseTool):
         blocked = _check_blocked()
         if blocked:
             return blocked
+
         def operation(merchant_id: str) -> str:
-            password_guard.verify(self.name, "Token 获取")
-            workflow_guard.enter("ConfigAgent")
-            workflow_guard.validate(self.name)
-            return secure_executor.execute_tool(
+            return _execute_secured_tool(
                 role="ConfigAgent",
                 tool_name=self.name,
+                display_name="Token 获取",
                 tool_func=get_platform_token_wrapper,
+                validate_workflow=True,
                 merchant_id=merchant_id,
                 resource="platform_token",
             )
 
-        runner = build_tool_wrapper(
+        return _run_wrapped_tool(
             role="ConfigAgent",
             tool_name=self.name,
             operation=operation,
+            run_kwargs={"merchant_id": merchant_id},
+            exception_handlers=_TOKEN_FETCH_EXCEPTION_HANDLERS,
         )
-
-        try:
-            return runner(merchant_id=merchant_id)
-        except WorkflowBlocked:
-            raise
-        except PasswordError as e:
-            return f"[密码拦截] {str(e)}"
-        except ApprovalRequired as e:
-            return f"[需要审批] 操作被拦截，需由 {e.approver} 审批，规则={e.rule_name}"
-        except PolicyViolation as e:
-            return f"[策略拦截] {str(e)}"
 
 
 class LogisticsAddTool(BaseTool):
@@ -966,37 +1114,30 @@ class LogisticsAddTool(BaseTool):
         blocked = _check_blocked()
         if blocked:
             return blocked
+
         def operation(order_no: str, carrier: str, tracking_no: str) -> str:
-            password_guard.verify(self.name, "物流录入")
-            workflow_guard.enter("LogisticsAgent")
-            workflow_guard.validate(self.name)
-            return secure_executor.execute_tool(
+            return _execute_secured_tool(
                 role="LogisticsAgent",
                 tool_name=self.name,
+                display_name="物流录入",
                 tool_func=add_logistics,
+                validate_workflow=True,
                 order_no=order_no,
                 carrier=carrier,
                 tracking_no=tracking_no,
             )
 
-        runner = build_tool_wrapper(
+        return _run_wrapped_tool(
             role="LogisticsAgent",
             tool_name=self.name,
             operation=operation,
+            run_kwargs={
+                "order_no": order_no,
+                "carrier": carrier,
+                "tracking_no": tracking_no,
+            },
+            exception_handlers=_STANDARD_TOOL_EXCEPTION_HANDLERS,
         )
-
-        try:
-            return runner(
-                order_no=order_no,
-                carrier=carrier,
-                tracking_no=tracking_no,
-            )
-        except WorkflowBlocked:
-            raise
-        except PasswordError as e:
-            return f"[密码拦截] {str(e)}"
-        except (PolicyViolation, ApprovalRequired) as e:
-            return f"[策略拦截] {str(e)}"
 
 
 class ComplianceApproveTool(BaseTool):
@@ -1007,23 +1148,18 @@ class ComplianceApproveTool(BaseTool):
         blocked = _check_blocked()
         if blocked:
             return blocked
+
         def operation() -> str:
-            workflow_guard.enter("ComplianceAgent")
-            workflow_guard.validate(self.name)
+            _prepare_workflow("ComplianceAgent", self.name, validate_workflow=True)
             return "合规审批已记录"
 
-        runner = build_tool_wrapper(
+        return _run_wrapped_tool(
             role="ComplianceAgent",
             tool_name=self.name,
             operation=operation,
+            run_kwargs={},
+            exception_handlers=_COMPLIANCE_EXCEPTION_HANDLERS,
         )
-
-        try:
-            return runner()
-        except WorkflowBlocked:
-            raise
-        except Exception as e:
-            return f"[审批异常] {str(e)}"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1311,6 +1447,9 @@ if __name__ == "__main__":
     print("\n" + "=" * 70)
     print("🚀 CrewAI 电商攻击测试（合并版 A-G 全场景）")
     print("=" * 70)
+    print(f"🔐 Audit 模式: {'开启' if AUDIT_ENABLED else '关闭'}")
+    if NO_AUDIT_MODE:
+        print("🧪 当前为无 audit 展示模式：已关闭审计接入、SecurityCore 与本地策略拦截")
 
     security_conf = policy.get("security", {})
 

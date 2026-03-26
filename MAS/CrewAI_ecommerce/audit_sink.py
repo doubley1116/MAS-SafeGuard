@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Protocol
+# ── 从 audit_layer 导入核心组件 ──
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
-from audit_models import AuditEvent
+from audit_layer.audit_models import AuditEvent
 
 
 class WorkflowBlocked(Exception):
