@@ -17,6 +17,7 @@ class RuleEngine:
         if event.event_type == "tool_call":
             hits += self._check_tool_caller(event)
             hits += self._check_required_path(event)
+            hits += self._check_path_rule(event)
             hits += self._check_strict_path(event)
             hits += self._check_blocked_tools(event)
             hits += self._check_intent_confidence_required(event)
@@ -33,6 +34,14 @@ class RuleEngine:
         reasons = " | ".join(h[2] for h in hits)
 
         return rule_score, risk_types, reasons
+
+    # ── 辅助：从 call_path 中去掉末尾的工具名，得到纯 agent 路径 ──
+
+    def _agent_path(self, event: AuditEvent) -> List[str]:
+        path = list(event.call_path or [])
+        if path and event.tool_name and path[-1] == event.tool_name:
+            path = path[:-1]
+        return path
 
     # ── 规则1：工具调用者必须在 allowed_callers 内 ──────────────────
 
@@ -134,20 +143,69 @@ class RuleEngine:
         return []
 
 
-    # ── 规则5b：strict=true 路径校验（ecommerce.yaml 高权限工具）────────────
-    # required_path_contains 只检查节点是否出现过
-    # strict 路径额外要求：工具的直接调用方必须紧跟在指定前置节点之后
-    # 例：token_fetch_tool 要求 Operator 必须直接触达 Config_Agent，不允许中转
-    # 实现：检查 paths 中 strict=true 的路径，验证 call_path[-2] == 前置节点
+    # ── 规则5a：path_rule 路径校验 ──────────────────────────────────
+    # 按工具的 path_rule 字段查找路径定义，支持两种模式：
+    #   strict=true  → actual_path == sequence（完全相等）
+    #   strict=false → 有序子序列匹配（sequence 中的节点必须按顺序出现在 actual_path 中）
+
+    def _check_path_rule(self, event: AuditEvent) -> List[tuple]:
+        tool_policy = self.policy.get_tool(event.tool_name or "")
+        if not tool_policy:
+            return []
+
+        path_rule = tool_policy.get("path_rule")
+        if not path_rule:
+            return []
+
+        path_def = self.policy.paths.get(path_rule, {})
+        sequence = path_def.get("sequence", [])
+        strict = path_def.get("strict", False)
+        if not sequence:
+            return []
+
+        actual_path = self._agent_path(event)
+        if not actual_path:
+            return [(
+                0.92,
+                "missing_call_path",
+                f"{event.tool_name} 声明了 path_rule={path_rule}，但当前 call_path 为空"
+            )]
+
+        if strict:
+            if actual_path != sequence:
+                return [(
+                    0.93,
+                    "strict_path_violation",
+                    f"{event.tool_name} 要求严格路径 {sequence}，实际路径：{actual_path}"
+                )]
+            return []
+
+        idx = 0
+        for node in actual_path:
+            if idx < len(sequence) and node == sequence[idx]:
+                idx += 1
+        if idx < len(sequence):
+            return [(
+                0.92,
+                "path_rule_violation",
+                f"{event.tool_name} 要求路径包含有序序列 {sequence}，实际路径：{actual_path}"
+            )]
+        return []
+
+    # ── 规则5b：strict=true 路径校验（兜底，仅对未绑定 path_rule 的工具生效）──
+    # 如果工具已绑定 path_rule，则由 _check_path_rule 处理，此处跳过避免重复
 
     def _check_strict_path(self, event: AuditEvent) -> List[tuple]:
+        tool_policy = self.policy.get_tool(event.tool_name or "")
+        if tool_policy and tool_policy.get("path_rule"):
+            return []
+
         for path_name, path_def in self.policy.paths.items():
             if not path_def.get("strict", False):
                 continue
             seq = path_def.get("sequence", [])
             if not seq or seq[-1] != event.sender:
                 continue
-            # strict 路径的倒数第二个节点必须是 call_path 的倒数第二位
             expected_prev = seq[-2]
             actual_prev = event.call_path[-2] if len(event.call_path) >= 2 else None
             if actual_prev != expected_prev:
