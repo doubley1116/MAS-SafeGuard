@@ -1,6 +1,6 @@
 """
 run_adversarial_ppo.py
-─────────────────────
+----------------------
 对抗性PPO训练的统一运行脚本。
 集成骨架数据、模型选择和训练循环。
 """
@@ -25,9 +25,9 @@ try:
     from src.adversarial_ppo import Skeleton, parse_skeleton, AdversarialPPOTrainer, PPOConfig
     from src.mock_models import MockAttackerModel, MockDefenderModel
     from models.base_models import BaseAttackerModel, BaseDefenderModel
-    print("✓ 基础模块导入成功")
+    print("[OK] 基础模块导入成功")
 except ImportError as e:
-    print(f"✗ 基础模块导入失败: {e}")
+    print(f"[FAIL] 基础模块导入失败: {e}")
     print(f"Python路径: {sys.path}")
     print("请确保已安装所有依赖: pip install -r requirements.txt")
     sys.exit(1)
@@ -39,18 +39,28 @@ def import_hf_attacker():
         from models.hf_impl.hf_attacker import HFAttackerModel
         return HFAttackerModel
     except ImportError as e:
-        print(f"✗ HFAttackerModel导入失败: {e}")
-        print("⚠ 将回退到Mock模型")
+        print(f"[FAIL] HFAttackerModel导入失败: {e}")
+        print("[WARN] 将回退到Mock模型")
+        return None
+
+def import_hf_defender():
+    """延迟导入HFDefenderModel（7B分类器）"""
+    try:
+        from models.hf_impl.hf_defender import HFDefenderModel
+        return HFDefenderModel
+    except ImportError as e:
+        print(f"[FAIL] HFDefenderModel导入失败: {e}")
+        print("[WARN] 将回退到Mock模型")
         return None
 
 def import_bert_defender():
-    """延迟导入BERTDefenderModel"""
+    """延迟导入BERTDefenderModel（1.5B分类器）"""
     try:
         from models.hf_impl.bert_defender import BERTDefenderModel
         return BERTDefenderModel
     except ImportError as e:
-        print(f"✗ BERTDefenderModel导入失败: {e}")
-        print("⚠ 将回退到Mock模型")
+        print(f"[FAIL] BERTDefenderModel导入失败: {e}")
+        print("[WARN] 将回退到Mock模型")
         return None
 
 
@@ -98,7 +108,7 @@ def load_skeleton_pool(skeleton_type: str = "all") -> List[Skeleton]:
         )
         skeleton_pool.append(skeleton)
     
-    print(f"✓ 加载了 {len(skeleton_pool)} 个骨架样本")
+    print(f"[OK] 加载了 {len(skeleton_pool)} 个骨架样本")
     return skeleton_pool
 
 
@@ -131,7 +141,7 @@ def create_attacker_model(model_type: str, model_name: str = None, device: str =
         try:
             import torch
             if not torch.cuda.is_available():
-                print("⚠ CUDA不可用，回退到CPU")
+                print("[WARN] CUDA不可用，回退到CPU")
                 device = "cpu"
         except ImportError:
             device = "cpu"
@@ -140,14 +150,14 @@ def create_attacker_model(model_type: str, model_name: str = None, device: str =
         # 延迟导入HFAttackerModel
         HFAttackerModelClass = import_hf_attacker()
         if HFAttackerModelClass is None:
-            print("⚠ HFAttackerModel不可用，使用Mock模型作为后备")
+            print("[WARN] HFAttackerModel不可用，使用Mock模型作为后备")
             return MockAttackerModel()
         
-        print(f"✓ 创建攻击者模型: {model_name} on {device}")
+        print(f"[OK] 创建攻击者模型: {model_name} on {device}")
         return HFAttackerModelClass(model_name=model_name, device=device)
     except Exception as e:
-        print(f"✗ 创建攻击者模型失败: {e}")
-        print("⚠ 使用Mock模型作为后备")
+        print(f"[FAIL] 创建攻击者模型失败: {e}")
+        print("[WARN] 使用Mock模型作为后备")
         return MockAttackerModel()
 
 
@@ -172,6 +182,8 @@ def create_defender_model(model_type: str, model_name: str = None, device: str =
             model_name = "hfl/chinese-roberta-wwm-ext"
         elif model_type == "ernie":
             model_name = "nghuyong/ernie-3.0-base-zh"
+        elif model_type == "hf":
+            model_name = "Qwen/Qwen2.5-7B-Instruct"  # H100双7B配置
         else:
             model_name = "bert-base-chinese"
     
@@ -180,23 +192,33 @@ def create_defender_model(model_type: str, model_name: str = None, device: str =
         try:
             import torch
             if not torch.cuda.is_available():
-                print("⚠ CUDA不可用，回退到CPU")
+                print("[WARN] CUDA不可用，回退到CPU")
                 device = "cpu"
         except ImportError:
             device = "cpu"
     
     try:
-        # 延迟导入BERTDefenderModel
-        BERTDefenderModelClass = import_bert_defender()
-        if BERTDefenderModelClass is None:
-            print("⚠ BERTDefenderModel不可用，使用Mock模型作为后备")
-            return MockDefenderModel()
-        
-        print(f"✓ 创建防御者模型: {model_name} on {device}")
-        return BERTDefenderModelClass(model_name=model_name, device=device)
+        # H100双7B：使用HFDefenderModel（7B分类器）
+        if model_type == "hf":
+            HFDefenderModelClass = import_hf_defender()
+            if HFDefenderModelClass is None:
+                print("[WARN] HFDefenderModel不可用，使用Mock模型作为后备")
+                return MockDefenderModel()
+            
+            print(f"[OK] 创建防御者模型 (7B分类器): {model_name} on {device}")
+            return HFDefenderModelClass(model_name=model_name, device=device)
+        else:
+            # 传统BERT类分类器
+            BERTDefenderModelClass = import_bert_defender()
+            if BERTDefenderModelClass is None:
+                print("[WARN] BERTDefenderModel不可用，使用Mock模型作为后备")
+                return MockDefenderModel()
+            
+            print(f"[OK] 创建防御者模型: {model_name} on {device}")
+            return BERTDefenderModelClass(model_name=model_name, device=device)
     except Exception as e:
-        print(f"✗ 创建防御者模型失败: {e}")
-        print("⚠ 使用Mock模型作为后备")
+        print(f"[FAIL] 创建防御者模型失败: {e}")
+        print("[WARN] 使用Mock模型作为后备")
         return MockDefenderModel()
 
 
@@ -217,17 +239,17 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
         config_path = os.path.join(project_root, "configs", "adversarial_ppo_config.yaml")
     
     if not os.path.exists(config_path):
-        print(f"✗ 配置文件不存在: {config_path}")
+        print(f"[FAIL] 配置文件不存在: {config_path}")
         print("请创建配置文件或指定有效的配置文件路径")
         sys.exit(1)
     
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
-        print(f"✓ 从 {config_path} 加载配置")
+        print(f"[OK] 从 {config_path} 加载配置")
         return config
     except Exception as e:
-        print(f"✗ 加载配置文件失败: {e}")
+        print(f"[FAIL] 加载配置文件失败: {e}")
         sys.exit(1)
 
 
@@ -243,7 +265,7 @@ def train_from_config(config: Dict[str, Any]):
     skeleton_pool = load_skeleton_pool(skeleton_type=skeleton_type)
 
     if not skeleton_pool:
-        print("✗ 没有找到可用的骨架数据")
+        print("[FAIL] 没有找到可用的骨架数据")
         return
 
     # 2. 创建模型
@@ -299,13 +321,13 @@ def train_from_config(config: Dict[str, Any]):
     )
 
     os.makedirs(output_dir, exist_ok=True)
-    print(f"✓ 输出目录: {output_dir}")
+    print(f"[OK] 输出目录: {output_dir}")
 
     # 5. 保存训练配置
     config_file = os.path.join(output_dir, "train_config.yaml")
     with open(config_file, "w", encoding="utf-8") as f:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True, indent=2)
-    print(f"✓ 训练配置保存到: {config_file}")
+    print(f"[OK] 训练配置保存到: {config_file}")
 
     # 6. 开始训练
     iterations = train_config.get("iterations", 50)
@@ -325,7 +347,7 @@ def train_from_config(config: Dict[str, Any]):
     
     attacker.save(os.path.join(final_model_dir, "attacker"))
     defender.save(os.path.join(final_model_dir, "defender"))
-    print(f"✓ 最终模型保存到: {final_model_dir}")
+    print(f"[OK] 最终模型保存到: {final_model_dir}")
     
     print("=" * 60)
     print("训练完成!")
