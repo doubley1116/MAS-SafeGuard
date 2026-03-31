@@ -79,6 +79,7 @@ class AutoGenAuditAdapter:
         """
         self.security_core = SecurityCore(yaml_path) if yaml_path else None
         self.trace_id = trace_id
+        self.scenario_id: str = ""
         self.verbose = verbose
         self._blocked: bool = False
         self._blocked_reason: str = ""
@@ -99,13 +100,14 @@ class AutoGenAuditAdapter:
 
     # ── 状态管理 ──────────────────────────────────────────────────────────
 
-    def reset_state(self, trace_id: str = "") -> None:
+    def reset_state(self, trace_id: str = "", scenario_id: str = "") -> None:
         """每个场景开始前调用，清除调用路径、对话历史和阻断状态。"""
         # 先保存上一个工作流（如果有）
         if self.trace_id and self._workflow_events:
             self._save_workflow()
-        
+
         self.trace_id = trace_id
+        self.scenario_id = scenario_id
         self._blocked = False
         self._blocked_reason = ""
         self.call_path = []
@@ -140,8 +142,9 @@ class AutoGenAuditAdapter:
         """保存当前工作流的所有审计事件到文件。"""
         if not self.trace_id or not self._workflow_events:
             return
-        
-        workflow_file = self._workflow_dir / f"{self.trace_id}.json"
+
+        filename = self.scenario_id if self.scenario_id else self.trace_id
+        workflow_file = self._workflow_dir / f"{filename}.json"
         workflow_data = {
             "trace_id": self.trace_id,
             "timestamp": datetime.now().isoformat(),
@@ -154,9 +157,6 @@ class AutoGenAuditAdapter:
         
         with workflow_file.open("w", encoding="utf-8") as f:
             json.dump(workflow_data, f, indent=2, ensure_ascii=False, default=str)
-        
-        if self.verbose:
-            print(f"\n[WORKFLOW] 已保存工作流审计事件到: {workflow_file}")
 
     def finalize_workflow(self) -> None:
         """手动结束并保存当前工作流（场景结束时调用）。"""
@@ -208,23 +208,17 @@ class AutoGenAuditAdapter:
         return event
 
     def _log(self, event: AuditEvent) -> None:
-        """打印到控制台并追加到 JSONL 文件。"""
+        """追加到 JSONL 文件（终端不输出 AuditEvent 详情）。"""
         data = asdict(event)
-        target = event.receiver or event.tool_name or "?"
-        
-        if self.verbose:
-            print(f"\n[AUDIT | {event.event_type}] {event.sender} -> {target}")
-            print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
-            print("-" * 50)
-        
+
         with self._jsonl_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(data, ensure_ascii=False, default=str) + "\n")
 
     def _check(self, event: AuditEvent) -> Optional[AuditDecision]:
         """
         若 security_core 已设置，则对事件执行安全审核。
-        审核不通过时设置 _blocked 标志并抛出 WorkflowBlocked。
-        
+        审核不通过时打印 AuditDecision、设置 _blocked 标志并抛出 WorkflowBlocked。
+
         Returns:
             AuditDecision 或 None（如果没有 security_core）
         """
@@ -232,22 +226,22 @@ class AutoGenAuditAdapter:
             return None
 
         decision = self.security_core.audit(event)
-        
-        if self.verbose:
-            print(
-                f"[SecurityCore] {event.event_type} | sender={event.sender} | "
-                f"allow={decision.allow} | risk={decision.risk_score:.2f} | {decision.reason}"
-            )
 
         if not decision.allow:
             self._blocked = True
             self._blocked_reason = f"SecurityCore 阻断工作流: {decision.reason}"
+            # 终端输出完整的 AuditDecision
+            print("\n" + "=" * 60)
+            print("[SecurityCore] 工作流已拦截")
+            print("=" * 60)
+            print(json.dumps(asdict(decision), indent=2, ensure_ascii=False, default=str))
+            print("=" * 60)
             raise WorkflowBlocked(
                 message=self._blocked_reason,
                 decision=decision,
                 event=event,
             )
-        
+
         return decision
 
     # ── 公开 emit 方法 ─────────────────────────────────────────────────────
