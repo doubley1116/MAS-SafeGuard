@@ -14,7 +14,7 @@ from dataclasses import asdict
 from typing import Optional, Dict, Any, List
 
 # ================= 导入基类与审计模型 =================
-from audit_models import AuditEvent, AuditDecision
+from audit_layer.audit_models import AuditEvent, AuditDecision
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.callbacks import BaseCallbackHandler, AsyncCallbackHandler
@@ -87,12 +87,11 @@ def sanitize_payload(payload):
 # ================= 统一的动作审计中心 =================
 def _audit_action(event_type: str, name: str, payload: Any):
     """统一构建和触发审计逻辑的核心函数"""
-    # 【改动 1】：原地获取列表引用，不加 list()
     current_path = cv_call_path.get()
     sender = current_path[-1] if current_path else "System"
 
-    if event_type == "llm_request" and isinstance(payload, str) and payload.strip():
-        # 【改动 2】：原地获取历史列表引用，直接 append 并通过 pop 维持长度，不调用 set()
+    # 原先的 llm_request 现对应 message
+    if event_type == "message" and isinstance(payload, str) and payload.strip():
         history = cv_dialogue_history.get()
         safe_payload = payload if len(payload) <= 1000 else payload[:1000] + "..."
         history.append(f"[{sender} -> LLM]: {safe_payload}")
@@ -102,11 +101,12 @@ def _audit_action(event_type: str, name: str, payload: Any):
     event = AuditEvent(
         event_type=event_type,
         sender=sender,
-        receiver=name if event_type != "llm_request" else "LLM",
-        tool_name=name if event_type == "tool_call" else None,
+        receiver=name if event_type != "message" else "LLM",
+        tool_name=name if event_type in ("tool_call", "tool_result") else None,
+        # 结果或消息放 content，工具参数放 tool_args
         content=str(payload)[:2000] if event_type != "tool_call" else None,
         tool_args=payload if event_type == "tool_call" else None,
-        call_path=list(current_path), # 这里用 list() 拷贝一份存盘，防止后续被修改
+        call_path=list(current_path), 
         trace_id=cv_trace_id.get() or str(uuid.uuid4()),
         history_summary=get_history_summary(n=3)
     )
@@ -114,7 +114,7 @@ def _audit_action(event_type: str, name: str, payload: Any):
     decision = evaluate_audit_event(event, f"{event_type.upper()} - {name}")
     if not decision.allow:
         raise SecurityBlockException(f"[{event_type}] {name} 已被网关拦截: {decision.reason}")
-
+    
 # ================= 全局系统级 Callback Handlers =================
 class SyncSecurityCallback(BaseCallbackHandler):
     """处理同步执行的回调"""
@@ -126,6 +126,11 @@ class SyncSecurityCallback(BaseCallbackHandler):
         payload = sanitize_payload(kwargs.get("inputs", input_str))
         _audit_action("tool_call", tool_name, payload)
 
+    # [新增] 处理工具执行结果
+    def on_tool_end(self, output: str, **kwargs: Any) -> Any:
+        tool_name = kwargs.get("name") or "UnknownTool"
+        _audit_action("tool_result", tool_name, sanitize_payload(output))
+
     def on_chain_start(self, serialized: Optional[Dict[str, Any]], inputs: Dict[str, Any], **kwargs: Any) -> Any:
         serialized = serialized or {}
         name = serialized.get("name") or kwargs.get("name") or "UnknownNode"
@@ -133,23 +138,23 @@ class SyncSecurityCallback(BaseCallbackHandler):
         if name in ("LangGraph", "Pregel") or name.startswith("__") or name.startswith("Runnable"):
             return
             
-        # 【改动 3】：原地修改路径，不调用 set()
         current_path = cv_call_path.get()
         if not current_path or current_path[-1] != name:
             current_path.append(name)
 
-        _audit_action("node_state", name, sanitize_payload(inputs))
+        # 节点状态转移映射为任务委派 task_delegation
+        _audit_action("task_delegation", name, sanitize_payload(inputs))
 
     def on_chat_model_start(self, serialized: Optional[Dict[str, Any]], messages: List[List[Any]], **kwargs: Any) -> Any:
         last_msg = messages[0][-1] if messages and messages[0] else None
         content = getattr(last_msg, "content", str(last_msg)) if last_msg else ""
-        _audit_action("llm_request", "ChatModel", content)
+        # 语言模型请求映射为消息传递 message
+        _audit_action("message", "ChatModel", content)
 
     def on_chat_model_end(self, response: Any, **kwargs: Any) -> Any:
         if response.generations and response.generations[0]:
             text = response.generations[0][0].text
             if text:
-                # 【改动 4】：原地修改大模型输出历史，不调用 set()
                 history = cv_dialogue_history.get()
                 safe_text = text if len(text) <= 1000 else text[:1000] + "..."
                 history.append(f"[LLM -> Agent]: {safe_text}")
@@ -167,6 +172,11 @@ class AsyncSecurityCallback(AsyncCallbackHandler):
         payload = sanitize_payload(kwargs.get("inputs", input_str))
         _audit_action("tool_call", tool_name, payload)
 
+    # [新增] 处理异步工具执行结果
+    async def on_tool_end(self, output: str, **kwargs: Any) -> Any:
+        tool_name = kwargs.get("name") or "UnknownTool"
+        _audit_action("tool_result", tool_name, sanitize_payload(output))
+
     async def on_chain_start(self, serialized: Optional[Dict[str, Any]], inputs: Dict[str, Any], **kwargs: Any) -> Any:
         serialized = serialized or {}
         name = serialized.get("name") or kwargs.get("name") or "UnknownNode"
@@ -174,29 +184,27 @@ class AsyncSecurityCallback(AsyncCallbackHandler):
         if name in ("LangGraph", "Pregel") or name.startswith("__") or name.startswith("Runnable"):
             return
             
-        # 原地修改路径
         current_path = cv_call_path.get()
         if not current_path or current_path[-1] != name:
             current_path.append(name)
 
-        _audit_action("node_state", name, sanitize_payload(inputs))
+        _audit_action("task_delegation", name, sanitize_payload(inputs))
 
     async def on_chat_model_start(self, serialized: Optional[Dict[str, Any]], messages: List[List[Any]], **kwargs: Any) -> Any:
         last_msg = messages[0][-1] if messages and messages[0] else None
         content = getattr(last_msg, "content", str(last_msg)) if last_msg else ""
-        _audit_action("llm_request", "ChatModel", content)
+        _audit_action("message", "ChatModel", content)
 
     async def on_chat_model_end(self, response: Any, **kwargs: Any) -> Any:
         if response.generations and response.generations[0]:
             text = response.generations[0][0].text
             if text:
-                # 原地修改历史
                 history = cv_dialogue_history.get()
                 safe_text = text if len(text) <= 1000 else text[:1000] + "..."
                 history.append(f"[LLM -> Agent]: {safe_text}")
                 while len(history) > 6:
                     history.pop(0)
-
+                    
 # ================= 核心：Config 级联注入器 =================
 def _inject_security_callback(config: Optional[Any], is_async: bool) -> Any:
     """透明地将网关 Callback 塞进 LangChain 运行时配置中"""
