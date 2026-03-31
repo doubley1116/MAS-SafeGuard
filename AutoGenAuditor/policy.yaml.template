@@ -1,0 +1,125 @@
+version: "2.0"
+description: "你的多智能体系统零信任权限策略"
+
+# ══════════════════════════════════════════════════════════════
+# 使用说明：
+#   1. 复制本文件为 policy.yaml
+#   2. 根据你的业务场景修改 agents、tools、paths
+#   3. 在 AutoGenAuditAdapter 初始化时传入 yaml_path="policy.yaml"
+#
+# 核心概念：
+#   - agents:  定义每个 Agent 的角色、可用工具、消息目标
+#   - tools:   定义每个工具的允许调用者、前置路径要求
+#   - paths:   定义合法的调用链路（Agent 之间的路由顺序）
+#   - thresholds: 风险评分阈值
+# ══════════════════════════════════════════════════════════════
+
+
+# ══ Agent 角色权限 ══════════════════════════════════════════
+# 每个 Agent 需要定义：
+#   - role:            角色标识
+#   - can_initiate:    是否可以发起对话（通常只有 user_proxy 为 true）
+#   - allowed_tools:   该 Agent 被允许调用的工具列表
+#   - blocked_tools:   该 Agent 被禁止调用的工具列表
+#   - allowed_message_targets: 该 Agent 可以发送消息的目标 Agent 列表
+
+agents:
+
+  # 用户代理（入口节点）
+  UserProxy:
+    role: user_proxy
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools: []
+    allowed_message_targets:
+      - Agent_A
+      - Agent_B
+    notes: "用户代理，不直接调用工具，负责发起请求"
+
+  # 示例 Agent A
+  Agent_A:
+    role: worker_agent
+    can_initiate: false
+    allowed_tools:
+      - tool_a
+    blocked_tools:
+      - tool_b        # 明确禁止调用的工具
+    allowed_message_targets:
+      - UserProxy
+    notes: "业务 Agent A，只能使用 tool_a"
+
+  # 示例 Agent B（需要 Agent A 前置审批的敏感操作）
+  Agent_B:
+    role: sensitive_agent
+    can_initiate: false
+    allowed_tools:
+      - tool_b
+    blocked_tools:
+      - tool_a
+    allowed_message_targets:
+      - UserProxy
+    notes: "敏感操作 Agent，调用 tool_b 前必须经过 Agent_A 审批"
+
+
+# ══ 工具级规则 ══════════════════════════════════════════════
+# 每个工具需要定义：
+#   - allowed_callers:       允许调用此工具的 Agent 列表
+#   - required_path_contains: 调用路径中必须包含的 Agent（前置审批）
+#   - path_rule:             关联的路径规则名称
+
+tools:
+
+  tool_a:
+    allowed_callers:
+      - Agent_A
+    required_path_contains: []
+    path_rule: valid_a_path
+    notes: "普通工具，只需 Agent_A 调用即可"
+
+  tool_b:
+    allowed_callers:
+      - Agent_B
+    required_path_contains:
+      - UserProxy
+      - Agent_A               # 必须先经过 Agent_A
+    path_rule: valid_b_path
+    approval_required: true
+    approver: Agent_A
+    notes: "敏感工具，调用路径必须包含 UserProxy -> Agent_A -> Agent_B"
+
+
+# ══ 路径规则 ══════════════════════════════════════════════
+# 定义合法的 Agent 调用序列：
+#   - sequence: 必须按顺序出现的 Agent 列表
+#   - strict:   true = 必须严格按序列顺序，false = 只需包含即可
+
+paths:
+
+  valid_a_path:
+    sequence:
+      - UserProxy
+      - Agent_A
+    strict: false
+
+  valid_b_path:
+    sequence:
+      - UserProxy
+      - Agent_A
+      - Agent_B
+    strict: false
+
+
+# ══ 风险评分阈值 ══════════════════════════════════════════
+#
+#  规则引擎打分流程：
+#  ├── >= rule_block (0.90)  -> 直接拦截，不调 LLM
+#  ├── < rule_block          -> 进入 LLM 语义审核
+#  │     ├── LLM 分 >= human_review (0.75)  -> 挂起，转人工审核
+#  │     └── LLM 分 <  human_review (0.75)  -> LLM 自主放行
+#  └── < pass (0.40)         -> 规则引擎直接放行
+
+thresholds:
+  rule_block:   0.90
+  llm_needed:   0.40
+  human_review: 0.75
+  pass:         0.40
