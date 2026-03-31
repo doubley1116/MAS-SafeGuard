@@ -1,11 +1,11 @@
-# 生成5条
-python llm_augment.py generate --n 5 --out output_llm 
+# 1. 环境安装
+pip install -r requirements.txt
 
-# 指定场景10条
-python llm_augment.py generate --n 10 --out output_llm --scenario DPI,MultiHop,Colluding
+# 2. 基础骨架生成 
+python src/generator.py --out output --n 5
 
-# 关闭投票（省钱）20条
-python llm_augment.py generate --n 20 --out output_llm --no-vote
+# 3. 对抗性 PPO 训练 
+python train/run_adversarial_ppo.py --config configs/adversarial_ppo_config.yaml
 
-# 合并骨架数据 + LLM 数据   
-python llm_augment.py merge output_v2 output_llm --out output_final
+# 4. 使用训好的 Attacker 批量生成 D3 攻击数据集
+python src/generate_with_model.py --model-dir output/final_model/attacker --scenario-type all --out model_data --n 1000
