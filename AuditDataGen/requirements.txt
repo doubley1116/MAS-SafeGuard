@@ -1,9 +1,11 @@
-openai
-python-dotenv
 torch
 transformers
 trl
+peft
+sentence-transformers
 scikit-learn
 numpy
 tqdm
 pyyaml
+python-dotenv
+openai
