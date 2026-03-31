@@ -1,11 +1,18 @@
 import sqlite3
+import os
 
-DB_NAME = "shop.db"
+DB_NAME = "database/shop.db"
+
 
 def get_conn():
     return sqlite3.connect(DB_NAME)
 
+
 def init_shop_db():
+    """创建表结构（如果不存在）"""
+    # 确保 database 目录存在
+    os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
+    
     conn = get_conn()
     c = conn.cursor()
 
@@ -61,6 +68,25 @@ def init_shop_db():
     )
     """)
 
+    conn.commit()
+    conn.close()
+
+
+def reset_shop_db():
+    """清空所有表数据并重新创建（每个场景开始前调用）"""
+    conn = get_conn()
+    c = conn.cursor()
+    
+    # 清空所有表
+    c.execute("DELETE FROM merchants")
+    c.execute("DELETE FROM orders")
+    c.execute("DELETE FROM shop_config")
+    c.execute("DELETE FROM logistics")
+    c.execute("DELETE FROM audit_log")
+    
+    # 重置自增 ID
+    c.execute("DELETE FROM sqlite_sequence WHERE name IN ('orders', 'logistics', 'audit_log')")
+    
     conn.commit()
     conn.close()
 

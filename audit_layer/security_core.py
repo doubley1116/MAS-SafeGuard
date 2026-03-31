@@ -4,10 +4,10 @@ SecurityCore — MAS 审核中间层
 
 审核流程：
   1. 规则引擎：工具调用者校验 + 消息路径校验 → 计算 rule_score
-  2. 根据 thresholds 分流：
-     - rule_score >= rule_block(0.90) → 直接拦截
-     - rule_score >= llm_needed(0.40) → TODO: LLM 语义审核（当前返回占位）
-     - rule_score <  pass(0.40)       → 直接放行
+  2. 根据 rule_score 分流：
+     - rule_score >= rule_block(0.90) → 直接拦截，不走 LLM
+     - rule_score <  rule_block(0.90) → 全部进入 LLM 语义审核
+  3. LLM 审核返回 AuditDecision，综合规则分和 LLM 分给出最终决策
 """
 
 from __future__ import annotations
@@ -32,10 +32,8 @@ class SecurityCore:
         rule_score, risk_types, rule_reason = self.rule_engine.evaluate(event)
 
         t_block = self.policy.threshold("rule_block")   # 0.90
-        t_llm   = self.policy.threshold("llm_needed")   # 0.40
-        t_human = self.policy.threshold("human_review") # 0.75（无此字段时为 0）
 
-        # 分支 A：规则引擎直接拦截
+        # ── 分支 A：规则引擎直接拦截（高置信度违规，无需 LLM 确认）──
         if rule_score >= t_block:
             return AuditDecision(
                 allow=False,
@@ -44,31 +42,18 @@ class SecurityCore:
                 blocking_risk_types=risk_types,
             )
 
-        # 分支 B：进入 LLM 语义审核
-        if rule_score >= t_llm:
-            llm_score, llm_reason = self.llm_reviewer.review(event)
+        # ── 分支 B：所有未被规则拦截的事件，均进入 LLM 语义审核 ──
+        llm_decision = self.llm_reviewer.review(event, rule_risk_types=risk_types)
 
-            # B-1：LLM 判定高风险，转人工
-            if t_human > 0 and llm_score >= t_human:
-                return AuditDecision(
-                    allow=False,
-                    risk_score=llm_score,
-                    reason=f"[人工审核] 规则分={rule_score:.2f} → LLM分={llm_score:.2f}，{llm_reason}",
-                    blocking_risk_types=risk_types,
-                    suggested_alternative="请联系合规人员人工审核此操作",
-                )
+        # 将规则引擎的信息补充到 LLM 决策中
+        if risk_types:
+            merged_types = list(set(risk_types + llm_decision.blocking_risk_types))
+            llm_decision.blocking_risk_types = merged_types
 
-            # B-2：LLM 判定低风险，放行
-            return AuditDecision(
-                allow=True,
-                risk_score=llm_score,
-                reason=f"[LLM放行] 规则分={rule_score:.2f} → LLM分={llm_score:.2f}，{llm_reason}",
-            )
-
-        # 分支 C：规则分低，直接放行
-        return AuditDecision(
-            allow=True,
-            risk_score=rule_score,
-            reason=f"[规则放行] 风险分={rule_score:.2f}，未命中任何规则",
+        # 在 reason 中附加规则引擎的上下文
+        llm_decision.reason = (
+            f"规则分={rule_score:.2f} → {llm_decision.reason}"
         )
+
+        return llm_decision
 
