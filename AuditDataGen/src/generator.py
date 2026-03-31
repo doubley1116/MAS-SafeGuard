@@ -605,11 +605,12 @@ def _infer_reason(scenario_type: str, description: str, events: list[dict]) -> s
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate(
-    n_per_skeleton: int   = 5,
-    output_dir:     str   = "output",
-    seed:           int   = 42,
-    sft_format:     bool  = True,
-    shuffle:        bool  = True,
+    n_per_skeleton: int       = 5,
+    output_dir:     str       = "output",
+    scenario_types: list[str] = None,  # 新增：场景类型过滤
+    seed:           int       = 42,
+    sft_format:     bool      = True,
+    shuffle:        bool      = True,
 ) -> tuple[int, int]:
     """
     批量生成审计数据。
@@ -635,10 +636,15 @@ def generate(
     audit_blocks: list[list[str]] = []
     sft_lines:    list[str]       = []
 
-    print(f"▶ 开始生成，共 {len(SKELETONS)} 条骨架，每条 {n_per_skeleton} 次采样")
-    print(f"  预计生成 ~{len(SKELETONS) * n_per_skeleton} 条 trace\n")
+    # 过滤骨架
+    filtered_skeletons = SKELETONS
+    if scenario_types:
+        filtered_skeletons = [s for s in SKELETONS if s.get("scenario_type") in scenario_types]
+        
+    print(f"▶ 开始生成，共 {len(filtered_skeletons)} 条骨架，每条 {n_per_skeleton} 次采样")
+    print(f"  预计生成 ~{len(filtered_skeletons) * n_per_skeleton} 条 trace\n")
 
-    for skeleton in SKELETONS:
+    for skeleton in filtered_skeletons:
         for sample_idx in range(n_per_skeleton):
             values   = sample_values()
             trace_id = str(uuid.uuid4())
@@ -685,14 +691,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AuditDataGen —— 批量审计数据生成器")
     parser.add_argument("--n",       type=int,  default=5,        help="每条骨架的采样次数（默认 5）")
     parser.add_argument("--out",     type=str,  default="output", help="输出目录（默认 output/）")
+    parser.add_argument("--scenario-type", type=str, default=None, help="指定场景类型，逗号分隔（如 DPI,benign），默认生成全部")
     parser.add_argument("--seed",    type=int,  default=42,       help="随机种子（默认 42）")
     parser.add_argument("--no-sft",  action="store_true",         help="不生成 SFT 格式")
     parser.add_argument("--no-shuffle", action="store_true",      help="不打乱顺序")
     args = parser.parse_args()
 
+    # 解析 scenario_types
+    scenario_types = None
+    if args.scenario_type:
+        scenario_types = [t.strip() for t in args.scenario_type.split(",")]
+
     generate(
         n_per_skeleton = args.n,
         output_dir     = args.out,
+        scenario_types = scenario_types,
         seed           = args.seed,
         sft_format     = not args.no_sft,
         shuffle        = not args.no_shuffle,
