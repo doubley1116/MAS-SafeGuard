@@ -113,13 +113,10 @@ paths:
 #
 #  规则引擎打分流程：
 #  ├── >= rule_block (0.90)  -> 直接拦截，不调 LLM
-#  ├── < rule_block          -> 进入 LLM 语义审核
-#  │     ├── LLM 分 >= human_review (0.75)  -> 挂起，转人工审核
-#  │     └── LLM 分 <  human_review (0.75)  -> LLM 自主放行
-#  └── < pass (0.40)         -> 规则引擎直接放行
+#  └── <  rule_block (0.90)  -> 全部进入 LLM 语义审核
+#        ├── LLM 分 >= human_review (0.75)  -> 挂起，转人工审核
+#        └── LLM 分 <  human_review (0.75)  -> LLM 自主放行
 
 thresholds:
   rule_block:   0.90
-  llm_needed:   0.40
   human_review: 0.75
-  pass:         0.40
