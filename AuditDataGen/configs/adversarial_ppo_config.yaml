@@ -1,0 +1,49 @@
+# 对抗性GRPO训练配置
+
+# 基础训练参数
+train:
+  iterations: 50              # 训练迭代次数
+  batch_size: 8              # 批次大小（必须能被group_size整除）
+  group_size: 4              # GRPO组大小：每个prompt生成G个response
+  learning_rate: 1e-5        # 学习率
+  clip_epsilon: 0.2          # GRPO裁剪系数
+  entropy_coef: 0.01          # 熵系数
+  ppo_epochs: 4              # 每批次GRPO更新轮数
+
+# 模型配置
+models:
+  attacker:
+    type: "mock"              # 攻击者模型类型: mock, gpt2, wenozhong, qwen
+    name: null                # 自定义模型名称（覆盖默认值）
+  
+  defender:
+    type: "mock"              # 防御者模型类型: mock, bert, roberta, ernie
+    name: null                # 自定义模型名称（覆盖默认值）
+
+# 数据配置
+data:
+  skeleton_type: "all"        # 骨架场景类型: all, DPI, Impersonation, MultiHop, Colluding, IPI, Byzantine, Contradicting, AiTM, benign
+
+# 设备配置
+device: "cuda"                 # 计算设备: cpu, cuda
+
+# 输出配置
+output:
+  dir: "output"               # 输出目录（统一命名）
+  save_checkpoints: true      # 是否保存检查点
+  checkpoint_interval: 20     # 检查点保存间隔（迭代次数）
+
+# 课程学习配置
+curriculum:
+  enable: true                # 是否启用课程学习
+  phase_duration: 5           # 每个难度阶段的持续时间（迭代次数）
+  difficulty_levels:          # 难度级别定义
+    easy: ["DPI", "Impersonation"]
+    medium: ["MultiHop", "Colluding", "IPI"]
+    hard: ["Byzantine", "Contradicting", "AiTM"]
+
+# 多样性奖励配置
+diversity:
+  lambda_div: 1.0             # 多样性奖励权重
+  similarity_threshold: 0.85  # 相似度阈值
+  history_size: 100           # 历史嵌入缓存大小

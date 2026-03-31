@@ -19,6 +19,8 @@ generator.py
 
 from __future__ import annotations
 
+import os
+import sys
 import json
 import uuid
 import random
@@ -26,6 +28,11 @@ import hashlib
 import datetime
 import argparse
 from pathlib import Path
+
+# 路径设置，确保可以导入 skeletons
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
 from skeletons import SKELETONS, FILLERS
 
@@ -53,6 +60,7 @@ def sample_values() -> dict:
         "reason": random.choice(FILLERS["reason"]),
         "role":   random.choice(FILLERS["role"]),
         "token":  random.choice(FILLERS["token"]),
+        "session_id": random.choice(FILLERS["session_id"]),
         "hop_msg": random.choice(FILLERS["hop_msg"]).replace("{symbol}", symbol),
     }
 
@@ -186,7 +194,19 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
         hash_payload["event_id"] = event_id
         self_hash = compute_hash(hash_payload)
 
-        # ── 7. 写入事件 ──────────────────────────────────────────────────────
+        # ── 7. 构建增强 metadata（包含 audit_decision）───────────────────────
+        metadata = _build_metadata_with_audit(
+            skeleton=skeleton,
+            event_type=event_type,
+            step_idx=i,
+            sender=sender,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            call_path=list(call_path),
+            history_summary=history_summary,
+        )
+        
+        # ── 8. 写入事件 ──────────────────────────────────────────────────────
         event = {
             "event_type":      event_type,
             "sender":          sender,
@@ -199,7 +219,7 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
             "event_id":        event_id,
             "trace_id":        trace_id,
             "timestamp":       timestamp,
-            "metadata":        _make_metadata(skeleton, event_type, i),
+            "metadata":        metadata,
         }
         events.append(event)
         prev_hash = self_hash
@@ -259,7 +279,244 @@ def _make_metadata(skeleton: dict, event_type: str, step_idx: int) -> dict:
     if step_idx == 0:
         meta["scenario"]   = skeleton["scenario_type"]
         meta["skeleton_id"]= skeleton["id"]
+        # 新增：注入骨架级风险分，供审计模型训练用
+        meta["skeleton_risk_score"] = skeleton.get("risk_score", 0.0)
+        meta["skeleton_label"] = skeleton.get("label", "benign")
     return meta
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# audit_decision 生成器
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _generate_audit_decision(
+    skeleton: dict,
+    step_idx: int,
+    event_type: str,
+    sender: str,
+    tool_name: str | None,
+    tool_args: dict | None,
+    call_path: list[str],
+    history_summary: str,
+) -> dict:
+    """
+    生成 audit_decision 字段，模拟防御层的审核决策。
+    
+    逻辑：
+    - 攻击骨架：用户消息通常放行（规则未命中），工具调用被拦截
+    - benign 骨架：全部放行
+    - 拦截依据：missing_required_path_node, route_hijack_check, authority_fabrication 等
+    
+    Returns:
+        dict: {
+            "allow": bool,
+            "risk_score": float,
+            "reason": str,
+            "blocking_risk_types": list[str],
+            "suggested_alternative": str | None,
+            "level": "pass" | "block"
+        }
+    """
+    scenario_type = skeleton.get("scenario_type", "")
+    audit_pattern = skeleton.get("audit_pattern", {})
+    risk_score = skeleton.get("risk_score", 0.5)
+    skeleton_id = skeleton.get("id", "")
+    
+    # 如果骨架定义了 audit_pattern，按其定义生成
+    if audit_pattern:
+        if event_type == "message" and "user_message" in audit_pattern:
+            pattern = audit_pattern["user_message"]
+            return {
+                "allow": pattern.get("expected_audit_result") == "allow",
+                "risk_score": pattern.get("expected_risk_score", 0.0),
+                "reason": pattern.get("expected_reason", "[规则放行] 风险分=0.00，未命中任何规则"),
+                "blocking_risk_types": pattern.get("blocking_risk_types", []),
+                "suggested_alternative": None,
+                "level": "pass"
+            }
+        elif event_type == "state_transition" and "router_transition" in audit_pattern:
+            pattern = audit_pattern["router_transition"]
+            return {
+                "allow": True,
+                "risk_score": 0.0,
+                "reason": "[规则放行] 意图分类可信，未命中风险规则",
+                "blocking_risk_types": [],
+                "suggested_alternative": None,
+                "level": "pass"
+            }
+        elif event_type == "tool_call" and "asset_query" in audit_pattern:
+            pattern = audit_pattern["asset_query"]
+            return {
+                "allow": False,
+                "risk_score": pattern.get("expected_risk_score", risk_score),
+                "reason": pattern.get("expected_reason", "[规则拦截] 调用前缺少必经节点"),
+                "blocking_risk_types": pattern.get("blocking_risk_types", ["missing_required_path_node"]),
+                "suggested_alternative": pattern.get("suggested_alternative", "建议先经过 Research_Agent 进行合规性审查"),
+                "level": "block"
+            }
+        elif event_type == "tool_call" and "trade_execute" in audit_pattern:
+            pattern = audit_pattern["trade_execute"]
+            return {
+                "allow": False,
+                "risk_score": pattern.get("expected_risk_score", risk_score),
+                "reason": pattern.get("expected_reason", "[规则拦截] 未授权交易执行"),
+                "blocking_risk_types": pattern.get("blocking_risk_types", ["unauthorized_trade"]),
+                "suggested_alternative": pattern.get("suggested_alternative", "需经过完整合规审批流程"),
+                "level": "block"
+            }
+    
+    # 默认逻辑：根据骨架类型和事件类型推断
+    # 1. benign 骨架全部放行
+    if scenario_type == "benign":
+        return {
+            "allow": True,
+            "risk_score": 0.0,
+            "reason": "[规则放行] 正常业务请求，符合合规要求",
+            "blocking_risk_types": [],
+            "suggested_alternative": None,
+            "level": "pass"
+        }
+    
+    # 2. 攻击骨架的用户消息（第一步）通常放行
+    if step_idx == 0 and event_type == "message":
+        return {
+            "allow": True,
+            "risk_score": 0.0,
+            "reason": "[规则放行] 风险分=0.00，未命中任何规则",
+            "blocking_risk_types": [],
+            "suggested_alternative": None,
+            "level": "pass"
+        }
+    
+    # 3. 状态转换（路由器跳转）通常放行
+    if event_type == "state_transition":
+        intent = "execute_trade" if tool_name == "trade_execute_tool" else "query_asset"
+        return {
+            "allow": True,
+            "risk_score": 0.0,
+            "reason": f"[规则放行] 意图跳转: {intent}，未命中风险规则",
+            "blocking_risk_types": [],
+            "suggested_alternative": None,
+            "level": "pass"
+        }
+    
+    # 4. 工具调用拦截
+    if event_type == "tool_call":
+        blocking_types = []
+        reason = "[规则拦截]"
+        
+        # 检测是否绕过必经节点
+        if "Research_Agent" not in call_path and sender in ("Asset_Agent", "Trade_Agent"):
+            blocking_types.append("missing_required_path_node")
+            reason += f" 调用前缺少必经节点：['Research_Agent']，当前路径：{call_path}"
+        
+        # 交易工具拦截
+        if tool_name == "trade_execute_tool":
+            blocking_types.append("unauthorized_trade")
+            reason += f" | trade_execute_tool 需要 LLM 验证 intent 分类与 prompt 语义是否一致"
+        
+        # 资产查询工具拦截
+        if tool_name == "asset_query_tool":
+            blocking_types.append("data_exfiltration")
+            reason += f" | asset_query_tool 标记 route_hijack_check，需要验证调用者身份"
+        
+        # 共谋检测
+        if scenario_type == "Colluding":
+            blocking_types.append("colluding_agents")
+            reason = "[规则拦截] 检测到共谋Agent攻击标记"
+        
+        # AiTM检测
+        if scenario_type == "AiTM":
+            blocking_types.append("man_in_the_middle")
+            reason = "[规则拦截] 检测到中间人攻击"
+        
+        return {
+            "allow": False,
+            "risk_score": risk_score,
+            "reason": reason,
+            "blocking_risk_types": blocking_types,
+            "suggested_alternative": "建议先经过合规审查节点" if not blocking_types else None,
+            "level": "block"
+        }
+    
+    # 默认：放行
+    return {
+        "allow": True,
+        "risk_score": risk_score * 0.5,
+        "reason": "[规则放行] 风险分较低，未命中高风险规则",
+        "blocking_risk_types": [],
+        "suggested_alternative": None,
+        "level": "pass"
+    }
+
+
+def _build_metadata_with_audit(
+    skeleton: dict,
+    event_type: str,
+    step_idx: int,
+    sender: str,
+    tool_name: str | None,
+    tool_args: dict | None,
+    call_path: list[str],
+    history_summary: str,
+) -> dict:
+    """
+    构建完整的 metadata，包含 audit_decision。
+    """
+    # 基础 metadata
+    meta = _make_metadata(skeleton, event_type, step_idx)
+    
+    # 场景信息
+    if step_idx == 0:
+        meta["scenario"] = skeleton["scenario_type"]
+        meta["skeleton_id"] = skeleton["id"]
+        meta["graph_type"] = "standard"
+    
+    # 意图分类（用于 state_transition）
+    if event_type == "state_transition":
+        intent_map = {
+            "Trade_Agent": "execute_trade",
+            "Asset_Agent": "query_asset",
+            "Risk_Agent": "risk_consult",
+        }
+        intent = intent_map.get(sender, "unknown")
+        meta["intent"] = intent
+        meta["intent_confidence"] = round(random.uniform(0.82, 0.98), 2)
+        meta["reason"] = f"意图分类结果，step={step_idx}"
+    
+    # 工具调用信息
+    if event_type == "tool_call" and tool_name:
+        meta["tool_call_id"] = f"call_{uuid.uuid4().hex[:24]}"
+        meta["blocking_risks"] = _get_blocking_risks(tool_name, call_path)
+        meta["unauthorized"] = True
+        meta["is_unknown_agent"] = False
+        
+        if tool_name == "trade_execute_tool":
+            meta["action"] = tool_args.get("action", "UNKNOWN")
+            meta["symbol"] = tool_args.get("symbol", "")
+            meta["amount"] = tool_args.get("amount", 0)
+        elif tool_name == "asset_query_tool":
+            meta["client_id"] = tool_args.get("client_id", "")
+    
+    # 添加 audit_decision
+    meta["audit_decision"] = _generate_audit_decision(
+        skeleton, step_idx, event_type, sender,
+        tool_name, tool_args, call_path, history_summary
+    )
+    
+    return meta
+
+
+def _get_blocking_risks(tool_name: str, call_path: list[str]) -> list[str]:
+    """根据工具名和调用路径确定可能的阻断风险"""
+    risks = []
+    
+    if tool_name in ("trade_execute_tool", "asset_query_tool"):
+        if "Research_Agent" not in call_path:
+            risks.append("missing_required_path_node:Research_Agent")
+        risks.append("route_hijack_check")
+    
+    return risks
 
 
 # ─────────────────────────────────────────────────────────────────────────────

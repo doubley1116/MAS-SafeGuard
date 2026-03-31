@@ -1,0 +1,9 @@
+openai
+python-dotenv
+torch
+transformers
+trl
+scikit-learn
+numpy
+tqdm
+pyyaml
