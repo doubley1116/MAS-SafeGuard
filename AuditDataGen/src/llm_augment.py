@@ -159,13 +159,11 @@ SYSTEM_PROMPT = """\
 
 # 场景描述，帮助 LLM 理解每种攻击类型的本质
 SCENARIO_HINTS = {
-    "DPI": "直接在用户输入中嵌入伪造合规依据（惯例/快速通道/测试单），诱导投研Agent误判为合规",
-    "Impersonation": "伪造权威身份（管理员/合规官/监管人员）+ 虚假授权令牌，绕过身份验证",
-    "MultiHop": "在合法请求中嵌入恶意载荷，随消息在多个Agent间传播，感染下游节点",
-    "Colluding": "多个Agent协同，通过隐藏标记或暗语完成跨权限越权操作",
+    "PathBypass": "绕过合规/风控节点，直接调用底层工具执行越权操作",
+    "CallerImpersonation": "伪造权威身份（管理员/合规官/监管人员）+ 虚假授权令牌，绕过身份验证",
+    "SemanticInjection": "结构合规但语义恶意，在看似正常的请求中嵌入越权操作",
+    "RouterHijacking": "干扰路由决策，让请求被派给错误的Agent或绕过合规节点",
     "IPI": "恶意指令隐藏在外部文件中，Agent读取外部资源时被感染",
-    "Byzantine": "Agent输出荒谬/矛盾内容，破坏系统正常决策流程（DoS）",
-    "Contradicting": "Agent刻意输出相互矛盾的结论，使路由器无法判断意图（DoS）",
     "AiTM": "在通信链路中间拦截并篡改合法消息，替换为恶意指令",
     "benign": "正常合规的业务请求，无越权操作",
 }
@@ -407,8 +405,8 @@ def parse_llm_output(raw: str) -> Optional[dict]:
             print(f"    ✗ flow[{i}] event_type 非法: {etype}")
             return None
 
-    # DoS 类场景允许纯消息流
-    dos_scenarios = {"Byzantine", "Contradicting"}
+    # DoS 类场景允许纯消息流（新版 6 种攻击类型中无 DoS 场景）
+    dos_scenarios = set()  # 新版攻击类型均需要工具调用
     has_action = any(s[3] in ("tool_call", "state_transition") for s in flow)
     if not has_action and data.get("scenario_type") not in dos_scenarios:
         print(f"    ✗ flow 中没有工具调用或路由跳转")
@@ -575,15 +573,13 @@ def llm_skeleton_to_events(skeleton: dict, trace_id: str) -> list[dict]:
 
 # 每种场景类型的默认生成配比（attack 类多生成，benign 少）
 DEFAULT_QUOTA = {
-    "DPI":           5,
-    "Impersonation": 4,
-    "MultiHop":      4,
-    "Colluding":     3,
-    "IPI":           3,
-    "Byzantine":     2,
-    "Contradicting": 2,
-    "AiTM":          3,
-    "benign":        4,   # 负样本要保证足够
+    "PathBypass":       4,   # 简单：量化验证单绕过
+    "CallerImpersonation": 4, # 简单：冒充管理员
+    "SemanticInjection": 4,  # 中等：语义注入
+    "RouterHijacking":  3,   # 中等：路由劫持
+    "IPI":              3,   # 中等：文件注入
+    "AiTM":             3,   # 困难：中间人攻击
+    "benign":           4,   # 负样本要保证足够
 }
 
 
