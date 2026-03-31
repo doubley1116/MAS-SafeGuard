@@ -18,13 +18,17 @@ class BERTDefenderModel(BaseDefenderModel):
         self.device = device
         self.tokenizer = BertTokenizer.from_pretrained(model_name)
         
-        # 加载预训练模型
+        # 加载预训练模型（bf16 半精度优化 + 显存节省）
         self.model = BertForSequenceClassification.from_pretrained(
             model_name,
             num_labels=2,
             output_attentions=False,
-            output_hidden_states=False
+            output_hidden_states=False,
+            torch_dtype=torch.bfloat16,  # bf16 显存优化
         ).to(device)
+        
+        # 推理模式（不保存梯度）
+        self.model.eval()
         
         # 优化器
         self.optimizer = AdamW(self.model.parameters(), lr=1e-5)

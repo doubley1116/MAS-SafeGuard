@@ -10,6 +10,14 @@ except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
     from models.base_models import BaseAttackerModel, RolloutSample, PPOConfig
 
+# 尝试导入 peft (LoRA)
+try:
+    from peft import get_peft_model, LoraConfig, TaskType
+    HAS_PEFT = True
+except ImportError:
+    HAS_PEFT = False
+    print("⚠ peft 库不可用，将不使用 LoRA（16G显存可能不足）")
+
 # 尝试导入 trl，如果失败则使用简化版本
 try:
     from trl import PPOTrainer, PPOConfig as TRLPPOConfig
@@ -28,20 +36,45 @@ class HFAttackerModel(BaseAttackerModel):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        # 加载模型
-        self.model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+        # ── 16GB 显存优化：bf16 半精度 + LoRA ──────────────────────────────
+        # 以 bf16 半精度加载底座模型
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name, 
+            torch_dtype=torch.bfloat16,
+            device_map=device
+        )
+        
+        # 接入 LoRA 配置（仅训练少量参数）
+        if HAS_PEFT:
+            peft_config = LoraConfig(
+                task_type=TaskType.CAUSAL_LM,
+                inference_mode=False,
+                r=8,
+                lora_alpha=16,
+                lora_dropout=0.05,
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]
+            )
+            self.model = get_peft_model(self.model, peft_config)
+            self.model.print_trainable_parameters()  # 打印可训练参数量
+            print("✓ 已启用 LoRA（16GB 显存优化）")
+        else:
+            print("⚠ 未启用 LoRA，可能导致显存不足")
         
         # 是否使用 TRL PPO
         self.use_trl = HAS_TRl
         if self.use_trl:
-            # 加载参考模型
-            self.ref_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+            # 加载参考模型（冻结，不训练）
+            self.ref_model = AutoModelForCausalLM.from_pretrained(
+                model_name, 
+                torch_dtype=torch.bfloat16,
+                device_map=device
+            )
             self.ref_model.eval()
             
             # 初始化 TRL PPO Trainer
             self.ppo_config = TRLPPOConfig(
-                batch_size=8,
-                mini_batch_size=2,
+                batch_size=4,
+                mini_batch_size=1,
                 log_with=None,
                 learning_rate=1e-5
             )
@@ -56,18 +89,23 @@ class HFAttackerModel(BaseAttackerModel):
             # 简化模式：不使用 TRL
             self.ref_model = None
             self.ppo_trainer = None
-            # 简单优化器用于梯度更新
-            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-5)
+            # 优化器只作用于可训练参数（LoRA 层）
+            self.optimizer = torch.optim.AdamW(
+                filter(lambda p: p.requires_grad, self.model.parameters()), 
+                lr=1e-5
+            )
             print(f"✓ 使用简化训练（无 TRL）")
     
     def generate(self, prompt: str, scenario_type: str, **kwargs) -> str:
-        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+        # 使用 tokenizer() 获取包含 attention_mask 的完整输入
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         
-        # 生成响应
+        # 生成响应，显式传入 attention_mask 消除警告
         output = self.model.generate(
-            input_ids,
-            max_new_tokens=100,
-            do_sample=True,
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            max_new_tokens=60,           # 16GB显存优化：减少生成长度
+            do_sample=True,              # 确保开启采样（强化学习探索）
             top_p=0.9,
             temperature=0.8,
             pad_token_id=self.tokenizer.eos_token_id,

@@ -9,7 +9,10 @@ class DiversityReward:
         Args:
             model_name: 使用的embedding模型
         """
-        self.model = SentenceTransformer(model_name)
+        # 强制使用 GPU 计算，防止 GPU 0% 利用率问题
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model = SentenceTransformer(model_name, device=device)
+        self.device = device
         self.history_embeddings = []
         
     def calculate(self, new_content: str, history_contents: list, threshold=0.85) -> float:

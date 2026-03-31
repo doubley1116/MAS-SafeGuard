@@ -1,9 +1,9 @@
-# 对抗性GRPO训练配置
+# 对抗性GRPO训练配置（全量红蓝对抗模式）
 
 # 基础训练参数
 train:
-  iterations: 50              # 训练迭代次数
-  batch_size: 8              # 批次大小（必须能被group_size整除）
+  iterations: 50              # 全量训练（从10调大）
+  batch_size: 8              # 批次大小（16G显存优化，与group_size配合）
   group_size: 4              # GRPO组大小：每个prompt生成G个response
   learning_rate: 1e-5        # 学习率
   clip_epsilon: 0.2          # GRPO裁剪系数
@@ -13,16 +13,16 @@ train:
 # 模型配置
 models:
   attacker:
-    type: "mock"              # 攻击者模型类型: mock, gpt2, wenozhong, qwen
+    type: "qwen"              # 攻击者模型类型: mock, gpt2, wenozhong, qwen
     name: null                # 自定义模型名称（覆盖默认值）
   
   defender:
-    type: "mock"              # 防御者模型类型: mock, bert, roberta, ernie
-    name: null                # 自定义模型名称（覆盖默认值）
+    type: "bert"              # 防御者模型类型: mock, bert, roberta, ernie
+    name: "hfl/chinese-roberta-wwm-ext"  # 中文RoBERTa预训练模型
 
 # 数据配置
 data:
-  skeleton_type: "all"        # 骨架场景类型: all, DPI, Impersonation, MultiHop, Colluding, IPI, Byzantine, Contradicting, AiTM, benign
+  skeleton_type: "all"        # 全场景覆盖（从DPI改为all）
 
 # 设备配置
 device: "cuda"                 # 计算设备: cpu, cuda
