@@ -291,7 +291,8 @@ class AdversarialPPOTrainer:
                         reward=sample_data["reward"],
                         log_prob=sample_data["log_prob"],
                         advantage=advantages[i],
-                        prompt=sample_data["prompt"]
+                        prompt=sample_data["prompt"],
+                        target_event=sample_data["target_event"]
                     )
                     batch_samples.append(sample)
                     
@@ -309,7 +310,8 @@ class AdversarialPPOTrainer:
                     reward=sample_data["reward"],
                     log_prob=sample_data["log_prob"],
                     advantage=0.0,
-                    prompt=sample_data["prompt"]
+                    prompt=sample_data["prompt"],
+                    target_event=sample_data["target_event"]
                 )
                 batch_samples.append(sample)
                 
@@ -317,6 +319,9 @@ class AdversarialPPOTrainer:
                 if skeleton.scenario_type not in self.history_embs:
                     self.history_embs[skeleton.scenario_type] = []
                 self.history_embs[skeleton.scenario_type].append(text)
+            else:
+                # 整组被规则过滤，没有有效样本
+                print(f"  [WARN] 整组被规则过滤，scenario={skeleton.scenario_type}")
 
         # 历史长度限制（按类型分别限制）
         for scenario_type in self.history_embs:
@@ -328,28 +333,28 @@ class AdversarialPPOTrainer:
 
     def _save_augmented_events(self, batch_samples: list, iteration: int, output_dir: str):
         """
-        修改3：将高奖励样本写入 augmented_events.jsonl
+        将高奖励样本写入 augmented_events.jsonl
+        使用 target_event 作为基础结构（而非 skeleton.messages[0]）
         """
+        os.makedirs(output_dir, exist_ok=True)
         augmented_path = os.path.join(output_dir, "augmented_events.jsonl")
-        os.makedirs(os.path.dirname(augmented_path) if augmented_path != "augmented_events.jsonl" else output_dir, exist_ok=True)
-        if augmented_path == "augmented_events.jsonl":
-            augmented_path = os.path.join(output_dir, augmented_path)
         
         with open(augmented_path, "a", encoding="utf-8") as f:
             for sample in batch_samples:
                 if sample.reward <= 0:
                     continue  # 只保留正奖励的样本
                 
-                # 找到 skeleton 中对应的 message（简化：用第一条 message）
-                if not sample.skeleton.messages:
+                # 用 target_event（Attacker 实际改写的那条事件）作为基础结构
+                target = sample.target_event
+                if not target:
                     continue
                 
-                # 组装改写后的 AuditEvent
-                rewritten = dict(sample.skeleton.messages[0])
+                rewritten = dict(target)
                 rewritten["content"] = sample.response
                 rewritten["metadata"] = {
-                    "generated_by": "attacker_ppo",
-                    "reward": sample.reward,
+                    "generated_by": "attacker_grpo",
+                    "reward": round(sample.reward, 4),
+                    "advantage": round(sample.advantage, 4),
                     "scenario_type": sample.skeleton.scenario_type,
                     "iteration": iteration,
                 }
@@ -366,9 +371,12 @@ class AdversarialPPOTrainer:
 
             # 收集样本
             batch_samples = self.rollout()
+            if not batch_samples:
+                print(f"  [WARN] Iter {i+1}: batch 为空，跳过更新")
+                continue
             print(f"Iter {i+1}/{iterations}: 收集了 {len(batch_samples)} 个样本")
 
-            # 修改3：将高奖励样本写入增强数据集
+            # 将高奖励样本写入增强数据集
             self._save_augmented_events(batch_samples, i+1, output_dir)
 
             # PPO更新

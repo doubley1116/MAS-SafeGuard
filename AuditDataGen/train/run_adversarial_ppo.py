@@ -8,9 +8,11 @@ run_adversarial_ppo.py
 import os
 import sys
 import json
+import copy
 import random
 import argparse
 import yaml
+import collections.abc
 from typing import List, Dict, Any
 import numpy as np
 
@@ -18,6 +20,72 @@ import numpy as np
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
+
+
+def deep_update(d: dict, u: dict) -> dict:
+    """
+    递归深度合并两个字典。
+    对于嵌套字典，会递归合并；对于普通值，用 u 覆盖 d。
+    修复了 Python 中 dict.update() 只做浅拷贝导致嵌套字典被整体覆盖的问题。
+    
+    使用 deepcopy 确保原始字典不会被污染，适合多次调用或循环使用场景。
+    
+    Args:
+        d: 基础字典（默认配置）
+        u: 更新字典（用户配置）
+    Returns:
+        合并后的字典
+    """
+    d = copy.deepcopy(d)  # 保护原字典不被污染
+    for k, v in u.items():
+        if isinstance(v, collections.abc.Mapping):
+            d[k] = deep_update(d.get(k, {}), v)
+        else:
+            d[k] = v
+    return d
+
+
+# 默认配置（用于深度合并）
+DEFAULT_CONFIG = {
+    "device": "cpu",
+    "data": {
+        "skeleton_type": "all"
+    },
+    "models": {
+        "attacker": {
+            "type": "mock",
+            "name": None,
+            "device": "cpu"
+        },
+        "defender": {
+            "type": "mock",
+            "name": None,
+            "device": "cpu"
+        }
+    },
+    "train": {
+        "batch_size": 8,
+        "group_size": 4,
+        "ppo_epochs": 4,
+        "learning_rate": 1e-5,
+        "gamma": 0.99,
+        "lam": 0.95,
+        "clip_epsilon": 0.2,
+        "vf_coef": 0.5,
+        "entropy_coef": 0.01,
+        "iterations": 50
+    },
+    "curriculum": {
+        "phase_duration": 5
+    },
+    "diversity": {
+        "history_size": 100
+    },
+    "output": {
+        "checkpoint_interval": 20,
+        "dir": "output_ppo"
+    }
+}
 
 # 导入必要的模块（基础模块）
 try:
@@ -226,14 +294,20 @@ def create_defender_model(model_type: str, model_name: str = None, device: str =
 
 def load_config(config_path: str = None) -> Dict[str, Any]:
     """
-    从YAML配置文件加载训练配置
+    从YAML配置文件加载训练配置，使用深度合并策略。
+    
+    配置会先使用默认配置（DEFAULT_CONFIG），然后用用户配置深度覆盖，
+    确保用户配置中的任何嵌套字段都能正确覆盖默认值，而非整体替换。
     
     Args:
         config_path: 配置文件路径，如果为None则使用默认路径
     
     Returns:
-        配置字典
+        配置字典（已深度合并）
     """
+    # 从默认配置开始（深拷贝，避免修改原字典）
+    config = deep_update({}, DEFAULT_CONFIG)
+    
     if config_path is None:
         # 默认配置文件路径
         config_path = os.path.join(project_root, "configs", "adversarial_ppo_config.yaml")
@@ -245,8 +319,14 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
     
     try:
         with open(config_path, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
+            user_config = yaml.safe_load(f)
         print(f"[OK] 从 {config_path} 加载配置")
+        
+        # 使用深度合并：用用户配置覆盖默认配置
+        # 这样嵌套字典（如 models.attacker）只会部分覆盖，而非整体替换
+        if user_config:
+            config = deep_update(config, user_config)
+        
         return config
     except Exception as e:
         print(f"[FAIL] 加载配置文件失败: {e}")
@@ -277,13 +357,15 @@ def train_from_config(config: Dict[str, Any]):
 
     attacker = create_attacker_model(
         model_type=attacker_config.get("type", "mock"),
-        model_name=attacker_config.get("name"),
+        # 兼容读取 model_name 或 name（YAML配置可能使用不同键名）
+        model_name=attacker_config.get("model_name", attacker_config.get("name")),
         device=device
     )
 
     defender = create_defender_model(
         model_type=defender_config.get("type", "mock"),
-        model_name=defender_config.get("name"),
+        # 兼容读取 model_name 或 name（YAML配置可能使用不同键名）
+        model_name=defender_config.get("model_name", defender_config.get("name")),
         device=device
     )
 

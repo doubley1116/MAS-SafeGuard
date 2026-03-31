@@ -69,13 +69,15 @@ class BaseDefender(ABC):
 class RolloutSample:
     """GRPO训练样本"""
     def __init__(self, skeleton: 'Skeleton', response: str, reward: float, 
-                 log_prob: float, advantage: float = 0.0, prompt: str = ""):
+                 log_prob: float, advantage: float = 0.0, prompt: str = "",
+                 target_event: dict = None):
         self.skeleton = skeleton
         self.response = response
         self.reward = reward
         self.log_prob = log_prob
         self.advantage = advantage  # GRPO: 组内标准化的优势函数
         self.prompt = prompt  # GRPO: 保存prompt用于重新计算log_prob
+        self.target_event = target_event or {}  # GRPO: Attacker实际改写的那条事件
 
 
 class GRPOConfig:

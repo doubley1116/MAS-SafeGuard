@@ -5,6 +5,7 @@ output_ppo/
 output_ppo_*/
 output_test/
 demo_output/
+output_local_test/
 
 # ===================== Python 缓存 =====================
 __pycache__/
