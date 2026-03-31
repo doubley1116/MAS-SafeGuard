@@ -1,18 +1,11 @@
-# 安装
-
-```bash
+# 1. 环境安装
 pip install -r requirements.txt
-```
 
-# 运行
-
-```bash
-# 骨架生成
+# 2. 基础骨架生成 
 python src/generator.py --out output --n 5
 
-# PPO训练
+# 3. 对抗性 PPO 训练 
 python train/run_adversarial_ppo.py --config configs/adversarial_ppo_config.yaml
 
-# 模型生成
-python src/generate_with_model.py --model-dir output/final_model/attacker --out model_data --n 5
-```
+# 4. 使用训好的 Attacker 批量生成 D3 攻击数据集
+python src/generate_with_model.py --model-dir output/final_model/attacker --scenario-type all --out model_data --n 1000
