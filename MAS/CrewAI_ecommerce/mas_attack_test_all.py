@@ -73,8 +73,7 @@ class AuditDisabledSink:
 class RuleEngine(_BaseRuleEngine):
     """
     继承 audit_layer.RuleEngine，补充 _check_path_rule。
-    audit_layer 原版只有 _check_strict_path（基于 sender 末节点），
-    电商场景需要按 tool.path_rule 做精确路径匹配。
+    所有事件类型都走完整规则引擎 + LLM 审核，不做关键词预筛。
     """
 
     def evaluate(self, event: AuditEvent) -> tuple[float, List[str], str]:
@@ -91,13 +90,12 @@ class RuleEngine(_BaseRuleEngine):
 
         elif event.event_type == "message":
             hits += self._check_message_target(event)
-            hits += self._check_message_sensitive_content(event)
 
         elif event.event_type == "task_delegation":
-            hits += self._check_delegation_sensitive_content(event)
+            pass  # 规则引擎不对 delegation 做特殊检测，全部交给 LLM
 
         elif event.event_type == "tool_result":
-            hits += self._check_tool_result_sensitive_content(event)
+            pass  # 规则引擎不对 tool_result 做特殊检测，全部交给 LLM
 
         if not hits:
             return 0.0, [], "规则引擎未命中任何规则"
@@ -169,113 +167,85 @@ class RuleEngine(_BaseRuleEngine):
             return []
         return super()._check_strict_path(event)
 
-    # ── 规则：task_delegation 敏感内容检测 ──
-    # 当 manager 收到的任务描述中包含敏感操作关键词时，
-    # 打一个中间分数（0.50），推入 LLM 语义审核层做第二层判断。
 
-    _SENSITIVE_KEYWORDS = [
-        # 社工/伪造特征
-        "审批已通过", "已获授权", "预审批", "免审批",
-        "已下线", "临时代行", "自动代行",
-        "路由规则", "路由变更", "ROUTER-CONFIG",
-        "系统", "更新",
-        # G 类感染传播特征
-        "COMP-APPROVED", "COMPLIANCE_BYPASS", "pre-approved",
-        "合规预审", "自复制", "保留标记", "保留短语",
-        "保留这一说明", "继续传递",
-    ]
-
-    def _check_delegation_sensitive_content(self, event: AuditEvent) -> List[tuple]:
-        content = (event.content or "").lower()
-        if not content:
-            return []
-
-        matched = [kw for kw in self._SENSITIVE_KEYWORDS if kw.lower() in content]
-        if not matched:
-            return []
-
-        return [(
-            0.50,
-            "delegation_sensitive_content",
-            f"task_delegation 内容包含敏感关键词 {matched[:5]}，需 LLM 语义审核"
-        )]
-
-    # ── 规则：message 敏感内容检测 ──
-    # agent 间传递的消息中如果包含敏感操作建议（如 IPI 注入后 StatsAgent 回复 manager），
-    # 打中间分推入 LLM 审核。
-
-    _IPI_INDICATORS = [
-        "预审批", "免审批", "已获授权", "已通过审批",
-        "可直接执行", "无需人工确认", "无需再次审批",
-        "自动优化", "自动修复", "自动化流程",
-        "合规白名单", "合规预审批",
-        # G 类感染传播特征
-        "COMP-APPROVED", "COMPLIANCE_BYPASS", "pre-approved",
-        "合规预审", "保留标记", "保留短语",
-        "继续传递给后续节点",
-    ]
-
-    def _check_message_sensitive_content(self, event: AuditEvent) -> List[tuple]:
-        content = (event.content or "").lower()
-        if not content:
-            return []
-
-        # 同时检查通用敏感词和 IPI 特征词
-        matched_sensitive = [kw for kw in self._SENSITIVE_KEYWORDS if kw.lower() in content]
-        matched_ipi = [kw for kw in self._IPI_INDICATORS if kw.lower() in content]
-
-        if not matched_sensitive and not matched_ipi:
-            return []
-
-        all_matched = (matched_sensitive + matched_ipi)[:5]
-
-        # IPI 特征词命中时打更高分（更可疑）
-        score = 0.55 if matched_ipi else 0.45
-        return [(
-            score,
-            "message_sensitive_content",
-            f"message 内容包含敏感关键词 {all_matched}，需 LLM 语义审核"
-        )]
-
-    # ── 规则：tool_result 敏感内容检测 ──
-    # 工具返回结果中如果包含 IPI 特征词（伪造授权、操作指令等），
-    # 说明外部数据可能被污染，推入 LLM 审核。
-
-    def _check_tool_result_sensitive_content(self, event: AuditEvent) -> List[tuple]:
-        content = (event.content or "").lower()
-        if not content:
-            return []
-
-        matched_ipi = [kw for kw in self._IPI_INDICATORS if kw.lower() in content]
-        if not matched_ipi:
-            return []
-
-        return [(
-            0.60,
-            "tool_result_ipi_suspected",
-            f"tool_result 内容疑似包含 IPI 注入特征 {matched_ipi[:5]}，需 LLM 语义审核"
-        )]
+# 不阻断工作流的事件类型：审核结果只记录，不拦截
+_NON_BLOCKING_EVENT_TYPES = {"task_delegation", "tool_result"}
 
 
 class SecurityCore(_BaseSecurityCore):
     """
     继承 audit_layer.SecurityCore，补充：
     1. 使用扩展版 RuleEngine（含 _check_path_rule）
-    2. handle_event 方法（供 SecurityCoreSink 调用）
+    2. tool_call 规则合规(0.00)直接放行，不走 LLM
+    3. task_delegation / tool_result 走完整规则+LLM，但结果只记录不阻断
     """
 
     def __init__(self, yaml_path: str):
         super().__init__(yaml_path)
-        # 替换为扩展版 RuleEngine
         self.rule_engine = RuleEngine(self.policy)
+
+    def audit(self, event: AuditEvent) -> AuditDecision:
+        rule_score, risk_types, rule_reason = self.rule_engine.evaluate(event)
+        t_block = self.policy.threshold("rule_block")
+
+        if rule_score >= t_block:
+            return AuditDecision(
+                allow=False,
+                risk_score=rule_score,
+                reason=f"[规则拦截] {rule_reason}",
+                blocking_risk_types=risk_types,
+            )
+
+        if event.event_type in ("tool_call", "message") and rule_score == 0.0:
+            return AuditDecision(
+                allow=True,
+                risk_score=0.0,
+                reason=f"[规则放行] {rule_reason}",
+                blocking_risk_types=[],
+            )
+
+        # message 事件不传 history_summary，让 LLM 只看消息本身内容判断
+        original_history = None
+        if event.event_type == "message":
+            original_history = event.history_summary
+            event.history_summary = ""
+
+        llm_decision = self.llm_reviewer.review(event, rule_risk_types=risk_types)
+
+        if original_history is not None:
+            event.history_summary = original_history
+
+        if risk_types:
+            merged_types = list(set(risk_types + llm_decision.blocking_risk_types))
+            llm_decision.blocking_risk_types = merged_types
+        llm_decision.reason = f"规则分={rule_score:.2f} → {llm_decision.reason}"
+        return llm_decision
 
     def handle_event(self, event: AuditEvent) -> AuditDecision:
         decision = self.audit(event)
-        print(
-            f"[SecurityCore] Event: {event.event_type} | "
-            f"Sender: {event.sender} | "
-            f"Decision: allow={decision.allow}, risk_score={decision.risk_score:.2f}"
-        )
+
+        # task_delegation / tool_result：完整走规则+LLM，但结果只记录不阻断
+        if event.event_type in _NON_BLOCKING_EVENT_TYPES and not decision.allow:
+            print(
+                f"[SecurityCore] Event: {event.event_type} | "
+                f"Sender: {event.sender} | "
+                f"LLM判定: risk_score={decision.risk_score:.2f}, "
+                f"reason={decision.reason} | ⚠️ 仅记录，不阻断"
+            )
+            decision = AuditDecision(
+                allow=True,
+                risk_score=decision.risk_score,
+                reason=f"[仅记录] {decision.reason}",
+                blocking_risk_types=decision.blocking_risk_types,
+                suggested_alternative=decision.suggested_alternative,
+            )
+        else:
+            print(
+                f"[SecurityCore] Event: {event.event_type} | "
+                f"Sender: {event.sender} | "
+                f"Decision: allow={decision.allow}, risk_score={decision.risk_score:.2f}"
+            )
+
         return decision
 
 from database.shop_db import (
@@ -644,6 +614,7 @@ def set_current_trace(task_description: str, expected_output: str = "") -> str:
 
 
 def get_history_summary() -> str:
+    """提供完整上下文给 LLM 审核器，但不暴露场景标识。"""
     parts = []
     if CURRENT_TASK_DESCRIPTION:
         parts.append(f"task={CURRENT_TASK_DESCRIPTION.strip()}")

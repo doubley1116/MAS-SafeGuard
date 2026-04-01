@@ -33,6 +33,7 @@ def init_trade_db():
 
     conn.commit()
     conn.close()
+
 def execute_trade(symbol: str, action: str, amount: int, agent_name: str):
     conn = get_conn()
     c = conn.cursor()

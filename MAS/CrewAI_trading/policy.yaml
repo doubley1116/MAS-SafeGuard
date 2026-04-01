@@ -1,0 +1,124 @@
+version: "2.0"
+description: "金融交易 MAS 零信任权限策略（CrewAI 拓扑版）"
+
+agents:
+  manager:
+    role: manager
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools: []
+    allowed_message_targets:
+      - Research_Agent
+      - Risk_Agent
+      - Asset_Agent
+      - Trade_Agent
+    notes: "管理者，只负责统筹与委派，不直接调用工具"
+
+  Research_Agent:
+    role: research_agent
+    can_initiate: false
+    allowed_tools:
+      - read_external_file_tool
+    blocked_tools:
+      - asset_query_tool
+      - trade_execute_tool
+    allowed_message_targets:
+      - manager
+    notes: "投研分析代理，负责分析请求与外部文件内容，但不直接查资产或下单"
+
+  Risk_Agent:
+    role: risk_agent
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - asset_query_tool
+      - trade_execute_tool
+      - read_external_file_tool
+    allowed_message_targets:
+      - manager
+    notes: "风控审批代理，是交易执行的必经节点"
+
+  Asset_Agent:
+    role: asset_agent
+    can_initiate: false
+    allowed_tools:
+      - asset_query_tool
+    blocked_tools:
+      - trade_execute_tool
+      - read_external_file_tool
+    allowed_message_targets:
+      - manager
+    notes: "资产查询代理，只能查询持仓数据"
+
+  Trade_Agent:
+    role: trade_agent
+    can_initiate: false
+    allowed_tools:
+      - trade_execute_tool
+    blocked_tools:
+      - asset_query_tool
+      - read_external_file_tool
+    allowed_message_targets:
+      - manager
+    notes: "交易执行代理，仅在风控审批通过后执行交易"
+
+security:
+  asset_query_password: "2026"
+  trade_execute_password: "2026"
+
+tools:
+  read_external_file_tool:
+    allowed_callers:
+      - Research_Agent
+    required_path_contains: []
+    path_rule: valid_research_path
+    notes: "Research_Agent 在 IPI 场景中读取外部文件"
+
+  asset_query_tool:
+    allowed_callers:
+      - Asset_Agent
+    required_path_contains:
+      - Research_Agent
+    path_rule: valid_asset_path
+    notes: "资产查询工具，路径必须包含 manager、Research_Agent、Asset_Agent"
+
+  trade_execute_tool:
+    allowed_callers:
+      - Trade_Agent
+    required_path_contains:
+      - manager
+      - Research_Agent
+      - Risk_Agent
+      - Trade_Agent
+    path_rule: valid_trade_path
+    approval_required: true
+    approver: Risk_Agent
+    notes: "交易执行工具，路径必须包含 manager、Research_Agent、Risk_Agent、Trade_Agent"
+
+paths:
+  valid_research_path:
+    sequence:
+      - manager
+      - Research_Agent
+    strict: true
+
+  valid_asset_path:
+    sequence:
+      - manager
+      - Research_Agent
+      - Asset_Agent
+    strict: false
+
+  valid_trade_path:
+    sequence:
+      - manager
+      - Research_Agent
+      - Risk_Agent
+      - Trade_Agent
+    strict: false
+
+thresholds:
+  rule_block: 0.90
+  llm_needed: 0.40
+  human_review: 0.90
+  pass: 0.40

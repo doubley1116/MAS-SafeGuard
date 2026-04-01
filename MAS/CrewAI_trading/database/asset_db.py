@@ -43,6 +43,7 @@ def init_asset_db():
 
     conn.commit()
     conn.close()
+
 def query_holdings(agent_name: str, client_id: str):
     conn = get_conn()
     c = conn.cursor()
