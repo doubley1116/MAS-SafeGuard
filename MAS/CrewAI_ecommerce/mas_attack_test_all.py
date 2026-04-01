@@ -196,25 +196,7 @@ class SecurityCore(_BaseSecurityCore):
                 blocking_risk_types=risk_types,
             )
 
-        if event.event_type in ("tool_call", "message") and rule_score == 0.0:
-            return AuditDecision(
-                allow=True,
-                risk_score=0.0,
-                reason=f"[规则放行] {rule_reason}",
-                blocking_risk_types=[],
-            )
-
-        # message 事件不传 history_summary，让 LLM 只看消息本身内容判断
-        original_history = None
-        if event.event_type == "message":
-            original_history = event.history_summary
-            event.history_summary = ""
-
         llm_decision = self.llm_reviewer.review(event, rule_risk_types=risk_types)
-
-        if original_history is not None:
-            event.history_summary = original_history
-
         if risk_types:
             merged_types = list(set(risk_types + llm_decision.blocking_risk_types))
             llm_decision.blocking_risk_types = merged_types

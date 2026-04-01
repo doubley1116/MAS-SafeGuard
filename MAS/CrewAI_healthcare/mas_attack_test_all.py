@@ -158,10 +158,9 @@ class SecurityCore(_BaseSecurityCore):
 
     def audit(self, event: AuditEvent) -> AuditDecision:
         """
-        覆写审核流程：
-        - rule_score >= 0.90 → 规则直接拦截
-        - rule_score == 0.00 且 event_type 为 tool_call → 规则合规，直接放行，不走 LLM
-        - 其余情况 → 进入 LLM 语义审核
+        审核流程：
+        - rule_score >= 0.90 → 规则直接拦截，不走 LLM
+        - 其余所有情况 → 规则分 + LLM 语义审核
         """
         rule_score, risk_types, rule_reason = self.rule_engine.evaluate(event)
         t_block = self.policy.threshold("rule_block")
@@ -174,28 +173,8 @@ class SecurityCore(_BaseSecurityCore):
                 blocking_risk_types=risk_types,
             )
 
-        # tool_call 规则分为 0 说明 caller/path/blocked_tools 全部合规，直接放行
-        # message 规则分为 0 说明消息目标合法，直接放行
-        if event.event_type in ("tool_call", "message") and rule_score == 0.0:
-            return AuditDecision(
-                allow=True,
-                risk_score=0.0,
-                reason=f"[规则放行] {rule_reason}",
-                blocking_risk_types=[],
-            )
-
-        # 其余事件走 LLM 语义审核
-        # message 事件不传 history_summary，让 LLM 只看消息本身内容判断
-        original_history = None
-        if event.event_type == "message":
-            original_history = event.history_summary
-            event.history_summary = ""
-
+        # 所有事件都走 LLM 语义审核，LLM 能看到完整 history
         llm_decision = self.llm_reviewer.review(event, rule_risk_types=risk_types)
-
-        if original_history is not None:
-            event.history_summary = original_history
-
         if risk_types:
             merged_types = list(set(risk_types + llm_decision.blocking_risk_types))
             llm_decision.blocking_risk_types = merged_types
