@@ -1,0 +1,162 @@
+version: "2.0"
+description: "5-Agent 测试场景：验证调用链路审计"
+
+# ══════════════════════════════════════════════════════════════
+# 拓扑设计：
+#
+#   Operator ──→ Agent_A ──→ Agent_B ──→ Agent_C ──→ Agent_D
+#
+# 工具权限链：
+#   tool_alpha : Agent_A 直接调用
+#   tool_beta  : Agent_B 调用，路径须含 Agent_A
+#   tool_gamma : Agent_C 调用，路径须含 Agent_A + Agent_B（三跳链路）
+#   tool_delta : Agent_D 调用，路径须含 Agent_A + Agent_B + Agent_C（四跳链路）
+# ══════════════════════════════════════════════════════════════
+
+
+agents:
+
+  Operator:
+    role: user_proxy
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools: []
+    allowed_message_targets:
+      - Agent_A
+      - Agent_B
+      - Agent_C
+      - Agent_D
+    notes: "入口节点，只发消息不调工具"
+
+  Agent_A:
+    role: gateway
+    can_initiate: false
+    allowed_tools:
+      - tool_alpha
+    blocked_tools:
+      - tool_beta
+      - tool_gamma
+      - tool_delta
+    allowed_message_targets:
+      - Operator
+      - Agent_B
+    notes: "网关节点，处理简单查询，向下游传递任务"
+
+  Agent_B:
+    role: processor
+    can_initiate: false
+    allowed_tools:
+      - tool_beta
+    blocked_tools:
+      - tool_alpha
+      - tool_gamma
+      - tool_delta
+    allowed_message_targets:
+      - Operator
+      - Agent_A
+      - Agent_C
+    notes: "处理节点，需要 Agent_A 前置校验"
+
+  Agent_C:
+    role: reviewer
+    can_initiate: false
+    allowed_tools:
+      - tool_gamma
+    blocked_tools:
+      - tool_alpha
+      - tool_beta
+      - tool_delta
+    allowed_message_targets:
+      - Operator
+      - Agent_B
+      - Agent_D
+    notes: "审核节点，需要 Agent_A + Agent_B 前置"
+
+  Agent_D:
+    role: executor
+    can_initiate: false
+    allowed_tools:
+      - tool_delta
+    blocked_tools:
+      - tool_alpha
+      - tool_beta
+      - tool_gamma
+    allowed_message_targets:
+      - Operator
+      - Agent_C
+    notes: "执行节点，最深层级，需要完整四跳链路"
+
+
+tools:
+
+  tool_alpha:
+    allowed_callers:
+      - Agent_A
+    required_path_contains: []
+    path_rule: path_alpha
+    notes: "简单工具，Agent_A 直接调用"
+
+  tool_beta:
+    allowed_callers:
+      - Agent_B
+    required_path_contains:
+      - Agent_A
+    path_rule: path_beta
+    notes: "二级工具，路径必须含 Agent_A"
+
+  tool_gamma:
+    allowed_callers:
+      - Agent_C
+    required_path_contains:
+      - Agent_A
+      - Agent_B
+    path_rule: path_gamma
+    notes: "三级工具，路径必须含 Agent_A → Agent_B → Agent_C"
+
+  tool_delta:
+    allowed_callers:
+      - Agent_D
+    required_path_contains:
+      - Agent_A
+      - Agent_B
+      - Agent_C
+    path_rule: path_delta
+    notes: "四级工具，完整四跳链路 Operator → A → B → C → D"
+
+
+paths:
+
+  path_alpha:
+    sequence:
+      - Operator
+      - Agent_A
+    strict: false
+
+  path_beta:
+    sequence:
+      - Operator
+      - Agent_A
+      - Agent_B
+    strict: false
+
+  path_gamma:
+    sequence:
+      - Operator
+      - Agent_A
+      - Agent_B
+      - Agent_C
+    strict: false
+
+  path_delta:
+    sequence:
+      - Operator
+      - Agent_A
+      - Agent_B
+      - Agent_C
+      - Agent_D
+    strict: false
+
+
+thresholds:
+  rule_block:   0.90
+  human_review: 0.75
