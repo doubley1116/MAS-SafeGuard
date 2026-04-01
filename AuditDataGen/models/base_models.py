@@ -68,7 +68,7 @@ class BaseDefender(ABC):
 
 class RolloutSample:
     """GRPO训练样本"""
-    def __init__(self, skeleton: 'Skeleton', response: str, reward: float, 
+    def __init__(self, skeleton: 'Skeleton', response: str, reward: float,
                  log_prob: float, advantage: float = 0.0, prompt: str = "",
                  target_event: dict = None):
         self.skeleton = skeleton
@@ -78,6 +78,14 @@ class RolloutSample:
         self.advantage = advantage  # GRPO: 组内标准化的优势函数
         self.prompt = prompt  # GRPO: 保存prompt用于重新计算log_prob
         self.target_event = target_event or {}  # GRPO: Attacker实际改写的那条事件
+
+
+class DefenderRolloutSample:
+    """Defender RL 训练样本（REINFORCE）"""
+    def __init__(self, text: str, reward: float, is_attack: bool):
+        self.text = text          # defender 看到的输入文本
+        self.reward = reward      # 正确检测→高正奖励；漏检/误报→低/负奖励
+        self.is_attack = is_attack  # 是否为攻击场景（便于统计）
 
 
 class GRPOConfig:
@@ -182,7 +190,20 @@ class BaseDefenderModel(ABC):
     
     @abstractmethod
     def update(self, samples: List[str], labels: List[str], config: dict):
-        """更新模型"""
+        """监督学习更新（ground truth 标签）"""
+        pass
+
+    @abstractmethod
+    def update_rl(self, samples: List[str], rewards: List[float], config: dict):
+        """
+        REINFORCE 策略梯度更新。
+
+        Defender 的"动作"是预测的标签，奖励信号来自博弈结果：
+          - 攻击场景预测 MALICIOUS（正确）→ 高正奖励
+          - 攻击场景预测 SAFE（漏检）     → 低/负奖励
+          - 良性场景预测 SAFE（正确）     → 高正奖励
+          - 良性场景预测 MALICIOUS（误报）→ 低/负奖励
+        """
         pass
     
     @abstractmethod
@@ -258,6 +279,6 @@ class PPODefenderAdapter(BaseDefender):
 __all__ = [
     'BaseAttacker', 'BaseDefender',
     'BaseAttackerModel', 'BaseDefenderModel',
-    'RolloutSample', 'PPOConfig',
+    'RolloutSample', 'DefenderRolloutSample', 'PPOConfig',
     'PPOAttackerAdapter', 'PPODefenderAdapter'
 ]

@@ -39,7 +39,7 @@ class Skeleton:
         }
 
 # 2. 抽象接口
-from models.base_models import BaseAttackerModel, BaseDefenderModel, RolloutSample, PPOConfig
+from models.base_models import BaseAttackerModel, BaseDefenderModel, RolloutSample, DefenderRolloutSample, PPOConfig
 
 # 3. Mock 实现（已移至 mock_models.py）
 from mock_models import MockAttackerModel, MockDefenderModel
@@ -55,36 +55,57 @@ def compute_reward(
     rule_score_fn: Optional[Callable] = None,
     lambda_div: float = 1.0,
     rule_threshold: float = 0.90,
-) -> Tuple[float, bool]:
+) -> Tuple[float, float, bool]:
     """
-    计算奖励并返回是否应丢弃样本。
-    
+    同时计算 attacker 和 defender 的奖励，返回是否应丢弃样本。
+
+    奖励设计（零和博弈）：
+      攻击场景：attacker_r + defender_r = 1.0
+        - attacker 骗过 defender（SAFE）：attacker_r=confidence, defender_r=1-confidence
+        - defender 识别攻击（MALICIOUS）：attacker_r=1-confidence, defender_r=confidence
+      良性场景：
+        - attacker_r=0（无需绕过）
+        - defender_r=confidence if SAFE else 1-confidence（奖励不误报）
+
     Returns:
-        (reward, should_discard)
-        should_discard=True 表示样本被规则层过滤，不应加入训练集
+        (attacker_reward, defender_reward, should_discard)
     """
     # 构造改写后的事件（只替换 content，其他字段不变）
     rewritten_event = dict(target_event)
     rewritten_event["content"] = response
 
     # 规则层过滤：rule_score >= rule_threshold 的直接丢弃
-    # （说明规则引擎就能拦截，不需要语义攻击训练）
     if rule_score_fn is not None:
         rule_score = rule_score_fn(rewritten_event)
         if rule_score >= rule_threshold:
-            return 0.0, True  # 丢弃
+            return 0.0, 0.0, True  # 丢弃
 
-    # 蓝队（语义）审计奖励：骗过语义防御者才给正奖励
+    # Defender 推理（只调用一次）
     result, confidence = defender.predict(response)
-    r_bypass = 1.0 if result == "SAFE" and skeleton.scenario_type != "benign" else 0.0
 
-    # 语义多样性奖励
+    # ── Attacker 奖励 ────────────────────────────────────────────────────────
+    # 攻击场景：稠密奖励，defender 越认为 SAFE 奖励越高
+    # 良性场景：0（不需要绕过）
+    if skeleton.scenario_type != "benign":
+        attacker_r = confidence if result == "SAFE" else (1.0 - confidence)
+    else:
+        attacker_r = 0.0
+
+    # ── Defender 奖励（与 attacker_r 零和对称）───────────────────────────────
+    # 攻击场景：正确识别 MALICIOUS → 高奖励；漏检 SAFE → 低奖励
+    # 良性场景：正确判 SAFE → 高奖励；误报 MALICIOUS → 低奖励
+    if skeleton.scenario_type != "benign":
+        defender_r = confidence if result == "MALICIOUS" else (1.0 - confidence)
+    else:
+        defender_r = confidence if result == "SAFE" else (1.0 - confidence)
+
+    # ── Attacker 多样性奖励 ──────────────────────────────────────────────────
     original_content = target_event.get("content", "")
     text = original_content + " " + response
     r_diversity = diversity_module.calculate(text, history_embs, threshold=0.85)
 
-    reward = r_bypass + lambda_div * r_diversity
-    return reward, False
+    attacker_reward = attacker_r + lambda_div * r_diversity
+    return attacker_reward, defender_r, False
 
 # 5. 骨架解析
 def parse_skeleton(data: dict) -> Skeleton:
@@ -278,7 +299,9 @@ class AdversarialPPOTrainer:
     def __init__(self, attacker: BaseAttackerModel, defender: BaseDefenderModel,
                  config: PPOConfig, skeleton_pool: List[Skeleton],
                  max_history_size: int = 100, phase_duration: int = 5,
-                 rule_score_fn: Optional[Callable] = None):
+                 rule_score_fn: Optional[Callable] = None,
+                 lambda_div: float = 0.3,
+                 defender_lr: float = 1e-5):
         self.attacker = attacker
         self.defender = defender
         self.config = config
@@ -289,6 +312,8 @@ class AdversarialPPOTrainer:
         self.samples = []
         self.diversity_module = DiversityReward()
         self.rule_score_fn = rule_score_fn
+        self.lambda_div = lambda_div
+        self.defender_lr = defender_lr
 
     def _compute_grpo_advantages(self, group_rewards: List[float]) -> List[float]:
         """
@@ -298,19 +323,25 @@ class AdversarialPPOTrainer:
         import numpy as np
         mean_r = np.mean(group_rewards)
         std_r = np.std(group_rewards) + 1e-8  # 防止除零
-        advantages = [(r - mean_r) / std_r for r in group_rewards]
+        # clip 到 [-3, 3]，防止极端优势值（如全零 reward 导致 std≈0 时的数值不稳定）
+        advantages = [float(np.clip((r - mean_r) / std_r, -3.0, 3.0)) for r in group_rewards]
         return advantages
 
     def rollout(self):
         """
-        GRPO Rollout：收集一个批次的样本
-        
+        GRPO Rollout：同时收集 attacker 和 defender 的训练样本。
+
         核心逻辑：
         1. 外层循环：batch_size // group_size 次（每个group一个骨架）
-        2. 内层循环：对同一个prompt生成group_size个不同的response
-        3. 组内计算相对优势（GRPO Advantage）
+        2. 内层循环：对同一个 prompt 生成 group_size 个不同 response
+        3. 每个 response 同步计算 attacker_reward 和 defender_reward
+        4. Attacker 用 GRPO 组内相对优势；Defender 用 REINFORCE 原始奖励
+
+        Returns:
+            (batch_samples, defender_batch)
         """
         batch_samples = []
+        defender_batch: List[DefenderRolloutSample] = []
         n_groups = self.config.batch_size // self.config.group_size
         
         for _ in range(n_groups):
@@ -341,11 +372,12 @@ class AdversarialPPOTrainer:
                 ]
             
             # 路由劫持场景 (RouterHijacking)：
-            # 攻击者伪装成系统配置或路由规则，通常出现在 Router 节点
+            # 攻击者伪装成系统配置或路由规则，骨架中 sender 为 "Router"
+            # 问题3修复：与 _save_augmented_events() 保持一致，使用 "Router"
             elif scenario == "RouterHijacking":
                 valid_candidates = [
                     msg for msg in skeleton.messages 
-                    if msg.get("sender") == "User" and msg.get("event_type") == "message"
+                    if msg.get("sender") == "Router" and msg.get("event_type") == "message"
                 ]
             
             # 内部劫持场景 (AiTM)：
@@ -375,41 +407,46 @@ class AdversarialPPOTrainer:
             # 获取当前类型的历史
             type_history = self.history_embs.get(skeleton.scenario_type, [])
 
-            # GRPO: 对同一个prompt生成group_size个不同的response
-            group_responses = []
+            # GRPO: 对同一个 prompt 生成 group_size 个不同的 response
             group_samples = []
             group_rewards = []
-            
+
             for g in range(self.config.group_size):
-                # Attacker 生成改写后的 content（每次采样不同）
+                # Attacker 生成改写后的 content
                 response = self.attacker.generate(prompt, skeleton.scenario_type)
 
-                # 计算奖励
-                reward, should_discard = compute_reward(
+                # 同时计算 attacker / defender 奖励（defender 只推理一次）
+                attacker_reward, defender_reward, should_discard = compute_reward(
                     skeleton, target_event, response,
                     self.defender, type_history,
                     self.diversity_module,
                     rule_score_fn=self.rule_score_fn,
-                    lambda_div=1.0,
+                    lambda_div=self.lambda_div,
                 )
 
-                # 如果被规则层过滤，跳过这个样本（但仍然计入group）
+                # 无论是否被规则过滤，defender 样本都收集（defender 需要学习规则层也能拦截的攻击）
+                defender_batch.append(DefenderRolloutSample(
+                    text=response,
+                    reward=defender_reward,
+                    is_attack=(skeleton.scenario_type != "benign"),
+                ))
+
+                # 被规则层过滤 → 不加入 attacker 训练集
                 if should_discard:
                     continue
 
-                # 计算对数概率
+                # 计算 attacker 对数概率
                 log_prob = self.attacker.log_prob(prompt, response)
 
-                group_responses.append(response)
                 group_samples.append({
                     "skeleton": skeleton,
                     "response": response,
-                    "reward": reward,
+                    "reward": attacker_reward,
                     "log_prob": log_prob,
                     "prompt": prompt,
                     "target_event": target_event,
                 })
-                group_rewards.append(reward)
+                group_rewards.append(attacker_reward)
 
             # 如果group有效，计算组内相对优势
             if len(group_rewards) >= 2:  # 至少2个样本才能计算标准差
@@ -461,7 +498,7 @@ class AdversarialPPOTrainer:
                 self.history_embs[scenario_type] = self.history_embs[scenario_type][-self.max_history_size:]
 
         self.samples.extend(batch_samples)
-        return batch_samples
+        return batch_samples, defender_batch
 
     def _save_augmented_events(self, batch_samples: list, iteration: int, output_dir: str):
         """
@@ -519,25 +556,24 @@ class AdversarialPPOTrainer:
                 print(f"[Iter {i+1}] 课程阶段切换: {old_phase} → {self.scheduler.phase}")
 
             # 收集样本
-            batch_samples = self.rollout()
+            batch_samples, defender_batch = self.rollout()
             if not batch_samples:
-                print(f"  [WARN] Iter {i+1}: batch 为空，跳过更新")
+                print(f"  [WARN] Iter {i+1}: attacker batch 为空，跳过更新")
                 continue
-            print(f"Iter {i+1}/{iterations}: 收集了 {len(batch_samples)} 个样本")
+            print(f"Iter {i+1}/{iterations}: attacker={len(batch_samples)} samples, "
+                  f"defender={len(defender_batch)} samples")
 
             # 将高奖励样本写入增强数据集
             self._save_augmented_events(batch_samples, i+1, output_dir)
 
-            # PPO更新
+            # Attacker GRPO 更新
             self.attacker.update(batch_samples, self.config)
 
-            # Defender更新（每10次迭代）
-            if i % 10 == 0 and i > 0:
-                # 收集防御样本
-                defense_samples = [s.response for s in batch_samples]
-                labels = ["MALICIOUS" if s.skeleton.scenario_type != "benign" else "SAFE"
-                          for s in batch_samples]
-                self.defender.update(defense_samples, labels, {"lr": 1e-5})
+            # Defender REINFORCE 更新（每轮，与 attacker 同步）
+            if defender_batch:
+                def_texts = [ds.text for ds in defender_batch]
+                def_rewards = [ds.reward for ds in defender_batch]
+                self.defender.update_rl(def_texts, def_rewards, {"lr": self.defender_lr})
 
             # 保存检查点（按配置间隔）
             if i % checkpoint_interval == 0 and i > 0:

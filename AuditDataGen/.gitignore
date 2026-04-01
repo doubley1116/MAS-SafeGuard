@@ -6,6 +6,8 @@ output_ppo_*/
 output_test/
 demo_output/
 output_local_test/
+output_trace/
+output_trace_real/
 
 # ===================== Python 缓存 =====================
 __pycache__/

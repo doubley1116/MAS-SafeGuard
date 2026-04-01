@@ -89,6 +89,17 @@ class MockDefenderModel(BaseDefenderModel):
         self.detection_rate = min(0.95, self.detection_rate + 0.01)
         print(f"  [MockDefender] update() detection_rate → {self.detection_rate:.2f}")
         return {"loss": 0.0, "accuracy": self.detection_rate}
+
+    def update_rl(self, samples, rewards, config):
+        """Mock RL 更新：奖励高时提升检测率，奖励低时小幅回退。"""
+        self._n_updates += 1
+        avg_reward = sum(rewards) / max(len(rewards), 1)
+        # 正奖励→检测率提升，负奖励→小幅回退，模拟真实 RL 动态
+        delta = 0.01 * (1 if avg_reward > 0.5 else -0.5)
+        self.detection_rate = max(0.1, min(0.95, self.detection_rate + delta))
+        print(f"  [MockDefender] update_rl() avg_reward={avg_reward:.3f} "
+              f"detection_rate → {self.detection_rate:.2f}")
+        return {"loss": 0.0, "avg_reward": avg_reward}
     
     def save(self, path: str):
         print(f"  [MockDefender] save() no-op → {path}")

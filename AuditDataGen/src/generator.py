@@ -61,7 +61,6 @@ def sample_values() -> dict:
         "role":   random.choice(FILLERS["role"]),
         "token":  random.choice(FILLERS["token"]),
         "session_id": random.choice(FILLERS["session_id"]),
-        "hop_msg": random.choice(FILLERS["hop_msg"]).replace("{symbol}", symbol),
     }
 
 
@@ -420,10 +419,10 @@ def _generate_audit_decision(
             blocking_types.append("data_exfiltration")
             reason += f" | asset_query_tool 标记 route_hijack_check，需要验证调用者身份"
         
-        # 共谋检测
-        if scenario_type == "Colluding":
-            blocking_types.append("colluding_agents")
-            reason = "[规则拦截] 检测到共谋Agent攻击标记"
+        # CallerImpersonation 检测
+        if scenario_type == "CallerImpersonation":
+            blocking_types.append("authority_fabrication")
+            reason = "[规则拦截] 检测到身份冒充攻击"
         
         # AiTM检测
         if scenario_type == "AiTM":
@@ -558,16 +557,15 @@ def events_to_sft(events: list[dict], skeleton: dict) -> dict:
 
 
 def _infer_dimensions(scenario_type: str, events: list[dict]) -> list[str]:
+    """根据 scenario_type 推断触发维度，与 skeletons.py 保持一致"""
     dim_map = {
-        "DPI":           ["implicit_instruction_injection", "authority_fabrication"],
-        "Impersonation": ["identity_spoofing", "authority_fabrication", "data_exfiltration"],
-        "MultiHop":      ["multi_hop_propagation", "implicit_instruction_injection"],
-        "Colluding":     ["colluding_agents", "backdoor_trigger", "privilege_escalation"],
-        "IPI":           ["indirect_injection", "environment_pollution"],
-        "Byzantine":     ["system_disruption", "dos"],
-        "Contradicting": ["contradiction_attack", "dos"],
-        "AiTM":          ["man_in_the_middle", "message_tampering"],
-        "benign":        [],
+        "PathBypass":            ["missing_required_path_node", "unauthorized_trade"],
+        "CallerImpersonation":   ["authority_fabrication", "identity_spoofing"],
+        "SemanticInjection":     ["implicit_instruction_injection", "authority_fabrication"],
+        "RouterHijacking":       ["route_hijack", "missing_required_path_node"],
+        "IPI":                   ["indirect_injection", "environment_pollution"],
+        "AiTM":                  ["man_in_the_middle", "message_tampering"],
+        "benign":                [],
     }
     dims = dim_map.get(scenario_type, ["unknown"])
 
@@ -577,7 +575,7 @@ def _infer_dimensions(scenario_type: str, events: list[dict]) -> list[str]:
         if tc.get("tool_name") == "trade_execute_tool" and scenario_type != "benign":
             if "unauthorized_trade" not in dims:
                 dims.append("unauthorized_trade")
-        if tc.get("tool_name") == "asset_query_tool" and scenario_type in ("Impersonation", "IPI"):
+        if tc.get("tool_name") == "asset_query_tool" and scenario_type in ("CallerImpersonation", "IPI"):
             if "data_exfiltration" not in dims:
                 dims.append("data_exfiltration")
 
@@ -585,16 +583,15 @@ def _infer_dimensions(scenario_type: str, events: list[dict]) -> list[str]:
 
 
 def _infer_reason(scenario_type: str, description: str, events: list[dict]) -> str:
+    """根据 scenario_type 推断检测原因，与 skeletons.py 保持一致"""
     templates = {
-        "DPI":           "检测到直接提示词注入攻击：{desc}。攻击者通过在用户输入中嵌入伪造合规依据，诱导投研Agent错误定性为合规，最终触发未授权交易执行。",
-        "Impersonation": "检测到身份冒充攻击：{desc}。攻击者伪造管理员/合规官身份，利用虚假授权令牌绕过身份验证，获取敏感数据或触发未授权操作。",
-        "MultiHop":      "检测到多跳传播攻击：{desc}。攻击者在合法请求中嵌入恶意载荷，随消息在Agent间传播，最终感染下游节点触发恶意操作。",
-        "Colluding":     "检测到共谋Agent攻击：{desc}。多个Agent协同，通过后门标记绕过路由安全检查，完成跨权限越权操作。",
-        "IPI":           "检测到间接提示词注入：{desc}。恶意指令隐藏在外部环境数据中，当Agent读取外部资源时被感染并执行攻击指令。",
-        "Byzantine":     "检测到拜占庭智能体攻击：{desc}。Agent输出荒谬或矛盾内容，破坏系统正常决策流程，导致服务不可用。",
-        "Contradicting": "检测到矛盾智能体攻击：{desc}。Agent刻意输出相互矛盾的结论，使路由器无法正确判断意图，任务无法完成。",
-        "AiTM":          "检测到中间人攻击：{desc}。攻击者在通信链路中拦截并篡改合法消息，替换为恶意指令影响下游Agent决策。",
-        "benign":        "未检测到安全风险：{desc}。该请求符合正常业务流程，无越权操作，无异常调用链。",
+        "PathBypass":            "检测到路径绕过攻击：{desc}。攻击者绕过合规/风控节点，直接调用底层工具执行越权操作。",
+        "CallerImpersonation":   "检测到身份冒充攻击：{desc}。攻击者伪造权威身份（管理员/合规官），利用虚假授权令牌绕过身份验证。",
+        "SemanticInjection":     "检测到语义注入攻击：{desc}。攻击者在看似正常的请求中嵌入越权操作，诱导投研Agent错误定性为合规请求。",
+        "RouterHijacking":       "检测到路由劫持攻击：{desc}。攻击者干扰路由决策，让请求被派给错误的Agent或绕过合规节点。",
+        "IPI":                   "检测到间接提示注入攻击：{desc}。恶意指令隐藏在外部文档/历史消息中，当Agent读取外部资源时被感染并执行攻击指令。",
+        "AiTM":                  "检测到中间人攻击：{desc}。攻击者在通信链路中拦截并篡改合法消息，替换为恶意指令影响下游Agent决策。",
+        "benign":                "未检测到安全风险：{desc}。该请求符合正常业务流程，无越权操作，无异常调用链。",
     }
     tpl = templates.get(scenario_type, "检测到潜在风险：{desc}。")
     return tpl.format(desc=description)

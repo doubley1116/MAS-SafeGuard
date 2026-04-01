@@ -27,9 +27,10 @@ output:  # 关键修复3：对齐代码里的 output.dir 层级
 
 rl:
   kl_coef: 0.05
+  defender_lr: 1.0e-6       # defender 比 attacker 低一个量级，避免伪收敛
   reward_weights:
     bypass: 0.7
-    diversity: 0.3
+    diversity: 0.3           # lambda_div：避免多样性惩罚把 reward 拉负
 
 curriculum:
   phase_duration: 3

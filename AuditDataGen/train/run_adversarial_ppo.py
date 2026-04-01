@@ -132,6 +132,20 @@ def import_bert_defender():
         return None
 
 
+# 旧→新的 scenario_type 映射表（问题1修复）
+SCENARIO_RENAME = {
+    "DPI":           "SemanticInjection",
+    "Impersonation": "CallerImpersonation",
+    "MultiHop":      "SemanticInjection",
+    "Colluding":     "PathBypass",
+    "IPI":           "IPI",
+    "Byzantine":     "PathBypass",
+    "Contradicting": "PathBypass",
+    "AiTM":          "AiTM",
+    "benign":        "benign",
+}
+
+
 def load_skeleton_pool(skeleton_type: str = "all") -> List[Skeleton]:
     """
     从骨架库加载训练数据
@@ -145,7 +159,11 @@ def load_skeleton_pool(skeleton_type: str = "all") -> List[Skeleton]:
         # 过滤场景类型
         if skeleton_type != "all" and skeleton_def["scenario_type"] != skeleton_type:
             continue
-            
+        
+        # 映射旧名称到新名称（问题1修复）
+        old_scenario = skeleton_def["scenario_type"]
+        scenario_type = SCENARIO_RENAME.get(old_scenario, old_scenario)
+        
         # 填充占位符
         filled_flow = []
         for step in skeleton_def["flow"]:
@@ -167,9 +185,9 @@ def load_skeleton_pool(skeleton_type: str = "all") -> List[Skeleton]:
                     )
             filled_flow.append((sender, receiver, filled_content, event_type))
         
-        # 创建Skeleton对象
+        # 创建Skeleton对象（使用映射后的 scenario_type）
         skeleton = Skeleton(
-            scenario_type=skeleton_def["scenario_type"],
+            scenario_type=scenario_type,
             description=skeleton_def["description"],
             messages=[{"sender": s, "receiver": r, "content": c, "event_type": e} 
                      for s, r, c, e in filled_flow if c is not None]
@@ -374,6 +392,7 @@ def train_from_config(config: Dict[str, Any]):
     train_config = config.get("train", {})
     config_ppo = PPOConfig(
         batch_size=train_config.get("batch_size", 8),
+        group_size=train_config.get("group_size", 4),   # 问题2修复：从配置读取 group_size
         ppo_epochs=train_config.get("ppo_epochs", 4),
         lr=train_config.get("learning_rate", 1e-5),
         gamma=train_config.get("gamma", 0.99),
@@ -387,11 +406,15 @@ def train_from_config(config: Dict[str, Any]):
     curriculum_config = config.get("curriculum", {})
     diversity_config = config.get("diversity", {})
     output_config = config.get("output", {})
+    rl_config = config.get("rl", {})
+    reward_weights = rl_config.get("reward_weights", {})
 
     phase_duration = curriculum_config.get("phase_duration", 5)
     max_history_size = diversity_config.get("history_size", 100)
     checkpoint_interval = output_config.get("checkpoint_interval", 20)
     output_dir = output_config.get("dir", "output_ppo")
+    lambda_div = reward_weights.get("diversity", 0.3)
+    defender_lr = train_config.get("defender_lr", rl_config.get("defender_lr", 1e-6))
 
     trainer = AdversarialPPOTrainer(
         attacker=attacker,
@@ -400,6 +423,8 @@ def train_from_config(config: Dict[str, Any]):
         skeleton_pool=skeleton_pool,
         max_history_size=max_history_size,
         phase_duration=phase_duration,
+        lambda_div=lambda_div,
+        defender_lr=defender_lr,
     )
 
     os.makedirs(output_dir, exist_ok=True)

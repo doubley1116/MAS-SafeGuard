@@ -190,6 +190,64 @@ class HFDefenderModel(BaseDefenderModel):
         
         return {"loss": loss.item(), "accuracy": accuracy}
     
+    def update_rl(self, samples: List[str], rewards: List[float], config: dict):
+        """
+        REINFORCE 策略梯度更新 Defender。
+
+        Defender 的"策略"是分类分布 P(label | text)。
+        "动作"是 argmax 预测的标签，log_prob 是该标签的对数概率。
+        loss = -mean(log_prob(predicted_label) * reward)
+
+        与攻击场景奖励对称（attacker_r + defender_r = 1.0），
+        让 defender 直接从博弈对抗结果中学习，而不依赖 ground truth 标签。
+        """
+        if not samples or not rewards:
+            return
+
+        lr = config.get("lr", 1e-5)
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+
+        encoded = self.tokenizer(
+            samples,
+            padding=True,
+            truncation=True,
+            max_length=1024,
+            return_tensors="pt"
+        )
+        input_ids = encoded['input_ids'].to(self.device)
+        attention_mask = encoded['attention_mask'].to(self.device)
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float32).to(self.device)
+
+        self.model.train()
+        outputs = self.model(input_ids, attention_mask=attention_mask)
+        logits = outputs.logits  # [B, 2]
+
+        # log P(label | text) for each label
+        log_probs = torch.log_softmax(logits, dim=-1)  # [B, 2]
+
+        # 取 argmax（实际预测的动作）对应的 log_prob
+        predicted_classes = torch.argmax(logits, dim=-1)  # [B]
+        selected_log_probs = log_probs.gather(
+            1, predicted_classes.unsqueeze(1)
+        ).squeeze(1)  # [B]
+
+        # REINFORCE loss: -log_prob * reward（梯度裁剪防止爆炸）
+        loss = -(selected_log_probs * rewards_tensor).mean()
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        self.optimizer.step()
+
+        self.model.eval()
+
+        avg_reward = rewards_tensor.mean().item()
+        correct_rate = (rewards_tensor > 0.5).float().mean().item()
+        print(f"[INFO] Defender RL: loss={loss.item():.4f}, "
+              f"avg_reward={avg_reward:.4f}, correct_rate={correct_rate:.2f}")
+        return {"loss": loss.item(), "avg_reward": avg_reward}
+
     def save(self, path: str):
         """保存模型"""
         self.model.save_pretrained(path)
