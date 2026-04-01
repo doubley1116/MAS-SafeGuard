@@ -30,25 +30,26 @@ class MockAttackerModel(BaseAttackerModel):
     """
     
     def generate(self, prompt: str, scenario_type: str, **kwargs) -> str:
+        """
+        Mock 模式：从骨架库随机选一条同类型的 content，作为改写后的输出。
+        模拟"改写 content"语义，而非返回完整骨架 JSON。
+        """
         candidates = [s for s in SKELETONS if s["scenario_type"] == scenario_type]
         if not candidates:
             candidates = SKELETONS
         skeleton = random.choice(candidates)
         vals = sample_values()
-        filled_flow = []
+        
+        # 找第一条 User 发出的 message 步骤，返回其填充后的 content
         for sender, receiver, content_tpl, etype in skeleton["flow"]:
-            content = content_tpl or ""
-            for k, v in vals.items():
-                content = content.replace("{" + k + "}", str(v))
-            filled_flow.append([sender, receiver, content, etype])
-        output = {
-            "scenario_type": skeleton["scenario_type"],
-            "label": skeleton["label"],
-            "risk_score": skeleton["risk_score"],
-            "description": skeleton["description"],
-            "flow": filled_flow,
-        }
-        return json.dumps(output, ensure_ascii=False)
+            if etype == "message" and content_tpl:
+                content = content_tpl
+                for k, v in vals.items():
+                    content = content.replace("{" + k + "}", str(v))
+                return content
+        
+        # 没有 message 步骤时，返回随机填充的描述
+        return f"[Mock] 改写后的{scenario_type}攻击载荷 - {vals.get('symbol', 'NVDA')}"
     
     def log_prob(self, prompt: str, response: str) -> float:
         return -1.0

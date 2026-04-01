@@ -2,7 +2,7 @@
 hf_defender.py
 --------------
 HuggingFace Defender 模型实现
-支持 Qwen2.5-7B-Instruct 作为二分类器 + Flash Attention 2
+支持 Qwen2.5-7B-Instruct 作为二分类器 + 原生 SDPA (Scaled Dot Product Attention)
 """
 import torch
 import torch.nn as nn
@@ -43,14 +43,16 @@ class HFDefenderModel(BaseDefenderModel):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        # 加载序列分类模型（使用 AutoModelForSequenceClassification）
+        # ── SDPA 加速：跨平台原生注意力机制 ──────────────────────────────
+        # 使用 PyTorch 2.0 原生的 Scaled Dot Product Attention (SDPA)
+        # 优势：全平台支持（Windows/Linux）、速度快、不依赖 flash-attn 库
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
             num_labels=2,                     # 二分类：SAFE vs MALICIOUS
-            torch_dtype=torch.bfloat16,        # H100 优化：bf16 半精度
-            attn_implementation="flash_attention_2",  # H100 提速核心
+            torch_dtype=torch.bfloat16,       # bfloat16 半精度
+            attn_implementation="sdpa",       # 跨平台兼容，比 flash_attention_2 更广泛支持
             trust_remote_code=True,
-            device_map=device,
+            device_map=device,                # 单卡严格绑定
         )
         
         # 【关键修复】同步 pad_token_id
@@ -68,7 +70,7 @@ class HFDefenderModel(BaseDefenderModel):
         self.reverse_label_map = {0: "SAFE", 1: "MALICIOUS"}
         
         print(f"[OK] HFDefender 初始化: {model_name}")
-        print(f"     - Flash Attention 2: 已启用")
+        print(f"     - SDPA: 已启用 (跨平台兼容)")
         print(f"     - bfloat16: 已启用")
         print(f"     - pad_token_id: {self.tokenizer.pad_token_id}")
     
@@ -86,7 +88,7 @@ class HFDefenderModel(BaseDefenderModel):
             truncation=True,
             max_length=1024,      # 7B模型支持更长上下文
             return_tensors="pt"
-        ).to(self.device)
+        ).to(self.device)  # 单卡严格绑定
         
         with torch.no_grad():
             outputs = self.model(**inputs)
@@ -117,7 +119,7 @@ class HFDefenderModel(BaseDefenderModel):
             truncation=True,
             max_length=1024,
             return_tensors="pt"
-        ).to(self.device)
+        ).to(self.device)  # 单卡严格绑定
         
         with torch.no_grad():
             outputs = self.model(**inputs)
@@ -157,6 +159,7 @@ class HFDefenderModel(BaseDefenderModel):
             max_length=1024,
             return_tensors="pt"
         )
+        # 单卡严格绑定
         input_ids = encoded['input_ids'].to(self.device)
         attention_mask = encoded['attention_mask'].to(self.device)
         label_ids = torch.tensor(
@@ -195,12 +198,14 @@ class HFDefenderModel(BaseDefenderModel):
     
     def load(self, path: str):
         """加载模型"""
+        # 单卡严格绑定
         self.model = AutoModelForSequenceClassification.from_pretrained(
             path,
             torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2",
+            attn_implementation="sdpa",  # 跨平台兼容
+            device_map=self.device,     # 单卡严格绑定
             trust_remote_code=True,
-        ).to(self.device)
+        )
         self.model.eval()
         
         self.tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
