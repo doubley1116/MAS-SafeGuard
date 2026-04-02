@@ -8,6 +8,8 @@ demo_output/
 output_local_test/
 output_trace/
 output_trace_real/
+data/
+
 
 # ===================== Python 缓存 =====================
 __pycache__/

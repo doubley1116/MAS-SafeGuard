@@ -214,64 +214,71 @@ class HFAttackerModel(BaseAttackerModel):
             return {}
 
         self.model.train()
-        
+
         old_log_probs = torch.tensor([s.log_prob for s in samples]).to(self.device)
         advantages = torch.tensor([s.advantage for s in samples]).to(self.device)
-        
-        # 重新计算对数概率
-        new_log_probs_list = []
-        for sample in samples:
+        clip_epsilon = config.clip_epsilon
+        n = len(samples)
+
+        # 梯度累积：每个 sample 单独 forward+backward，及时释放计算图和大中间张量
+        self.optimizer.zero_grad()
+        total_policy_loss = 0.0
+        for i, sample in enumerate(samples):
             prompt = sample.prompt if sample.prompt else sample.skeleton.description
             text = prompt + " " + sample.response
             inputs = self.tokenizer(
                 text, return_tensors="pt",
-                truncation=True, max_length=1024  # 7B模型：增加上下文长度
+                truncation=True, max_length=1024
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            
+
             outputs = self.model(**inputs)
             logits = outputs.logits
-            
+
             prompt_len = len(self.tokenizer.encode(prompt))
             input_ids = inputs["input_ids"]
             response_ids = input_ids[:, prompt_len:]
-            
+
             if response_ids.size(1) == 0:
-                new_log_probs_list.append(torch.tensor(0.0).to(self.device))
+                del logits, outputs, inputs
+                torch.cuda.empty_cache()
                 continue
-            
+
             log_probs = torch.log_softmax(logits, dim=-1)
+            del logits  # 释放大中间张量，只保留 log_probs
             response_log_probs = torch.gather(
                 log_probs[:, prompt_len:-1, :],
                 dim=2,
                 index=response_ids[:, :-1].unsqueeze(-1)
             ).squeeze(-1)
-            new_log_probs_list.append(response_log_probs.mean())
-        
-        new_log_probs = torch.stack(new_log_probs_list)
-        
-        # GRPO ratio
-        ratio = torch.exp(new_log_probs - old_log_probs)
-        clip_epsilon = config.clip_epsilon
-        surr1 = ratio * advantages
-        surr2 = torch.clamp(ratio, 1.0 - clip_epsilon, 1.0 + clip_epsilon) * advantages
-        policy_loss = -torch.min(surr1, surr2).mean()
-        
-        # 反向传播
-        self.optimizer.zero_grad()
-        policy_loss.backward()
+            del log_probs  # 释放大中间张量
+
+            new_lp = response_log_probs.mean()
+            del response_log_probs
+
+            # 单样本 GRPO loss，除以 n 实现梯度累积等效平均
+            ratio_i = torch.exp(new_lp - old_log_probs[i])
+            surr1_i = ratio_i * advantages[i]
+            surr2_i = torch.clamp(ratio_i, 1.0 - clip_epsilon, 1.0 + clip_epsilon) * advantages[i]
+            loss_i = -torch.min(surr1_i, surr2_i) / n
+            loss_i.backward()
+            total_policy_loss += loss_i.item()
+
+            del outputs, inputs, loss_i
+            torch.cuda.empty_cache()
+
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
-        
+
         avg_reward = torch.tensor([s.reward for s in samples]).mean().item()
         stats = {
-            "policy_loss": policy_loss.item(),
+            "policy_loss": total_policy_loss,
             "avg_reward": avg_reward,
-            "samples": len(samples),
+            "samples": n,
         }
-        
-        print(f"  [HFAttacker] GRPO更新 | samples={len(samples)} "
-              f"avg_reward={avg_reward:.3f} policy_loss={policy_loss.item():.4f}")
+
+        print(f"  [HFAttacker] GRPO更新 | samples={n} "
+              f"avg_reward={avg_reward:.3f} policy_loss={total_policy_loss:.4f}")
         return stats
     
     def save(self, path: str):

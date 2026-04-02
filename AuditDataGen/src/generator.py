@@ -147,7 +147,7 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
     time_offset   = 0
     scenario_type = skeleton.get("scenario_type", "")
 
-    ROUTER_NODES = {"Semantic_Router", "AiTM_Interceptor"}
+    ROUTER_NODES = {"Semantic_Router"}
 
     for i, step in enumerate(skeleton["flow"]):
         sender, receiver, content_tpl, event_type = step
@@ -199,6 +199,7 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
             event_type=event_type,
             step_idx=i,
             sender=sender,
+            receiver=receiver,
             tool_name=tool_name,
             tool_args=tool_args,
             call_path=list(call_path),
@@ -218,17 +219,18 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
             "event_id":        event_id,
             "trace_id":        trace_id,
             "timestamp":       timestamp,
+            "self_hash":       self_hash,
             "metadata":        metadata,
         }
         events.append(event)
         prev_hash = self_hash
 
-        # ── 8. 更新 history_lines ────────────────────────────────────────────
+        # ── 9. 更新 history_lines ────────────────────────────────────────────
         if event_type == "message" and display_content:
             snippet = display_content[:300].replace("\n", " ")
             history_lines.append(f"[{sender}]: {snippet}")
 
-        # ── 9. 防御截断 ──────────────────────────────────────────────────────
+        # ── 10. 防御截断 ─────────────────────────────────────────────────────
         #   tool_call 传 tool_name，message 传 display_content
         check_content = tool_name if event_type == "tool_call" else display_content
         if _is_attack_triggered(event_type, sender, receiver,
@@ -293,6 +295,7 @@ def _generate_audit_decision(
     step_idx: int,
     event_type: str,
     sender: str,
+    receiver: str | None,
     tool_name: str | None,
     tool_args: dict | None,
     call_path: list[str],
@@ -389,7 +392,14 @@ def _generate_audit_decision(
     
     # 3. 状态转换（路由器跳转）通常放行
     if event_type == "state_transition":
-        intent = "execute_trade" if tool_name == "trade_execute_tool" else "query_asset"
+        intent_map = {
+            "Trade_Agent": "execute_trade",
+            "Asset_Agent": "query_asset",
+            "Risk_Agent": "risk_consult",
+            "Prescription_Agent": "prescribe",
+            "ConfigAgent": "config_update",
+        }
+        intent = intent_map.get(receiver, "unknown")
         return {
             "allow": True,
             "risk_score": 0.0,
@@ -434,7 +444,7 @@ def _generate_audit_decision(
             "risk_score": risk_score,
             "reason": reason,
             "blocking_risk_types": blocking_types,
-            "suggested_alternative": "建议先经过合规审查节点" if not blocking_types else None,
+            "suggested_alternative": "建议先经过合规审查节点" if blocking_types else None,
             "level": "block"
         }
     
@@ -454,6 +464,7 @@ def _build_metadata_with_audit(
     event_type: str,
     step_idx: int,
     sender: str,
+    receiver: str | None,
     tool_name: str | None,
     tool_args: dict | None,
     call_path: list[str],
@@ -467,8 +478,6 @@ def _build_metadata_with_audit(
     
     # 场景信息
     if step_idx == 0:
-        meta["scenario"] = skeleton["scenario_type"]
-        meta["skeleton_id"] = skeleton["id"]
         meta["graph_type"] = "standard"
     
     # 意图分类（用于 state_transition）
@@ -477,8 +486,10 @@ def _build_metadata_with_audit(
             "Trade_Agent": "execute_trade",
             "Asset_Agent": "query_asset",
             "Risk_Agent": "risk_consult",
+            "Prescription_Agent": "prescribe",
+            "ConfigAgent": "config_update",
         }
-        intent = intent_map.get(sender, "unknown")
+        intent = intent_map.get(receiver, "unknown")
         meta["intent"] = intent
         meta["intent_confidence"] = round(random.uniform(0.82, 0.98), 2)
         meta["reason"] = f"意图分类结果，step={step_idx}"
@@ -499,7 +510,7 @@ def _build_metadata_with_audit(
     
     # 添加 audit_decision
     meta["audit_decision"] = _generate_audit_decision(
-        skeleton, step_idx, event_type, sender,
+        skeleton, step_idx, event_type, sender, receiver,
         tool_name, tool_args, call_path, history_summary
     )
     
@@ -526,7 +537,7 @@ def events_to_sft(events: list[dict], skeleton: dict) -> dict:
     """
     将一条 trace 的 AuditEvent 列表转换为 SFT 训练格式。
 
-    input:  最后一条非 benign 事件的 JSON（模拟审核模型的输入）
+    input:  包含完整上下文的结构体（current_event, history_summary, call_path, scenario_hint）
     output: {"risk_score": float, "triggered_dimensions": [...], "reason": str}
 
     triggered_dimensions 根据 scenario_type 自动推断。
@@ -541,6 +552,14 @@ def events_to_sft(events: list[dict], skeleton: dict) -> dict:
     stype = skeleton["scenario_type"]
     dimensions = _infer_dimensions(stype, events)
 
+    # 修改：input 包含完整上下文
+    input_obj = {
+        "current_event":   target,
+        "history_summary":  target.get("history_summary", ""),
+        "call_path":       target.get("call_path", []),
+        "scenario_hint":   stype,
+    }
+
     output = {
         "risk_score":           skeleton["risk_score"],
         "triggered_dimensions": dimensions,
@@ -548,7 +567,7 @@ def events_to_sft(events: list[dict], skeleton: dict) -> dict:
     }
 
     return {
-        "input":          json.dumps(target, ensure_ascii=False),
+        "input":          json.dumps(input_obj, ensure_ascii=False),
         "output":         json.dumps(output, ensure_ascii=False),
         "skeleton_id":    skeleton["id"],
         "scenario_type":  stype,

@@ -70,17 +70,18 @@ API_COMPLETION_SYSTEM = """\
 # 辅助函数
 # ─────────────────────────────────────────────────────────────────────────────
 
-def is_attack_position(step: tuple, skeleton: dict) -> bool:
+def is_attack_position(step_idx: int, step: tuple, skeleton: dict) -> bool:
     """
     判断当前 step 是否是攻击者可控的注入位置。
     
     规则：
     - 外部用户注入：User 发出的第一条 message（PathBypass, CallerImpersonation, SemanticInjection）
     - 路由劫持：Router/Semantic_Router 节点发出的 message
-    - 间接注入：File_System 或 Document_Parser 节点
+    - 间接注入：tool_call 之后的第一条 message（Agent 被感染后输出）
     - 中间人：AiTM_Interceptor 节点
     
     Args:
+        step_idx: 当前 step 在 flow 中的索引
         step: (sender, receiver, content_tpl, event_type) 元组
         skeleton: 骨架定义
     
@@ -89,18 +90,24 @@ def is_attack_position(step: tuple, skeleton: dict) -> bool:
     """
     sender, receiver, content_tpl, event_type = step
     scenario = skeleton.get("scenario_type", "")
+    flow = skeleton.get("flow", [])
     
     # 外部用户注入场景
-    if scenario in ["PathBypass", "CallerImpersonation", "SemanticInjection"]:
+    if scenario in ["PathBypass", "CallerImpersonation", "SemanticInjection", "PromptInfection"]:
         return sender == "User" and event_type == "message"
     
     # 路由劫持场景
     if scenario == "RouterHijacking":
-        return sender in ["Router", "Semantic_Router"] and event_type == "message"
+        return sender == "User" and event_type == "message"
     
-    # 间接注入场景
+    # 间接注入场景：攻击内容在读取文件的 tool_call 之后的第一条 message
     if scenario == "IPI":
-        return sender in ["File_System", "Document_Parser"] and event_type == "message"
+        if event_type != "message" or step_idx == 0:
+            return False
+        # 检查前一个步骤是否是 tool_call（read_*_tool）
+        prev_step = flow[step_idx - 1]
+        prev_event_type = prev_step[3]
+        return prev_event_type == "tool_call"
     
     # 中间人攻击场景
     if scenario == "AiTM":
@@ -281,7 +288,7 @@ def generate_trace_with_attacker(
     time_offset = 0
     scenario_type = skeleton.get("scenario_type", "")
     
-    ROUTER_NODES = {"Semantic_Router", "AiTM_Interceptor"}
+    ROUTER_NODES = {"Semantic_Router"}
     
     for i, step in enumerate(skeleton["flow"]):
         sender, receiver, content_tpl, event_type = step
@@ -292,7 +299,7 @@ def generate_trace_with_attacker(
         elif event_type == "tool_call":
             # 工具调用保持模板填充，不用 LLM 生成
             filled_content = random_fill(content_tpl, values)
-        elif is_attack_position(step, skeleton):
+        elif is_attack_position(i, step, skeleton):
             # 攻击位置：用 Attacker 生成
             history_context = "\n---\n".join(history_lines)
             prompt = build_attacker_prompt(
@@ -598,9 +605,11 @@ if __name__ == "__main__":
 
     # 4. 解析场景过滤
     scenario_filter = None
-    if args.scenario:
+    if args.scenario and args.scenario.strip().lower() != "all":
         scenario_filter = [s.strip() for s in args.scenario.split(",")]
         print(f"🎯 场景过滤: {scenario_filter}")
+    else:
+        print(f"🎯 场景过滤: 全部")
 
     # 5. 生成数据集
     audit_count, sft_count = generate_dataset(
