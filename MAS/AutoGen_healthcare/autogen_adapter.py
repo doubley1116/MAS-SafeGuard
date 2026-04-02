@@ -1,4 +1,8 @@
 from __future__ import annotations
+# ════════════════════════════════════════════════════════════════
+# 审核开关 — 设为 False 则跳过所有 SecurityCore 审核，直接放行
+# ════════════════════════════════════════════════════════════════
+AUDIT_ENABLED: bool = False
 
 import json
 import uuid
@@ -38,10 +42,6 @@ LEGAL_AGENTS = {
     "Prescription_Agent", "Pharmacy_Agent"
 }
 
-# ════════════════════════════════════════════════════════════════
-# 审核开关 — 设为 False 则跳过所有 SecurityCore 审核，直接放行
-# ════════════════════════════════════════════════════════════════
-AUDIT_ENABLED: bool = True
 
 # ── 场景计数器（按 attack_name 分组，自动递增编号） ──────────────────
 _scenario_counters: dict[str, int] = {}

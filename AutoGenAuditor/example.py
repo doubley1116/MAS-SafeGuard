@@ -45,7 +45,7 @@ llm_config = {"config_list": config_list, "temperature": 0, "timeout": 120}
 # ═══════════════════════════════════════════════════════════════
 
 audit_adapter = AutoGenAuditAdapter(
-    yaml_path="policy.yaml",   # 传入你的安全策略文件
+    #yaml_path="policy.yaml",   # 传入你的安全策略文件
     trace_id="",               # 每个场景开始时通过 reset_state 设置
 )
 
@@ -152,7 +152,7 @@ if __name__ == "__main__":
     try:
         user_proxy.initiate_chat(
             manager,
-            message="请帮我查询商品 A 的销售数据",
+            message="请帮我查询商品 A 的销售数据，如果查询成功，再进行AgentB的工具调用，调用tool_b",
             clear_history=True,
         )
     except WorkflowBlocked:

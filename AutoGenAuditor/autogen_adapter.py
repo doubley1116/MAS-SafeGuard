@@ -64,6 +64,8 @@ class AutoGenAuditAdapter:
       - 抛出 WorkflowBlocked 异常
     """
 
+    MAX_HISTORY_ENTRIES: int = 30  # 滑动窗口大小（不含初始 SYSTEM 提示词）
+
     def __init__(
         self,
         yaml_path: Optional[str] = None,
@@ -88,6 +90,7 @@ class AutoGenAuditAdapter:
         self._blocked_reason: str = ""
         self.call_path: List[str] = []
         self.conversation_history: List[Dict[str, Any]] = []
+        self._user_task: str = ""  # 用户原始任务指令
 
         self._jsonl_path = Path(jsonl_path)
         self._jsonl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,6 +100,7 @@ class AutoGenAuditAdapter:
 
         self._workflow_events: List[Dict[str, Any]] = []
         self._workflow_decisions: List[Dict[str, Any]] = []
+        self._pending_tool_results: List[Dict[str, Any]] = []  # 已弃用，保留兼容
 
     # ── 状态管理 ──────────────────────────────────────────────
 
@@ -111,8 +115,10 @@ class AutoGenAuditAdapter:
         self._blocked_reason = ""
         self.call_path = []
         self.conversation_history = []
+        self._user_task = ""
         self._workflow_events = []
         self._workflow_decisions = []
+        self._pending_tool_results = []
 
     def is_blocked(self) -> bool:
         """检查工作流是否已被阻断。"""
@@ -123,17 +129,79 @@ class AutoGenAuditAdapter:
         if not self.call_path or self.call_path[-1] != agent_name:
             self.call_path.append(agent_name)
 
+    def set_user_task(self, task_content: str, sender: str = "User") -> None:
+        """
+        记录用户原始任务指令。
+
+        应在工作流启动时调用（initiate_chat 之前或之后），
+        确保 history_summary 始终包含用户意图作为锚点。
+
+        Args:
+            task_content: 用户发出的原始任务文本
+            sender:       发送者名称（默认 "User"）
+        """
+        self._user_task = task_content[:200]  # 限制长度
+        # 同时记录到 conversation_history 作为第一条
+        self.conversation_history.insert(0, {
+            "type": "user_task",
+            "sender": sender,
+            "content": task_content,
+        })
+
     def build_history_summary(self) -> str:
-        """构建对话历史摘要（最近 10 条）。"""
+        """
+        构建对话历史摘要，格式与 AuditEvent 一一对应。
+
+        格式：[sender]: content，条目之间用 \\n---\\n 分隔
+        - 第一条始终是 [SYSTEM] 开场提示词（initiate_chat 的 prompt）
+        - message 事件：[sender → receiver]: content
+        - tool_call 事件：[sender → tool_name]: tool_args
+        - tool_result 事件：[tool_name → receiver]: result
+
+        保留策略：第一条（SYSTEM）始终保留 + 最近 MAX_HISTORY_ENTRIES 条
+        """
         if not self.conversation_history:
             return ""
+
         lines = []
-        for entry in self.conversation_history[-10:]:
+        first_entry = None
+        rest_entries = []
+
+        for entry in self.conversation_history:
+            if entry.get("type") == "user_task" and first_entry is None:
+                first_entry = entry
+            else:
+                rest_entries.append(entry)
+
+        # 1. 初始提示词始终在开头（完整保留，不截断）
+        if first_entry:
+            lines.append(f"[SYSTEM]: {first_entry.get('content', '')}")
+
+        # 2. 后续事件（滑动窗口，保留最近 MAX_HISTORY_ENTRIES 条）
+        for entry in rest_entries[-self.MAX_HISTORY_ENTRIES:]:
+            etype = entry.get("type", "message")
             sender = entry.get("sender", "?")
-            receiver = entry.get("receiver", "?")
-            content = str(entry.get("content", ""))[:100]
-            lines.append(f"[{sender} -> {receiver}]: {content}")
-        return "\n".join(lines)
+            content = str(entry.get("content", ""))
+
+            if etype == "tool_call":
+                tool = entry.get("tool_name", "?")
+                args_str = str(entry.get("tool_args", {}))[:200]
+                lines.append(f"[{sender} → {tool}]: {args_str}")
+
+            elif etype == "tool_result":
+                tool = entry.get("tool_name", "?")
+                receiver = entry.get("receiver", sender)
+                lines.append(f"[{tool} → {receiver}]: {content[:200]}")
+
+            elif etype == "message":
+                receiver = entry.get("receiver", "?")
+                lines.append(f"[{sender} → {receiver}]: {content[:300]}")
+
+            else:  # delegation 等
+                receiver = entry.get("receiver", "?")
+                lines.append(f"[{sender} → {receiver}]: {content[:300]}")
+
+        return "\n---\n".join(lines)
 
     # ── 工作流保存 ────────────────────────────────────────────
 
@@ -196,9 +264,12 @@ class AutoGenAuditAdapter:
         )
 
         self._log(event)
-        decision = self._check(event)
 
+        # 先记录事件，再执行安全检查
+        # 否则 _check 抛出 WorkflowBlocked 时事件丢失，导致无 JSON 输出
         self._workflow_events.append(asdict(event))
+
+        decision = self._check(event)
         if decision:
             self._workflow_decisions.append(asdict(decision))
 
@@ -250,6 +321,7 @@ class AutoGenAuditAdapter:
 
         self.update_call_path(sender)
         self.conversation_history.append({
+            "type": "message",
             "sender": sender, "receiver": receiver, "content": content,
         })
 
@@ -269,15 +341,29 @@ class AutoGenAuditAdapter:
         history_summary: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> AuditEvent:
-        """审计工具调用事件（调用前检查）。"""
+        """
+        审计工具调用事件（调用前检查）。
+
+        AuditEvent: sender=Agent, receiver=tool_name
+        call_path 只包含 Agent，不包含工具。
+        """
         if self._blocked:
             raise WorkflowBlocked(self._blocked_reason or BLOCKED_WORKFLOW_MESSAGE)
 
         self.update_call_path(sender)
         final_call_path = list(call_path or self.call_path)
 
+        # 将工具调用记录到对话历史，供 history_summary 使用
+        self.conversation_history.append({
+            "type": "tool_call",
+            "sender": sender,
+            "tool_name": tool_name,
+            "tool_args": _safe_serialize(tool_args or {}),
+            "content": content or str(_safe_serialize(tool_args or {}))[:200],
+        })
+
         return self._emit(
-            "tool_call", sender, None,
+            "tool_call", sender, tool_name,
             tool_name=tool_name,
             tool_args=_safe_serialize(tool_args or {}),
             call_path=final_call_path,
@@ -296,18 +382,40 @@ class AutoGenAuditAdapter:
         history_summary: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> AuditEvent:
-        """审计工具执行结果事件（调用后审核）。"""
+        """
+        审计工具执行结果事件（立即 emit）。
+
+        AuditEvent: sender=tool_name, receiver=调用该工具的 Agent
+        call_path 只包含 Agent，不包含工具。
+
+        Args:
+            sender: 调用该工具的 Agent 名称（用作 receiver）
+            tool_name: 工具名称（用作 sender）
+            result: 工具返回结果
+        """
         if self._blocked:
             raise WorkflowBlocked(self._blocked_reason or BLOCKED_WORKFLOW_MESSAGE)
 
-        self.update_call_path(sender)
+        # 注意：不调用 update_call_path(tool_name)，工具不进入 call_path
         final_call_path = list(call_path or self.call_path)
 
+        # 将工具结果记录到对话历史
+        # sender(history) = tool_name, receiver(history) = agent
+        self.conversation_history.append({
+            "type": "tool_result",
+            "sender": tool_name,
+            "receiver": sender,
+            "tool_name": tool_name,
+            "content": str(result)[:200],
+        })
+
         return self._emit(
-            "tool_result", sender, None,
+            "tool_result",
+            tool_name,       # AuditEvent.sender = 工具
+            sender,          # AuditEvent.receiver = 调用该工具的 Agent
             tool_name=tool_name,
             call_path=final_call_path,
-            content=str(result),
+            content=content or str(result),
             history_summary=history_summary,
             metadata=metadata,
         )

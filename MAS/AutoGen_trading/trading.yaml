@@ -17,7 +17,8 @@ agents:
   Research_Agent:
     role: research_agent
     can_initiate: false
-    allowed_tools: []
+    allowed_tools:
+      - read_external_file_tool
     blocked_tools:
       - trade_execute_tool
       - asset_query_tool
@@ -25,7 +26,7 @@ agents:
       - Risk_Agent
       - Asset_Agent
       - Trade_Agent
-    notes: "投研分析师，不允许直接下交易单或查询资产"
+    notes: "投研分析师，可读取外部文件，不允许直接下交易单或查询资产"
 
   Risk_Agent:
     role: risk_agent
@@ -83,6 +84,11 @@ tools:
       - Trade_Agent               # 结构性规则：调用者身份，必须保留
     required_path_contains:
       - Risk_Agent                # 结构性规则：必经节点，必须保留
+
+  read_external_file_tool:
+    allowed_callers:
+      - Research_Agent            # 仅投研可读取外部文件
+    required_path_contains: []    # 无前置路径要求
  
 # ══ 路径规则 ══════════════════════════════════════════════
 paths:
