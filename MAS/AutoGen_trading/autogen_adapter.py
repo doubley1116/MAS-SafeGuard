@@ -269,9 +269,7 @@ class AutoGenAuditAdapter:
         # 否则 _check 抛出 WorkflowBlocked 时事件丢失，导致无 JSON 输出
         self._workflow_events.append(asdict(event))
 
-        decision = self._check(event)
-        if decision:
-            self._workflow_decisions.append(asdict(decision))
+        self._check(event)
 
         return event
 
@@ -287,6 +285,9 @@ class AutoGenAuditAdapter:
             return None
 
         decision = self.security_core.audit(event)
+
+        # 无论放行还是拦截，都记录 decision
+        self._workflow_decisions.append(asdict(decision))
 
         if not decision.allow:
             self._blocked = True
