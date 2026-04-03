@@ -18,7 +18,7 @@ if audit_gen_dir not in sys.path:
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
-from models.base_models import BaseAttackerModel, BaseDefenderModel, RolloutSample, PPOConfig
+from models.base_models import BaseAttackerModel, BaseDefenderModel, RolloutSample, GRPOConfig
 from skeletons import SKELETONS
 from generator import sample_values
 

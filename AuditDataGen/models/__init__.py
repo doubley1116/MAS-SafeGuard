@@ -1,2 +1,2 @@
 # models package
-from .base_models import BaseAttackerModel, BaseDefenderModel, RolloutSample, PPOConfig
+from .base_models import BaseAttackerModel, BaseDefenderModel, RolloutSample, GRPOConfig, PPOConfig

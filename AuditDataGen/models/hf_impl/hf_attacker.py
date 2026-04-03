@@ -10,11 +10,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # 兼容直接运行和包导入两种场景
 try:
-    from ..base_models import BaseAttackerModel, RolloutSample, PPOConfig
+    from ..base_models import BaseAttackerModel, RolloutSample, GRPOConfig
 except ImportError:
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-    from models.base_models import BaseAttackerModel, RolloutSample, PPOConfig
+    from models.base_models import BaseAttackerModel, RolloutSample, GRPOConfig
 
 # 尝试导入 peft (LoRA)
 try:
@@ -26,7 +26,7 @@ except ImportError:
 
 # 尝试导入 trl
 try:
-    from trl import PPOTrainer, PPOConfig as TRLPPOConfig
+    from trl import PPOTrainer, GRPOConfig as TRLGRPOConfig
     HAS_TRL = True
 except ImportError:
     HAS_TRL = False
@@ -96,7 +96,7 @@ class HFAttackerModel(BaseAttackerModel):
             )
             self.ref_model.eval()
             
-            self.ppo_config = TRLPPOConfig(
+            self.ppo_config = TRLGRPOConfig(
                 batch_size=8,
                 mini_batch_size=2,
                 log_with=None,
@@ -208,7 +208,7 @@ class HFAttackerModel(BaseAttackerModel):
         
         return response_log_probs.mean().item()
     
-    def update(self, samples: List[RolloutSample], config: PPOConfig):
+    def update(self, samples: List[RolloutSample], config: GRPOConfig):
         """GRPO 更新"""
         if not samples:
             return {}

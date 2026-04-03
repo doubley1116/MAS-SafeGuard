@@ -461,7 +461,7 @@ def generate_dataset(
     skeletons = SKELETONS
     if scenario_filter:
         # 支持新旧两种命名
-        from train.run_adversarial_ppo import SCENARIO_RENAME
+        from train.run_adversarial_grpo import SCENARIO_RENAME
         mapped_filter = set()
         for s in scenario_filter:
             if s in SCENARIO_RENAME:
