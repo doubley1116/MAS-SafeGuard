@@ -77,16 +77,16 @@ python src/generator.py --n 5 --out model_data --seed 42
 
 ## 模型训练
 
-### 对抗 PPO 训练（Attacker vs Defender）
+### 对抗 GRPO 训练（Attacker vs Defender）
 
 ```bash
-python train/run_adversarial_ppo.py --config configs/adversarial_ppo_config.yaml
+python train/run_adversarial_grpo.py --config configs/adversarial_grpo_config.yaml
 ```
 
 本地轻量测试配置：
 
 ```bash
-python train/run_adversarial_ppo.py --config configs/local_1_5B_test_config.yaml
+python train/run_adversarial_grpo.py --config configs/local_1_5B_test_config.yaml
 ```
 
 训练产物保存至 `output_local_test/`，目录结构：

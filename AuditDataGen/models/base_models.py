@@ -1,7 +1,7 @@
 """
 base_models.py
 ──────────────
-对抗性PPO训练的统一模型基类定义。
+对抗性GRPO训练的统一模型基类定义。
 """
 
 from abc import ABC, abstractmethod
@@ -11,7 +11,7 @@ import torch
 
 class BaseAttacker(ABC):
     """
-    攻击者模型基类（与train/adversarial_ppo.py兼容）
+    攻击者模型基类（与train/adversarial_grpo.py兼容）
     """
     
     @abstractmethod
@@ -25,7 +25,7 @@ class BaseAttacker(ABC):
         pass
     
     def get_action_prob(self, states: List[str], actions: List[str]) -> torch.Tensor:
-        """获取动作概率（PPO训练需要）"""
+        """获取动作概率（GRPO训练需要）"""
         # 默认实现返回随机概率
         return torch.rand(len(states))
     
@@ -36,7 +36,7 @@ class BaseAttacker(ABC):
 
 class BaseDefender(ABC):
     """
-    防御者模型基类（与train/adversarial_ppo.py兼容）
+    防御者模型基类（与train/adversarial_grpo.py兼容）
     """
     
     @abstractmethod
@@ -53,7 +53,7 @@ class BaseDefender(ABC):
         pass
     
     def get_action_prob(self, states: List[str], actions: List[str]) -> torch.Tensor:
-        """获取动作概率（PPO训练需要）"""
+        """获取动作概率（GRPO训练需要）"""
         # 默认实现返回随机概率
         return torch.rand(len(states))
     
@@ -63,7 +63,7 @@ class BaseDefender(ABC):
 
 
 # ============================================================================
-# PPO训练专用基类（与src/adversarial_ppo.py兼容）
+# GRPO训练专用基类（与src/adversarial_grpo.py兼容）
 # ============================================================================
 
 class RolloutSample:
@@ -93,13 +93,13 @@ class GRPOConfig:
     def __init__(self, 
                  batch_size: int = 8,
                  group_size: int = 4,
-                 ppo_epochs: int = 4,
+                 grpo_epochs: int = 4,
                  lr: float = 1e-5,
                  clip_epsilon: float = 0.2,
                  entropy_coef: float = 0.01):
         self.batch_size = batch_size
         self.group_size = group_size  # GRPO: 每个prompt生成的response数量
-        self.ppo_epochs = ppo_epochs
+        self.grpo_epochs = grpo_epochs
         self.lr = lr
         self.clip_epsilon = clip_epsilon
         self.entropy_coef = entropy_coef
@@ -122,11 +122,11 @@ class GRPOConfig:
 
 # 向后兼容：PPOConfig 仍可用，内部自动映射到 GRPOConfig
 class PPOConfig(GRPOConfig):
-    """PPO训练配置（已迁移到GRPO，无Value模型）"""
-    def __init__(self, 
+    """已废弃，请使用 GRPOConfig。保留仅供向后兼容。"""
+    def __init__(self,
                  batch_size: int = 8,
                  group_size: int = 4,
-                 ppo_epochs: int = 4,
+                 grpo_epochs: int = 4,
                  lr: float = 1e-5,
                  gamma: float = 0.99,
                  lam: float = 0.95,
@@ -136,7 +136,7 @@ class PPOConfig(GRPOConfig):
         super().__init__(
             batch_size=batch_size,
             group_size=group_size,
-            ppo_epochs=ppo_epochs,
+            grpo_epochs=grpo_epochs,
             lr=lr,
             clip_epsilon=clip_epsilon,
             entropy_coef=entropy_coef
@@ -145,7 +145,7 @@ class PPOConfig(GRPOConfig):
 
 class BaseAttackerModel(ABC):
     """
-    PPO攻击者模型基类（与src/adversarial_ppo.py兼容）
+    GRPO攻击者模型基类（与src/adversarial_grpo.py兼容）
     """
     
     @abstractmethod
@@ -163,8 +163,8 @@ class BaseAttackerModel(ABC):
         return self.log_prob(prompt, response)
     
     @abstractmethod
-    def update(self, samples: List[RolloutSample], config: PPOConfig):
-        """PPO更新"""
+    def update(self, samples: List[RolloutSample], config: GRPOConfig):
+        """GRPO更新"""
         pass
     
     @abstractmethod
@@ -180,7 +180,7 @@ class BaseAttackerModel(ABC):
 
 class BaseDefenderModel(ABC):
     """
-    PPO防御者模型基类（与src/adversarial_ppo.py兼容）
+    GRPO防御者模型基类（与src/adversarial_grpo.py兼容）
     """
     
     @abstractmethod
@@ -218,67 +218,74 @@ class BaseDefenderModel(ABC):
 
 
 # ============================================================================
-# 适配器类：让PPO模型兼容训练器接口
+# 适配器类：让GRPO模型兼容训练器接口
 # ============================================================================
 
-class PPOAttackerAdapter(BaseAttacker):
+class GRPOAttackerAdapter(BaseAttacker):
     """将BaseAttackerModel适配为BaseAttacker接口"""
-    
-    def __init__(self, ppo_model: BaseAttackerModel):
-        self.ppo_model = ppo_model
+
+    def __init__(self, grpo_model: BaseAttackerModel):
+        self.grpo_model = grpo_model
         self.history = []
-    
+
     def generate_attack(self, context: str) -> str:
         # 简单提示构造
         prompt = f"生成攻击载荷: {context}"
-        return self.ppo_model.generate(prompt, scenario_type="unknown")
-    
+        return self.grpo_model.generate(prompt, scenario_type="unknown")
+
     def update_policy(self, rewards: List[float]):
-        # 简化的更新逻辑，实际PPO更新在PPO模型内部完成
-        print(f"PPOAttackerAdapter收到奖励: {rewards}")
-    
+        # 简化的更新逻辑，实际GRPO更新在模型内部完成
+        print(f"GRPOAttackerAdapter收到奖励: {rewards}")
+
     def get_action_prob(self, states: List[str], actions: List[str]) -> torch.Tensor:
         # 计算平均对数概率
         probs = []
         for state, action in zip(states, actions):
-            prob = self.ppo_model.log_prob(state, action)
+            prob = self.grpo_model.log_prob(state, action)
             probs.append(prob)
         return torch.tensor(probs)
-    
+
     def parameters(self):
-        # 返回PPO模型的参数
+        # 返回GRPO模型的参数
         return []
 
 
-class PPODefenderAdapter(BaseDefender):
+class GRPODefenderAdapter(BaseDefender):
     """将BaseDefenderModel适配为BaseDefender接口"""
-    
-    def __init__(self, ppo_model: BaseDefenderModel):
-        self.ppo_model = ppo_model
-    
+
+    def __init__(self, grpo_model: BaseDefenderModel):
+        self.grpo_model = grpo_model
+
     def detect_attack(self, content: str) -> Tuple[float, str]:
-        label, confidence = self.ppo_model.predict(content)
+        label, confidence = self.grpo_model.predict(content)
         # 转换标签为风险评分
         risk_score = confidence if label == "MALICIOUS" else 1 - confidence
         reason = f"模型预测: {label} (置信度: {confidence:.2f})"
         return risk_score, reason
-    
+
     def update_policy(self, rewards: List[float]):
         # 简化的更新逻辑
-        print(f"PPODefenderAdapter收到奖励: {rewards}")
-    
+        print(f"GRPODefenderAdapter收到奖励: {rewards}")
+
     def get_action_prob(self, states: List[str], actions: List[str]) -> torch.Tensor:
         # 对于防御者，动作概率较难定义，返回随机值
         return torch.rand(len(states))
-    
+
     def parameters(self):
         return []
+
+
+# 向后兼容别名
+PPOAttackerAdapter = GRPOAttackerAdapter
+PPODefenderAdapter = GRPODefenderAdapter
 
 
 # 导出所有基类
 __all__ = [
     'BaseAttacker', 'BaseDefender',
     'BaseAttackerModel', 'BaseDefenderModel',
-    'RolloutSample', 'DefenderRolloutSample', 'PPOConfig',
-    'PPOAttackerAdapter', 'PPODefenderAdapter'
+    'RolloutSample', 'DefenderRolloutSample', 'GRPOConfig',
+    'GRPOAttackerAdapter', 'GRPODefenderAdapter',
+    # 向后兼容别名
+    'PPOConfig', 'PPOAttackerAdapter', 'PPODefenderAdapter',
 ]

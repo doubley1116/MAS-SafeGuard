@@ -145,7 +145,7 @@ def find_attack_event(events: list[dict], scenario: str) -> tuple[Optional[int],
     返回 (idx, event) 对，即该 trace 中应被 Defender 拦截的那一条事件。
     找不到返回 (None, None)。
 
-    攻击位置逻辑（与 adversarial_ppo.py 的 rollout() 和 _save_augmented_events() 保持一致）：
+    攻击位置逻辑（与 adversarial_grpo.py 的 rollout() 和 _save_augmented_events() 保持一致）：
     - PathBypass / CallerImpersonation / SemanticInjection / PromptInfection / RouterHijacking：
       攻击者是 User，取第一条 User message
     - IPI：tool_call 之后的第一条 message

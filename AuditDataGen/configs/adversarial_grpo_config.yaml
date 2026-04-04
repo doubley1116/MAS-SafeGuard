@@ -7,7 +7,7 @@ train:
   learning_rate: 1e-5         # 学习率
   clip_epsilon: 0.2           # GRPO裁剪系数
   entropy_coef: 0.01          # 熵系数
-  ppo_epochs: 4               # 每批次GRPO更新轮数
+  grpo_epochs: 4              # 每批次GRPO更新轮数
 
 # 模型配置
 models:

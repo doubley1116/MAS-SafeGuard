@@ -39,7 +39,7 @@ class Skeleton:
         }
 
 # 2. 抽象接口
-from models.base_models import BaseAttackerModel, BaseDefenderModel, RolloutSample, DefenderRolloutSample, PPOConfig
+from models.base_models import BaseAttackerModel, BaseDefenderModel, RolloutSample, DefenderRolloutSample, GRPOConfig
 
 # 3. Mock 实现（已移至 mock_models.py）
 from mock_models import MockAttackerModel, MockDefenderModel
@@ -115,7 +115,7 @@ def parse_skeleton(data: dict) -> Skeleton:
         messages=data["messages"]
     )
 
-# 6. PPO 核心
+# 6. 历史遗留 PPO 辅助函数（当前未使用，保留供参考）
 def compute_advantages(rewards: List[float], values: List[float], gamma: float, lam: float) -> List[float]:
     advantages = []
     gae = 0
@@ -451,9 +451,9 @@ class CurriculumScheduler:
             f"输出: "
         )
 # 8. GRPO Rollout：按组采样 + 组内相对优势计算
-class AdversarialPPOTrainer:
+class AdversarialGRPOTrainer:
     def __init__(self, attacker: BaseAttackerModel, defender: BaseDefenderModel,
-                 config: PPOConfig, skeleton_pool: List[Skeleton],
+                 config: GRPOConfig, skeleton_pool: List[Skeleton],
                  max_history_size: int = 100, phase_duration: int = 5,
                  rule_score_fn: Optional[Callable] = None,
                  lambda_div: float = 0.3,
@@ -713,7 +713,7 @@ class AdversarialPPOTrainer:
                 
                 f.write(json.dumps(rewritten, ensure_ascii=False) + "\n")
 
-    def train(self, iterations: int, checkpoint_interval: int = 20, output_dir: str = "data/output_ppo"):
+    def train(self, iterations: int, checkpoint_interval: int = 20, output_dir: str = "data/output_grpo"):
         """执行训练循环"""
         for i in range(iterations):
             # 根据当前迭代更新课程阶段
@@ -762,7 +762,7 @@ class AdversarialPPOTrainer:
 # 9. CLI
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="对抗性PPO训练")
+    parser = argparse.ArgumentParser(description="对抗性GRPO训练")
     parser.add_argument("--iters", type=int, default=20, help="训练迭代次数")
     parser.add_argument("--batch", type=int, default=8, help="批次大小")
     parser.add_argument("--detect-rate", type=float, default=0.5,
@@ -780,8 +780,8 @@ if __name__ == "__main__":
     ]
     
     # 创建训练器
-    config = PPOConfig(batch_size=args.batch)
-    trainer = AdversarialPPOTrainer(attacker, defender, config, skeleton_pool)
+    config = GRPOConfig(batch_size=args.batch)
+    trainer = AdversarialGRPOTrainer(attacker, defender, config, skeleton_pool)
     
     # 开始训练
     trainer.train(args.iters)

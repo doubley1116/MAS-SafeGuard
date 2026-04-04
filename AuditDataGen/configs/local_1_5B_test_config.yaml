@@ -19,7 +19,7 @@ train:
   batch_size: 4          
   group_size: 2
   learning_rate: 1.0e-5
-  ppo_epochs: 2
+  grpo_epochs: 2
 
 output:  # 关键修复3：对齐代码里的 output.dir 层级
   dir: "output_local_test"

@@ -1,7 +1,7 @@
 """
-run_adversarial_ppo.py
-----------------------
-对抗性PPO训练的统一运行脚本。
+run_adversarial_grpo.py
+-----------------------
+对抗性GRPO训练的统一运行脚本。
 集成骨架数据、模型选择和训练循环。
 """
 
@@ -66,7 +66,7 @@ DEFAULT_CONFIG = {
     "train": {
         "batch_size": 8,
         "group_size": 4,
-        "ppo_epochs": 4,
+        "grpo_epochs": 4,
         "learning_rate": 1e-5,
         "gamma": 0.99,
         "lam": 0.95,
@@ -83,14 +83,14 @@ DEFAULT_CONFIG = {
     },
     "output": {
         "checkpoint_interval": 20,
-        "dir": "output_ppo"
+        "dir": "output_grpo"
     }
 }
 
 # 导入必要的模块（基础模块）
 try:
     from src.skeletons import SKELETONS, FILLERS
-    from src.adversarial_ppo import Skeleton, parse_skeleton, AdversarialPPOTrainer, PPOConfig
+    from src.adversarial_grpo import Skeleton, parse_skeleton, AdversarialGRPOTrainer, GRPOConfig
     from src.mock_models import MockAttackerModel, MockDefenderModel
     from models.base_models import BaseAttackerModel, BaseDefenderModel
     print("[OK] 基础模块导入成功")
@@ -328,7 +328,7 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
     
     if config_path is None:
         # 默认配置文件路径
-        config_path = os.path.join(project_root, "configs", "adversarial_ppo_config.yaml")
+        config_path = os.path.join(project_root, "configs", "adversarial_grpo_config.yaml")
     
     if not os.path.exists(config_path):
         print(f"[FAIL] 配置文件不存在: {config_path}")
@@ -352,9 +352,9 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
 
 
 def train_from_config(config: Dict[str, Any]):
-    """根据配置字典执行对抗性PPO训练"""
+    """根据配置字典执行对抗性GRPO训练"""
     print("=" * 60)
-    print("对抗性PPO训练启动 (从配置文件)")
+    print("对抗性GRPO训练启动 (从配置文件)")
     print("=" * 60)
 
     # 1. 加载骨架数据
@@ -390,10 +390,10 @@ def train_from_config(config: Dict[str, Any]):
     # 3. 创建训练器
     print(f"\n[3/4] 创建训练器...")
     train_config = config.get("train", {})
-    config_ppo = PPOConfig(
+    config_grpo = GRPOConfig(
         batch_size=train_config.get("batch_size", 8),
         group_size=train_config.get("group_size", 4),   # 问题2修复：从配置读取 group_size
-        ppo_epochs=train_config.get("ppo_epochs", 4),
+        grpo_epochs=train_config.get("grpo_epochs", 4),
         lr=train_config.get("learning_rate", 1e-5),
         gamma=train_config.get("gamma", 0.99),
         lam=train_config.get("lam", 0.95),
@@ -412,14 +412,14 @@ def train_from_config(config: Dict[str, Any]):
     phase_duration = curriculum_config.get("phase_duration", 5)
     max_history_size = diversity_config.get("history_size", 100)
     checkpoint_interval = output_config.get("checkpoint_interval", 20)
-    output_dir = output_config.get("dir", "output_ppo")
+    output_dir = output_config.get("dir", "output_grpo")
     lambda_div = reward_weights.get("diversity", 0.3)
     defender_lr = train_config.get("defender_lr", rl_config.get("defender_lr", 1e-6))
 
-    trainer = AdversarialPPOTrainer(
+    trainer = AdversarialGRPOTrainer(
         attacker=attacker,
         defender=defender,
-        config=config_ppo,
+        config=config_grpo,
         skeleton_pool=skeleton_pool,
         max_history_size=max_history_size,
         phase_duration=phase_duration,
@@ -464,13 +464,13 @@ def train_from_config(config: Dict[str, Any]):
 def main():
     """主函数：从配置文件运行训练"""
     parser = argparse.ArgumentParser(
-        description="对抗性PPO训练 - 从配置文件运行",
+        description="对抗性GRPO训练 - 从配置文件运行",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
     # 只保留一个配置参数
     parser.add_argument("--config", type=str, default=None,
-                       help="配置文件路径（默认: configs/adversarial_ppo_config.yaml）")
+                       help="配置文件路径（默认: configs/adversarial_grpo_config.yaml）")
     
     args = parser.parse_args()
     
