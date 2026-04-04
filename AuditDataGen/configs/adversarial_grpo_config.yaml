@@ -43,6 +43,10 @@ curriculum:
 
 # 多样性奖励配置
 diversity:
-  lambda_div: 1.0             # 多样性奖励权重
   similarity_threshold: 0.85  # 相似度阈值
-  history_size: 100            # 历史嵌入缓存大小
+  history_size: 40             # 历史嵌入缓存大小（每类型，覆盖约20轮×2条/轮）
+
+# RL奖励权重配置（lambda_div实际读取路径）
+rl:
+  reward_weights:
+    diversity: 1.0             # 多样性奖励权重（对应代码 rl.reward_weights.diversity）

@@ -392,13 +392,10 @@ def train_from_config(config: Dict[str, Any]):
     train_config = config.get("train", {})
     config_grpo = GRPOConfig(
         batch_size=train_config.get("batch_size", 8),
-        group_size=train_config.get("group_size", 4),   # 问题2修复：从配置读取 group_size
+        group_size=train_config.get("group_size", 4),
         grpo_epochs=train_config.get("grpo_epochs", 4),
         lr=train_config.get("learning_rate", 1e-5),
-        gamma=train_config.get("gamma", 0.99),
-        lam=train_config.get("lam", 0.95),
         clip_epsilon=train_config.get("clip_epsilon", 0.2),
-        vf_coef=train_config.get("vf_coef", 0.5),
         entropy_coef=train_config.get("entropy_coef", 0.01)
     )
 

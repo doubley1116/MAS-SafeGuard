@@ -84,39 +84,15 @@ class HFAttackerModel(BaseAttackerModel):
         else:
             print("[WARN] 未启用 LoRA")
         
-        # 是否使用 TRL PPO
-        self.use_trl = HAS_TRL
-        if self.use_trl:
-            self.ref_model = AutoModelForCausalLM.from_pretrained(
-                model_name, 
-                torch_dtype=torch.bfloat16,
-                device_map=device,
-                attn_implementation="sdpa",  # 跨平台兼容
-                trust_remote_code=True
-            )
-            self.ref_model.eval()
-            
-            self.ppo_config = TRLGRPOConfig(
-                batch_size=8,
-                mini_batch_size=2,
-                log_with=None,
-                learning_rate=1e-5
-            )
-            self.ppo_trainer = PPOTrainer(
-                config=self.ppo_config,
-                model=self.model,
-                ref_model=self.ref_model,
-                tokenizer=self.tokenizer
-            )
-            print("[OK] 使用 TRL PPO 训练器")
-        else:
-            self.ref_model = None
-            self.ppo_trainer = None
-            self.optimizer = torch.optim.AdamW(
-                filter(lambda p: p.requires_grad, self.model.parameters()), 
-                lr=1e-5
-            )
-            print("[OK] 使用简化训练（无 TRL）")
+        # 始终创建 optimizer（GRPO update() 直接使用，不依赖 TRL）
+        self.optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, self.model.parameters()),
+            lr=1e-5
+        )
+        self.ref_model = None
+        self.ppo_trainer = None
+        self.use_trl = False
+        print("[OK] 使用自定义 GRPO 训练器（AdamW + clip）")
     
     def generate(self, prompt: str, scenario_type: str, **kwargs) -> str:
         """生成攻击内容"""
@@ -219,66 +195,70 @@ class HFAttackerModel(BaseAttackerModel):
         advantages = torch.tensor([s.advantage for s in samples]).to(self.device)
         clip_epsilon = config.clip_epsilon
         n = len(samples)
+        grpo_epochs = config.grpo_epochs  # 每批次重复训练轮数
 
-        # 梯度累积：每个 sample 单独 forward+backward，及时释放计算图和大中间张量
-        self.optimizer.zero_grad()
         total_policy_loss = 0.0
-        for i, sample in enumerate(samples):
-            prompt = sample.prompt if sample.prompt else sample.skeleton.description
-            text = prompt + " " + sample.response
-            inputs = self.tokenizer(
-                text, return_tensors="pt",
-                truncation=True, max_length=1024
-            )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        for epoch in range(grpo_epochs):
+            # 梯度累积：每个 sample 单独 forward+backward，及时释放计算图和大中间张量
+            self.optimizer.zero_grad()
+            epoch_loss = 0.0
+            for i, sample in enumerate(samples):
+                prompt = sample.prompt if sample.prompt else sample.skeleton.description
+                text = prompt + " " + sample.response
+                inputs = self.tokenizer(
+                    text, return_tensors="pt",
+                    truncation=True, max_length=1024
+                )
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-            outputs = self.model(**inputs)
-            logits = outputs.logits
+                outputs = self.model(**inputs)
+                logits = outputs.logits
 
-            prompt_len = len(self.tokenizer.encode(prompt))
-            input_ids = inputs["input_ids"]
-            response_ids = input_ids[:, prompt_len:]
+                prompt_len = len(self.tokenizer.encode(prompt))
+                input_ids = inputs["input_ids"]
+                response_ids = input_ids[:, prompt_len:]
 
-            if response_ids.size(1) == 0:
-                del logits, outputs, inputs
+                if response_ids.size(1) == 0:
+                    del logits, outputs, inputs
+                    torch.cuda.empty_cache()
+                    continue
+
+                log_probs = torch.log_softmax(logits, dim=-1)
+                del logits
+                response_log_probs = torch.gather(
+                    log_probs[:, prompt_len:-1, :],
+                    dim=2,
+                    index=response_ids[:, :-1].unsqueeze(-1)
+                ).squeeze(-1)
+                del log_probs
+
+                new_lp = response_log_probs.mean()
+                del response_log_probs
+
+                # 单样本 GRPO loss，除以 n 实现梯度累积等效平均
+                ratio_i = torch.exp(new_lp - old_log_probs[i])
+                surr1_i = ratio_i * advantages[i]
+                surr2_i = torch.clamp(ratio_i, 1.0 - clip_epsilon, 1.0 + clip_epsilon) * advantages[i]
+                loss_i = -torch.min(surr1_i, surr2_i) / n
+                loss_i.backward()
+                epoch_loss += loss_i.item()
+
+                del outputs, inputs, loss_i
                 torch.cuda.empty_cache()
-                continue
 
-            log_probs = torch.log_softmax(logits, dim=-1)
-            del logits  # 释放大中间张量，只保留 log_probs
-            response_log_probs = torch.gather(
-                log_probs[:, prompt_len:-1, :],
-                dim=2,
-                index=response_ids[:, :-1].unsqueeze(-1)
-            ).squeeze(-1)
-            del log_probs  # 释放大中间张量
-
-            new_lp = response_log_probs.mean()
-            del response_log_probs
-
-            # 单样本 GRPO loss，除以 n 实现梯度累积等效平均
-            ratio_i = torch.exp(new_lp - old_log_probs[i])
-            surr1_i = ratio_i * advantages[i]
-            surr2_i = torch.clamp(ratio_i, 1.0 - clip_epsilon, 1.0 + clip_epsilon) * advantages[i]
-            loss_i = -torch.min(surr1_i, surr2_i) / n
-            loss_i.backward()
-            total_policy_loss += loss_i.item()
-
-            del outputs, inputs, loss_i
-            torch.cuda.empty_cache()
-
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-        self.optimizer.step()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            self.optimizer.step()
+            total_policy_loss += epoch_loss
 
         avg_reward = torch.tensor([s.reward for s in samples]).mean().item()
         stats = {
-            "policy_loss": total_policy_loss,
+            "policy_loss": total_policy_loss / grpo_epochs,
             "avg_reward": avg_reward,
             "samples": n,
         }
 
-        print(f"  [HFAttacker] GRPO更新 | samples={n} "
-              f"avg_reward={avg_reward:.3f} policy_loss={total_policy_loss:.4f}")
+        print(f"  [HFAttacker] GRPO更新 | epochs={grpo_epochs} samples={n} "
+              f"avg_reward={avg_reward:.3f} policy_loss={stats['policy_loss']:.4f}")
         return stats
     
     def save(self, path: str):

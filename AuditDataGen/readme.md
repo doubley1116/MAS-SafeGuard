@@ -44,34 +44,10 @@ data/d4/
 参数说明：
 
 | 参数 | 默认值 | 说明 |
-|------|--------|------|
+| --- | --- | --- |
 | `--input` | `output_trace_real/audit.jsonl` | D1 数据文件路径 |
 | `--d3-out` | `data/d3` | D3 输出目录 |
 | `--d4-out` | `data/d4` | D4 输出目录 |
-
----
-
-### model_data：规则填充全量数据（用于模型训练预热）
-
-不依赖 LLM，完全本地运行，覆盖全部 42 条骨架（7 类攻击 × Trading/Healthcare/Ecommerce + benign）。
-
-```bash
-python src/generator.py --n 5 --out model_data --seed 42
-```
-
-输出：
-
-- `model_data/audit.jsonl`：完整 AuditEvent 序列（含 hash chain、history_summary、audit_decision）
-- `model_data/sft_train.jsonl`：SFT 训练格式（input 包含 current_event + history_summary + call_path）
-
-常用参数：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--n` | 5 | 每条骨架采样次数 |
-| `--scenario-type` | 全部 | 逗号分隔，如 `SemanticInjection,IPI` |
-| `--no-sft` | - | 不生成 sft_train.jsonl |
-| `--no-shuffle` | - | 不打乱顺序 |
 
 ---
 
@@ -89,13 +65,13 @@ python train/run_adversarial_grpo.py --config configs/adversarial_grpo_config.ya
 python train/run_adversarial_grpo.py --config configs/local_1_5B_test_config.yaml
 ```
 
-训练产物保存至 `output_local_test/`，目录结构：
+训练产物保存至 `output/`（可在 config 中修改 `output.dir`），目录结构：
 
 ```text
-output_local_test/
-  checkpoint_0005/
-    attacker/   # LoRA adapter
-    defender/   # BERT-based defender
+output/
+  checkpoint_0020/
+    attacker/   # LoRA adapter (Qwen2.5-7B)
+    defender/   # HF 分类器 (Qwen2.5-7B)
     samples.jsonl
   final_model/
     attacker/
@@ -113,7 +89,7 @@ trace_generator 生成的是完整多步 AuditEvent 序列（用于 D1 风格数
 python src/trace_generator.py --n 2 --out output_trace
 
 # 真实 Attacker + 指定场景
-python src/trace_generator.py --model-dir output_local_test/final_model/attacker --n 10 --out output_trace_real 
+python src/trace_generator.py --model-dir output/final_model/attacker --n 10 --out output_trace_real
 
 # 需要 API 补全非攻击位置时，在 .env 中设置 API_KEY / BASE_URL / MODEL
 ```
@@ -132,15 +108,15 @@ print(f'Total: {len(SKELETONS)}')
 "
 ```
 
-当前共 **42 条骨架**，覆盖：
+当前共 **80 条骨架**，覆盖：
 
-| 攻击类型 | Trading | Healthcare | Ecommerce |
-| --- | --- | --- | --- |
-| PathBypass | 3+1支路 | 1 | 1 |
-| CallerImpersonation | 3 | 1 | 1 |
-| SemanticInjection | 3+1支路 | 1 | 1 |
-| RouterHijacking | 3 | 1 | 1 |
-| IPI | 3 | 1 | 1 |
-| AiTM | 3 | 1 | 1 |
-| PromptInfection | 3 | 1 | 1 |
-| benign | 3 | 1 | 1 |
+| 攻击类型 | Trading | Healthcare | E-commerce | 合计 |
+| --- | --- | --- | --- | --- |
+| PathBypass | 5 | 4 | 3 | 12 |
+| CallerImpersonation | 4 | 3 | 3 | 10 |
+| SemanticInjection | 4 | 4 | 3 | 11 |
+| RouterHijacking | 3 | 3 | 3 | 9 |
+| IPI | 3 | 3 | 3 | 9 |
+| AiTM | 4 | 3 | 3 | 10 |
+| PromptInfection | 4 | 3 | 3 | 10 |
+| benign | 3 | 3 | 3 | 9 |
