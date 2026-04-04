@@ -43,6 +43,34 @@ class RuleEngine:
             path = path[:-1]
         return path
 
+    # ── 辅助：判断节点名是否是用户类型（User/UserProxy 等变体）──
+
+    @staticmethod
+    def _is_user_node(name: str) -> bool:
+        """判断节点名是否是用户/代理类型，用于路径匹配时的容错。"""
+        return name.lower() in (
+            "user", "userproxy", "user_proxy", "userproxyagent",
+            "human", "human_proxy",
+        )
+
+    def _normalize_path_for_match(self, actual_path: List[str], sequence: List[str]) -> List[str]:
+        """
+        对 actual_path 做标准化，确保与 sequence 的用户节点名一致。
+
+        场景：YAML 里写 "UserProxy"，但 adapter 记录的是 "User"（或反过来）。
+        策略：如果 sequence 的第一个节点是用户类型，且 actual_path 的第一个节点也是用户类型，
+              将 actual_path 的第一个节点替换为 sequence 的第一个节点。
+        """
+        if not actual_path or not sequence:
+            return actual_path
+
+        if self._is_user_node(sequence[0]) and self._is_user_node(actual_path[0]):
+            normalized = list(actual_path)
+            normalized[0] = sequence[0]
+            return normalized
+
+        return actual_path
+
     # ── 规则1：工具调用者必须在 allowed_callers 内 ──────────────────
 
     def _check_tool_caller(self, event: AuditEvent) -> List[tuple]:
@@ -65,7 +93,17 @@ class RuleEngine:
         if not tool_policy:
             return []
         required = tool_policy.get("required_path_contains", [])
-        missing = [node for node in required if node not in event.call_path]
+        # 对用户类型节点做容错：如果 required 里有用户节点，
+        # call_path 里有任意用户类型节点即视为满足
+        call_path_set = set(event.call_path)
+        has_user_in_path = any(self._is_user_node(n) for n in event.call_path)
+        missing = []
+        for node in required:
+            if node in call_path_set:
+                continue
+            if self._is_user_node(node) and has_user_in_path:
+                continue
+            missing.append(node)
         if missing:
             return [(
                 0.92,
@@ -171,6 +209,9 @@ class RuleEngine:
                 f"{event.tool_name} 声明了 path_rule={path_rule}，但当前 call_path 为空"
             )]
 
+        # 标准化用户节点名，防止 User/UserProxy 不一致导致误报
+        actual_path = self._normalize_path_for_match(actual_path, sequence)
+
         if strict:
             if actual_path != sequence:
                 return [(
@@ -180,15 +221,18 @@ class RuleEngine:
                 )]
             return []
 
+        # 有序子序列匹配
         idx = 0
         for node in actual_path:
             if idx < len(sequence) and node == sequence[idx]:
                 idx += 1
         if idx < len(sequence):
+            missing = [sequence[i] for i in range(idx, len(sequence))]
             return [(
                 0.92,
                 "path_rule_violation",
-                f"{event.tool_name} 要求路径包含有序序列 {sequence}，实际路径：{actual_path}"
+                f"{event.tool_name} 要求路径包含有序序列 {sequence}，"
+                f"实际路径：{actual_path}，缺少节点：{missing}"
             )]
         return []
 
@@ -208,7 +252,10 @@ class RuleEngine:
                 continue
             expected_prev = seq[-2]
             actual_prev = event.call_path[-2] if len(event.call_path) >= 2 else None
+            # 用户节点容错
             if actual_prev != expected_prev:
+                if self._is_user_node(expected_prev) and actual_prev and self._is_user_node(actual_prev):
+                    continue  # User/UserProxy 视为等价，不报错
                 return [(
                     0.93,
                     "strict_path_violation",

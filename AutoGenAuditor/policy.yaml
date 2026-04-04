@@ -80,7 +80,6 @@ tools:
     allowed_callers:
       - Agent_B
     required_path_contains:
-      - UserProxy
       - Agent_A               # 必须先经过 Agent_A
     path_rule: valid_b_path
     approval_required: true
@@ -97,13 +96,11 @@ paths:
 
   valid_a_path:
     sequence:
-      - UserProxy
       - Agent_A
     strict: false
 
   valid_b_path:
     sequence:
-      - UserProxy
       - Agent_A
       - Agent_B
     strict: false

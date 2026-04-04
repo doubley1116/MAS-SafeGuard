@@ -45,6 +45,13 @@ class AuditEvent:
     # 无此字段：LLM 看到"买入NVDA"可能误判为正常操作
     # 有此字段：LLM 能看到上下文中"风控默认通过"等暗示性内容
 
+    task: str = ""
+    # 用户原始任务的核心意图（一句话，≤80字符）
+    # 由 adapter 的 set_user_task() 在工作流启动时提取
+    # 每条 AuditEvent 都携带，作为意图一致性检测的锚点
+    # 审核模型通过对比 task 与 content/tool_args 检测意图偏移和参数篡改
+    # 示例："将SKU-002价格改为5元" / "分析客户C001的TSLA持仓"
+
     # ══ 事件追踪字段（用于审计日志系统）════════════════════════════════════════
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     # 单个事件的唯一标识符，用于日志去重、关联等操作

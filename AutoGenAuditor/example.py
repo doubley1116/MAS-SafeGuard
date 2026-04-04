@@ -45,15 +45,14 @@ llm_config = {"config_list": config_list, "temperature": 0, "timeout": 120}
 # ═══════════════════════════════════════════════════════════════
 
 audit_adapter = AutoGenAuditAdapter(
-    #yaml_path="policy.yaml",   # 传入你的安全策略文件
-    trace_id="",               # 每个场景开始时通过 reset_state 设置
+    yaml_path="policy.yaml",   # 传入你的安全策略文件
+    trace_id="2026",               # 每个场景开始时通过 reset_state 设置
 )
-
+audit_adapter.register_no_llm_agent("UserProxy")  
 
 # ═══════════════════════════════════════════════════════════════
 # 3. 定义工具函数（使用 @audited_tool 装饰器自动审计）
-# ═══════════════════════════════════════════════════════════════
-
+# ══════════════════════════════════════
 # 工具的 OpenAI function calling schema
 tool_a_schema = [{"type": "function", "function": {
     "name": "tool_a",
