@@ -1,0 +1,106 @@
+version: "2.0"
+description: "多类型 Agent 审计示例 — IT 运维工单系统"
+
+# ══════════════════════════════════════════════════════════════
+# 拓扑设计：
+#
+#   Operator ──→ Triage_Agent ──→ Validator ──→ DB_Agent
+#  (UserProxy)   (Assistant)    (Conversable)  (Assistant)
+#
+# Agent 类型对照：
+#   UserProxyAgent   — 用户入口，不调工具
+#   AssistantAgent   — LLM 驱动，调用业务工具
+#   ConversableAgent — 无 LLM，规则引擎校验（register_reply）
+# ══════════════════════════════════════════════════════════════
+
+
+agents:
+
+  Operator:
+    role: user_proxy
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools: []
+    allowed_message_targets:
+      - Triage_Agent
+      - Validator
+      - DB_Agent
+    notes: "用户入口（UserProxyAgent），提交工单，不直接调工具"
+
+  Triage_Agent:
+    role: triage
+    can_initiate: false
+    allowed_tools:
+      - classify_ticket
+    blocked_tools:
+      - query_system_status
+    allowed_message_targets:
+      - Operator
+      - Validator
+    notes: "工单分类（AssistantAgent），LLM 驱动，只能调 classify_ticket"
+
+  Validator:
+    role: compliance_checker
+    can_initiate: false
+    allowed_tools: []           # 无工具 —— 纯规则型 ConversableAgent
+    blocked_tools:
+      - classify_ticket
+      - query_system_status
+    allowed_message_targets:
+      - Operator
+      - Triage_Agent
+      - DB_Agent
+    notes: "合规校验（ConversableAgent），不用 LLM，register_reply 实现规则判断"
+
+  DB_Agent:
+    role: db_operator
+    can_initiate: false
+    allowed_tools:
+      - query_system_status
+    blocked_tools:
+      - classify_ticket
+    allowed_message_targets:
+      - Operator
+      - Validator
+    notes: "数据库查询（AssistantAgent），LLM 驱动，只能调 query_system_status"
+
+
+tools:
+
+  classify_ticket:
+    allowed_callers:
+      - Triage_Agent
+    required_path_contains: []
+    path_rule: triage_path
+    notes: "工单分类工具，只允许 Triage_Agent 调用"
+
+  query_system_status:
+    allowed_callers:
+      - DB_Agent
+    required_path_contains:
+      - Triage_Agent
+      - Validator
+    path_rule: full_path
+    notes: "系统状态查询，必须经过 Triage_Agent 分类 + Validator 校验"
+
+
+paths:
+
+  triage_path:
+    sequence:
+      - Operator
+      - Triage_Agent
+    strict: false
+
+  full_path:
+    sequence:
+      - Operator
+      - Triage_Agent
+      - Validator
+      - DB_Agent
+    strict: false
+
+
+thresholds:
+  rule_block:   0.90
+  human_review: 0.75
