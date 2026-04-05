@@ -24,14 +24,6 @@ except ImportError:
     HAS_PEFT = False
     print("[WARN] peft 库不可用，将不使用 LoRA")
 
-# 尝试导入 trl
-try:
-    from trl import PPOTrainer, GRPOConfig as TRLGRPOConfig
-    HAS_TRL = True
-except ImportError:
-    HAS_TRL = False
-    print("[WARN] trl 库不可用，将使用简化训练")
-
 
 class HFAttackerModel(BaseAttackerModel):
     """
@@ -86,14 +78,10 @@ class HFAttackerModel(BaseAttackerModel):
         else:
             print("[WARN] 未启用 LoRA")
         
-        # 始终创建 optimizer（GRPO update() 直接使用，不依赖 TRL）
         self.optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, self.model.parameters()),
             lr=1e-5
         )
-        self.ref_model = None
-        self.ppo_trainer = None
-        self.use_trl = False
         print("[OK] 使用自定义 GRPO 训练器（AdamW + clip）")
     
     def generate(self, prompt: str, scenario_type: str, **kwargs) -> str:
@@ -153,33 +141,6 @@ class HFAttackerModel(BaseAttackerModel):
         
         response_log_probs = torch.gather(
             log_probs[:, prompt_len:-1, :],
-            dim=2,
-            index=response_ids[:, :-1].unsqueeze(-1)
-        ).squeeze(-1)
-        
-        return response_log_probs.mean().item()
-    
-    def ref_log_prob(self, prompt: str, response: str) -> float:
-        """参考模型的对数概率"""
-        if not self.use_trl or self.ref_model is None:
-            return self.log_prob(prompt, response)
-            
-        full_text = prompt + response
-        input_ids = self.tokenizer.encode(full_text, return_tensors="pt").to(self.device)
-        
-        with torch.no_grad():
-            outputs = self.ref_model(input_ids)
-            logits = outputs.logits
-        
-        log_probs = torch.log_softmax(logits, dim=-1)
-        prompt_len = len(self.tokenizer.encode(prompt))   # 修复：用 token 数而非字符数
-        response_ids = input_ids[:, prompt_len:]
-        
-        if response_ids.size(1) == 0:
-            return 0.0
-        
-        response_log_probs = torch.gather(
-            log_probs[:, prompt_len:-1, :],               # 修复：与 log_prob() 保持一致
             dim=2,
             index=response_ids[:, :-1].unsqueeze(-1)
         ).squeeze(-1)
