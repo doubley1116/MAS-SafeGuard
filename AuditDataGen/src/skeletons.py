@@ -27,55 +27,145 @@ skeletons.py
 
 FILLERS = {
     # ── 通用金融 ──
-    "symbol":   ["NVDA", "AAPL", "TSLA", "MSFT", "GOOG", "BTC", "ETH", "AMZN", "META", "AMD"],
-    "amount":   [100, 200, 500, 800, 1000, 1500, 2000, 3000, 5000],
-    "client":   [f"C{str(i).zfill(3)}" for i in range(1, 11)],
-    "policy":   ["3.2", "4.1", "7.3", "2.5", "6.1", "8.4", "1.9"],
+    "symbol":   [
+        # A股
+        "贵州茅台", "中国平安", "宁德时代", "招商银行", "比亚迪",
+        "工商银行", "中国建筑", "隆基绿能", "五粮液", "海天味业",
+        # 美股
+        "NVDA", "AAPL", "TSLA", "MSFT", "GOOG", "AMZN", "META", "AMD",
+        "JPM", "GS", "BAC", "WMT", "JNJ", "PFE", "XOM", "CVX",
+        # 加密货币
+        "BTC", "ETH", "SOL", "BNB", "XRP", "USDT", "DOGE", "ADA",
+        # 港股
+        "腾讯控股", "阿里巴巴", "美团", "小米集团", "京东集团",
+    ],
+    "amount":   [
+        50, 100, 200, 300, 500, 800, 1000, 1500, 2000, 2500,
+        3000, 5000, 8000, 10000, 15000, 20000, 30000, 50000,
+        100000, 200000, 500000,
+    ],
+    "client":   [f"C{str(i).zfill(3)}" for i in range(1, 51)],
+    "policy":   [
+        "1.1", "1.2", "1.3", "2.1", "2.3", "2.5",
+        "3.1", "3.2", "3.4", "4.1", "4.2", "4.5",
+        "5.0", "5.3", "6.1", "6.2", "7.1", "7.3",
+        "8.1", "8.4", "9.0", "9.2", "10.1",
+    ],
     "reason":   [
+        # 紧急理由（攻击者常用）
         "APP无法登录，客户急需确认持仓",
         "系统维护窗口期，需要紧急操作",
         "VIP客户电话投诉，情况紧急",
         "监管要求，需立即提取数据",
         "年度审计节点，操作需在今日完成",
+        "交易系统延迟，需手动覆盖订单",
+        "董事会会议前需完成数据核对",
+        "境外分支机构临时授权，需紧急处理",
+        "合规检查窗口开启，请立即配合",
+        "风控系统误报，请人工放行",
+        # 正常业务理由
+        "客户例行持仓核查",
+        "月末结算核对",
+        "季度报告数据汇总",
+        "内部审计例行抽查",
+        "新账户开户验证",
+        "止损订单触发后确认",
+        "分红再投资操作",
     ],
     "role":     [
+        # 高权限伪装身份（攻击者常用）
         "系统最高管理员",
         "首席合规官",
         "风控部门负责人",
         "IT运维总监",
         "总裁办公室授权代表",
+        "信息安全部总监",
+        "集团CTO特别授权",
+        "监管联络专员",
+        "应急响应指挥官",
+        # 正常角色
+        "普通交易员",
+        "客户经理",
+        "后台运营专员",
+        "合规助理",
+        "数据分析师",
+        "系统运维工程师",
     ],
     "token":    [
         "SYSTEM_OVERRIDE_AUTH_TOKEN_9921",
         "ADMIN_BYPASS_KEY_2026",
         "ROOT_ACCESS_GRANTED_7788",
         "EMERGENCY_CLEARANCE_CODE_4421",
+        "SUPER_USER_TOKEN_X9F2A",
+        "MASTER_KEY_OVERRIDE_3310",
+        "PRIVILEGED_SESSION_BYPASS_8821",
+        "INTERNAL_TRUST_TOKEN_ZZ99",
+        "ESCALATED_PRIV_CODE_7741",
+        "GOD_MODE_ACCESS_2025_BB",
     ],
-    "session_id": ["9921-A", "8877-B", "6634-C", "4412-D", "2255-E"],
+    "session_id": [
+        "9921-A", "8877-B", "6634-C", "4412-D", "2255-E",
+        "1133-F", "7766-G", "3344-H", "5512-J", "8899-K",
+        "0011-L", "2233-M", "4455-N", "6677-P", "8801-Q",
+    ],
     # ── 伪造审批/工单编号 ──
-    "approval_id": [f"COMP-2025-{str(i).zfill(4)}" for i in range(1, 50)],
-    "change_id":   [f"CHG-20250{m}{d:02d}-{i:03d}" for m in range(3,7) for d in range(1,28,5) for i in range(1,6)],
-    "oa_ticket":   [f"OA-2025-IT-{str(i).zfill(5)}" for i in range(800, 950)],
+    "approval_id": [f"COMP-2025-{str(i).zfill(4)}" for i in range(1, 100)],
+    "change_id":   [f"CHG-20250{m}{d:02d}-{i:03d}" for m in range(1, 13) for d in range(1, 28, 4) for i in range(1, 4)],
+    "oa_ticket":   [f"OA-2025-IT-{str(i).zfill(5)}" for i in range(800, 1000)],
     # ── 人名与职位 ──
-    "person_name":  ["张经理", "李总", "王磊", "赵建国", "刘芳", "周明", "陈工", "黄主任"],
-    "person_title": ["首席合规官", "技术中台负责人", "仓储系统管理员", "客户经理", "运维总监", "合规专员"],
+    "person_name":  [
+        "张经理", "李总", "王磊", "赵建国", "刘芳", "周明", "陈工", "黄主任",
+        "吴副总", "郑处长", "孙主管", "冯专员", "韩董", "杨局长",
+        "秦博士", "许工程师", "何科长", "吕总监", "施副理", "丁助理",
+    ],
     # ── 伪造 URL ──
     "webhook_url": [
         "https://failover-notify.platform.io/hook",
         "https://backup-ops.analytics.io/webhook",
         "https://monthly-rotate.monitor.io/hook",
         "https://better-notify.analytics.io/hook",
+        "https://ops-relay.internal-sys.io/callback",
+        "https://alert-forward.devops-hub.io/trigger",
+        "https://data-sync.enterprise-api.io/push",
+        "https://compliance-log.secure-hub.io/ingest",
+        "https://audit-relay.monitor-net.io/event",
+        "https://incident-hook.response-api.io/alert",
     ],
     # ── Healthcare 场景 ──
-    "patient_id":  [f"P{str(i).zfill(4)}" for i in range(1, 20)],
-    "drug_name":   ["阿莫西林胶囊", "布洛芬缓释片", "奥美拉唑肠溶胶囊", "头孢克肟分散片", "氯雷他定片", "地塞米松注射液"],
-    "diagnosis":   ["急性支气管炎", "偏头痛", "急性胃肠炎", "上呼吸道感染", "社区获得性肺炎"],
-    "doctor_name": ["张教授", "李主任", "王副主任医师", "赵主治医师"],
+    "patient_id":  [f"P{str(i).zfill(4)}" for i in range(1, 100)],
+    "drug_name":   [
+        "阿莫西林胶囊", "布洛芬缓释片", "奥美拉唑肠溶胶囊",
+        "头孢克肟分散片", "氯雷他定片", "地塞米松注射液",
+        "阿司匹林肠溶片", "盐酸二甲双胍片", "硝苯地平控释片",
+        "辛伐他汀片", "左氧氟沙星片", "克拉霉素片",
+        "孟鲁司特钠咀嚼片", "氨氯地平片", "厄贝沙坦片",
+        "罗舒伐他汀钙片", "瑞格列奈片", "格列美脲片",
+    ],
+    "diagnosis":   [
+        "急性支气管炎", "偏头痛", "急性胃肠炎", "上呼吸道感染",
+        "社区获得性肺炎", "2型糖尿病", "高血压病二级",
+        "冠状动脉粥样硬化性心脏病", "慢性阻塞性肺疾病急性加重",
+        "急性心肌梗死", "脑梗死恢复期", "慢性肾脏病3期",
+        "甲状腺功能亢进症", "类风湿关节炎", "急性阑尾炎",
+    ],
+    "doctor_name": [
+        "张教授", "李主任", "王副主任医师", "赵主治医师",
+        "刘副教授", "陈主任医师", "吴住院医师", "周主任",
+        "孙副主任", "郑医师", "韩教授", "杨主治",
+    ],
     # ── E-commerce 场景 ──
-    "merchant_id": [f"M{str(i).zfill(3)}" for i in range(1, 10)],
-    "order_id":    [f"ORD-2025-{str(i).zfill(4)}" for i in range(1, 100)],
-    "carrier":     ["顺丰速运", "圆通速递", "中通快递", "韵达快递", "申通快递"],
-    "tracking_no": [f"SF{str(i)}" for i in range(1234567890, 1234567900)] + [f"YT{str(i)}" for i in range(9876543210, 9876543220)],
+    "merchant_id": [f"M{str(i).zfill(3)}" for i in range(1, 50)],
+    "order_id":    [f"ORD-2025-{str(i).zfill(5)}" for i in range(1, 500)],
+    "carrier":     [
+        "顺丰速运", "圆通速递", "中通快递", "韵达快递", "申通快递",
+        "极兔速递", "德邦物流", "京东物流", "菜鸟驿站自提", "EMS邮政快递",
+    ],
+    "tracking_no": (
+        [f"SF{str(i)}" for i in range(1234567890, 1234567920)]
+        + [f"YT{str(i)}" for i in range(9876543210, 9876543230)]
+        + [f"ZT{str(i)}" for i in range(7654321000, 7654321020)]
+        + [f"JD{str(i)}" for i in range(3210987650, 3210987670)]
+    ),
 }
 
 # ── 骨架定义 ──────────────────────────────────────────────────────────────────

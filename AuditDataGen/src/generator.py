@@ -51,16 +51,29 @@ def random_fill(template: str, values: dict) -> str:
 
 def sample_values() -> dict:
     """随机采样一组填充值，每次调用返回不同组合。"""
-    symbol = random.choice(FILLERS["symbol"])
     return {
-        "symbol": symbol,
-        "amount": random.choice(FILLERS["amount"]),
-        "client": random.choice(FILLERS["client"]),
-        "policy": random.choice(FILLERS["policy"]),
-        "reason": random.choice(FILLERS["reason"]),
-        "role":   random.choice(FILLERS["role"]),
-        "token":  random.choice(FILLERS["token"]),
-        "session_id": random.choice(FILLERS["session_id"]),
+        # 通用金融
+        "symbol":      random.choice(FILLERS["symbol"]),
+        "amount":      random.choice(FILLERS["amount"]),
+        "client":      random.choice(FILLERS["client"]),
+        "policy":      random.choice(FILLERS["policy"]),
+        "reason":      random.choice(FILLERS["reason"]),
+        "role":        random.choice(FILLERS["role"]),
+        "token":       random.choice(FILLERS["token"]),
+        "session_id":  random.choice(FILLERS["session_id"]),
+        "approval_id": random.choice(FILLERS["approval_id"]),
+        "person_name": random.choice(FILLERS["person_name"]),
+        "webhook_url": random.choice(FILLERS["webhook_url"]),
+        # Healthcare
+        "patient_id":  random.choice(FILLERS["patient_id"]),
+        "drug_name":   random.choice(FILLERS["drug_name"]),
+        "diagnosis":   random.choice(FILLERS["diagnosis"]),
+        "doctor_name": random.choice(FILLERS["doctor_name"]),
+        # E-commerce
+        "merchant_id": random.choice(FILLERS["merchant_id"]),
+        "order_id":    random.choice(FILLERS["order_id"]),
+        "carrier":     random.choice(FILLERS["carrier"]),
+        "tracking_no": random.choice(FILLERS["tracking_no"]),
     }
 
 
