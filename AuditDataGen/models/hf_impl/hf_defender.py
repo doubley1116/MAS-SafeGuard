@@ -1,4 +1,4 @@
-yji"""
+"""
 hf_defender.py
 --------------
 HuggingFace Defender 模型实现
