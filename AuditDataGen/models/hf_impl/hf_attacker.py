@@ -47,11 +47,11 @@ class HFAttackerModel(BaseAttackerModel):
         self.model_name = model_name
         self.device = device
         
-        # 加载 tokenizer
+        # 加载 tokenizer（local_files_only=False 支持首次下载或离线缓存）
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
             trust_remote_code=True,
-            local_files_only=True
+            local_files_only=False
         )
         
         # H100 优化：注入 pad_token (大模型通常没有)
@@ -67,7 +67,7 @@ class HFAttackerModel(BaseAttackerModel):
             device_map=device,
             attn_implementation="sdpa",  # 跨平台兼容，比 flash_attention_2 更广泛支持
             trust_remote_code=True,
-            local_files_only=True
+            local_files_only=False
         )
         
         # H100 显存充足：增强 LoRA 配置

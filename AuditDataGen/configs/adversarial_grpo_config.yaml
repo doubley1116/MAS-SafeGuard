@@ -14,10 +14,12 @@ models:
   attacker:
     type: "qwen"              # 攻击者模型类型: mock, qwen
     name: "Qwen/Qwen2.5-7B-Instruct"  # 7B大模型
+    device: "cuda:0"          # A6000 第一张卡 (48GB)
   
   defender:
     type: "hf"                # 防御者模型类型: hf (HuggingFace通用加载)
     name: "Qwen/Qwen2.5-7B-Instruct"  # 7B分类器
+    device: "cuda:1"          # A6000 第二张卡 (48GB)
 
 # 数据配置
 data:

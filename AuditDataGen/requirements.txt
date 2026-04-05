@@ -1,11 +1,32 @@
-torch
-transformers
-trl
-peft
-sentence-transformers
-scikit-learn
-numpy
-tqdm
-pyyaml
-python-dotenv
-openai
+# ================================================================
+# AuditDataGen - 对抗训练依赖
+# 环境：Python 3.10+，CUDA 12.4，2×A6000 (Linux)
+# ================================================================
+#
+# 第一步：安装 PyTorch（CUDA 12.4）
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#
+# 第二步：安装其余依赖
+#   pip install -r requirements.txt
+#
+# ================================================================
+
+# HuggingFace 核心
+transformers>=4.40.0
+accelerate>=0.30.0
+safetensors>=0.4.0
+peft>=0.10.0
+trl>=0.8.0
+
+# 嵌入模型（DiversityReward）
+sentence-transformers>=2.7.0
+
+# 数值计算
+numpy>=1.24.0
+
+# 配置 & 工具
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# OpenAI API（llm_augment.py 可选功能）
+openai>=1.0.0

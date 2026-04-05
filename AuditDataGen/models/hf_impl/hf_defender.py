@@ -1,4 +1,4 @@
-"""
+yji"""
 hf_defender.py
 --------------
 HuggingFace Defender 模型实现
@@ -33,11 +33,11 @@ class HFDefenderModel(BaseDefenderModel):
         self.model_name = model_name
         self.device = device
         
-        # 加载 tokenizer
+        # 加载 tokenizer（local_files_only=False 支持首次下载或离线缓存）
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
             trust_remote_code=True,
-            local_files_only=True
+            local_files_only=False
         )
         
         # 【关键修复】Pad Token 问题：大模型默认没有 pad_token
@@ -54,7 +54,7 @@ class HFDefenderModel(BaseDefenderModel):
             attn_implementation="sdpa",       # 跨平台兼容，比 flash_attention_2 更广泛支持
             trust_remote_code=True,
             device_map=device,                # 单卡严格绑定
-            local_files_only=True
+            local_files_only=False
         )
         
         # 【关键修复】同步 pad_token_id

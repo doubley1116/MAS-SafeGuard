@@ -222,8 +222,8 @@ def create_attacker_model(model_type: str, model_name: str = None, device: str =
         else:
             model_name = "gpt2"
     
-    # 检查设备可用性
-    if device == "cuda":
+    # 检查设备可用性（支持 cuda:N 格式）
+    if device.startswith("cuda"):
         try:
             import torch
             if not torch.cuda.is_available():
@@ -273,8 +273,8 @@ def create_defender_model(model_type: str, model_name: str = None, device: str =
         else:
             model_name = "bert-base-chinese"
     
-    # 检查设备可用性
-    if device == "cuda":
+    # 检查设备可用性（支持 cuda:N 格式）
+    if device.startswith("cuda"):
         try:
             import torch
             if not torch.cuda.is_available():
@@ -367,24 +367,27 @@ def train_from_config(config: Dict[str, Any]):
         return
 
     # 2. 创建模型
-    device = config.get("device", "cpu")
-    print(f"\n[2/4] 创建模型 (设备: {device})...")
-
     attacker_config = config.get("models", {}).get("attacker", {})
     defender_config = config.get("models", {}).get("defender", {})
+    
+    # 从各自模型配置读取设备信息，支持独立双卡部署
+    attacker_device = attacker_config.get("device", config.get("device", "cpu"))
+    defender_device = defender_config.get("device", config.get("device", "cpu"))
+    
+    print(f"\n[2/4] 创建模型 (attacker: {attacker_device}, defender: {defender_device})...")
 
     attacker = create_attacker_model(
         model_type=attacker_config.get("type", "mock"),
         # 兼容读取 model_name 或 name（YAML配置可能使用不同键名）
         model_name=attacker_config.get("model_name", attacker_config.get("name")),
-        device=device
+        device=attacker_device
     )
 
     defender = create_defender_model(
         model_type=defender_config.get("type", "mock"),
         # 兼容读取 model_name 或 name（YAML配置可能使用不同键名）
         model_name=defender_config.get("model_name", defender_config.get("name")),
-        device=device
+        device=defender_device
     )
 
     # 3. 创建训练器
