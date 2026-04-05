@@ -50,7 +50,8 @@ class HFAttackerModel(BaseAttackerModel):
         # 加载 tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
-            trust_remote_code=True
+            trust_remote_code=True,
+            local_files_only=True
         )
         
         # H100 优化：注入 pad_token (大模型通常没有)
@@ -61,11 +62,12 @@ class HFAttackerModel(BaseAttackerModel):
         # 使用 PyTorch 2.0 原生的 Scaled Dot Product Attention (SDPA)
         # 优势：全平台支持（Windows/Linux）、速度快、不依赖 flash-attn 库
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, 
+            model_name,
             torch_dtype=torch.bfloat16,
             device_map=device,
             attn_implementation="sdpa",  # 跨平台兼容，比 flash_attention_2 更广泛支持
-            trust_remote_code=True
+            trust_remote_code=True,
+            local_files_only=True
         )
         
         # H100 显存充足：增强 LoRA 配置
@@ -272,9 +274,10 @@ class HFAttackerModel(BaseAttackerModel):
             torch_dtype=torch.bfloat16,
             device_map=self.device,
             attn_implementation="sdpa",  # 跨平台兼容
-            trust_remote_code=True
+            trust_remote_code=True,
+            local_files_only=True
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True, local_files_only=True)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         print(f"[OK] 攻击者模型从 {path} 加载")

@@ -36,7 +36,8 @@ class HFDefenderModel(BaseDefenderModel):
         # 加载 tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
-            trust_remote_code=True
+            trust_remote_code=True,
+            local_files_only=True
         )
         
         # 【关键修复】Pad Token 问题：大模型默认没有 pad_token
@@ -53,6 +54,7 @@ class HFDefenderModel(BaseDefenderModel):
             attn_implementation="sdpa",       # 跨平台兼容，比 flash_attention_2 更广泛支持
             trust_remote_code=True,
             device_map=device,                # 单卡严格绑定
+            local_files_only=True
         )
         
         # 【关键修复】同步 pad_token_id
@@ -263,10 +265,11 @@ class HFDefenderModel(BaseDefenderModel):
             attn_implementation="sdpa",  # 跨平台兼容
             device_map=self.device,     # 单卡严格绑定
             trust_remote_code=True,
+            local_files_only=True
         )
         self.model.eval()
-        
-        self.tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+
+        self.tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True, local_files_only=True)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model.config.pad_token_id = self.tokenizer.pad_token_id
