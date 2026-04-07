@@ -1,3 +1,5 @@
+# Legacy policy snapshot kept only for reference.
+# Current CrewAI trading scenarios use policy.yaml instead of this file.
 version: "1.0"
 description: "资产与交易 MAS 零信任权限策略"
 

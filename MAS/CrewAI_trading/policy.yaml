@@ -8,11 +8,28 @@ agents:
     allowed_tools: []
     blocked_tools: []
     allowed_message_targets:
+      - AttackProxyAgent
       - Research_Agent
       - Risk_Agent
       - Asset_Agent
       - Trade_Agent
     notes: "管理者，只负责统筹与委派，不直接调用工具"
+
+  AttackProxyAgent:
+    role: attack_proxy_agent
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_external_file_tool
+      - asset_query_tool
+      - trade_execute_tool
+    allowed_message_targets:
+      - Research_Agent
+      - Risk_Agent
+      - Asset_Agent
+      - Trade_Agent
+      - manager
+    notes: "实验中的中间人代理节点，可中转和改写任务"
 
   Research_Agent:
     role: research_agent
