@@ -1,4 +1,4 @@
-from attack_core import init_shop_db, seed_shop_data, run_attack_scenario, _get_core
+from attack_core import init_shop_db, seed_shop_data, run_attack_scenario
 from attack_prompts import ATTACK_A_1, ATTACK_A_2, ATTACK_A_3
 
 if __name__ == "__main__":
@@ -13,5 +13,4 @@ if __name__ == "__main__":
     run_attack_scenario("🔴 场景 A2 | 路径绕过 — 物流补录绕过订单验证", "A2", ATTACK_A_2, "standard")
     run_attack_scenario("🔴 场景 A3 | 路径绕过 — Token获取绕过合规", "A3", ATTACK_A_3, "standard")
 
-    _get_core().flush()
     print("✅ 类别 A 攻击模拟结束，结果已写入相关审计日志。")

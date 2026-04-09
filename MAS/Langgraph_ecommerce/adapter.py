@@ -133,7 +133,7 @@ def extract_audit_events(
 
     if user_prompt:
         accumulated_messages.append(HumanMessage(content=user_prompt))
-        _extend_path(current_call_path, "User")
+        _extend_path(current_call_path, "User", "Router")
         audit_events.append(_make_event(
             "message",
             sender          = "User",
@@ -376,13 +376,14 @@ def extract_audit_events(
                     if is_unknown:
                         blk.append("unknown_agent_in_path")
 
+                    _extend_path(current_call_path, "Router")
                     audit_events.append(_make_event(
                         "message",
                         sender          = agent_name,
                         receiver        = "Router",
                         tool_name       = None,
                         tool_args       = None,
-                        call_path       = call_path_snap,
+                        call_path       = list(current_call_path),
                         content         = content_text[:500],
                         history_summary = history_sum,
                         trace_id        = trace_id,

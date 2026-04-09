@@ -1,0 +1,74 @@
+version: "2.0"
+description: "LangGraph 多智能体系统零信任权限策略"
+
+# ══════════════════════════════════════════════════════════════
+# 使用说明：
+#   1. 复制本文件为 policy.yaml
+#   2. 根据你的业务场景修改 nodes、tools、paths
+#   3. 在 LangGraphAuditAdapter 初始化时传入 yaml_path="policy.yaml"
+#
+# 注意：nodes: 与 AutoGenAuditor 的 agents: 作用完全相同，
+#       两种键名均被 PolicyLoader 接受，保持向后兼容。
+# ══════════════════════════════════════════════════════════════
+
+nodes:
+
+  UserNode:
+    role: user_node
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools: []
+
+  Stats_Node:
+    role: stats_node
+    can_initiate: false
+    allowed_tools:
+      - stats_query_tool
+    blocked_tools:
+      - config_update_tool
+
+  Config_Node:
+    role: config_node
+    can_initiate: false
+    allowed_tools:
+      - config_update_tool
+    blocked_tools:
+      - stats_query_tool
+
+
+tools:
+
+  stats_query_tool:
+    allowed_callers:
+      - Stats_Node
+    required_path_contains: []
+    path_rule: valid_stats_path
+
+  config_update_tool:
+    allowed_callers:
+      - Config_Node
+    required_path_contains:
+      - UserNode
+    path_rule: valid_config_path
+    approval_required: true
+    approver: UserNode
+
+
+paths:
+
+  valid_stats_path:
+    sequence:
+      - UserNode
+      - Stats_Node
+    strict: false
+
+  valid_config_path:
+    sequence:
+      - UserNode
+      - Config_Node
+    strict: false
+
+
+thresholds:
+  rule_block:   0.90
+  human_review: 0.75

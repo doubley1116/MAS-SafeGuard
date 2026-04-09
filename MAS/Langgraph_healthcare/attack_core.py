@@ -22,6 +22,14 @@ from database.healthcare_db import (
     add_diagnosis, get_patient_info, get_prescription
 )
 from database.seed_data import seed_healthcare_data
+
+# LangGraphAuditor imports
+_LG_AUDITOR_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "LangGraphAuditor"
+)
+sys.path.insert(0, _LG_AUDITOR_DIR)
+from langgraph_adapter import LangGraphAuditAdapter, WorkflowBlocked, BLOCKED_WORKFLOW_MESSAGE
 from adapter import AdapterCore
 
 # ================= 环境配置与日志 =================
@@ -31,6 +39,14 @@ BASE_URL = os.getenv("BASE_URL")
 MODEL    = os.getenv("MODEL")
 
 llm = ChatOpenAI(model=MODEL, api_key=API_KEY, base_url=BASE_URL, temperature=0)
+
+# 场景级共享 adapter（与 @audited_tool 共用同一实例）
+_audit_adapter = LangGraphAuditAdapter(
+    yaml_path=os.path.join(os.path.dirname(__file__), "healthcare.yaml"),
+    jsonl_path=None,
+    workflow_dir=None,
+    verbose=True,
+)
 
 # ================= 工具定义 =================
 @tool
@@ -201,14 +217,36 @@ def aitm_interceptor_node(state: AgentState):
 
 def tool_execution_node(state: AgentState):
     last_message = state["messages"][-1]
+    sender = state.get("active_agent", "unknown")
     tool_messages = []
     for tc in getattr(last_message, "tool_calls", []):
         tool_name, tool_args = tc["name"], tc["args"]
         print(f"\n>>>>>>>> EXECUTING FUNCTION {tool_name}...")
+
+        if _audit_adapter.is_blocked():
+            tool_messages.append(
+                ToolMessage(content=BLOCKED_WORKFLOW_MESSAGE, tool_call_id=tc["id"], name=tool_name)
+            )
+            continue
+
+        try:
+            _audit_adapter.emit_tool_call(sender=sender, tool_name=tool_name, tool_args=tool_args)
+        except WorkflowBlocked as e:
+            tool_messages.append(
+                ToolMessage(content=f"[阻断] {e}", tool_call_id=tc["id"], name=tool_name)
+            )
+            continue
+
         try:
             result = tools_map[tool_name].invoke(tool_args)
         except Exception as e:
             result = f"Error: {e}"
+
+        try:
+            _audit_adapter.emit_tool_result(sender=sender, tool_name=tool_name, result=result)
+        except WorkflowBlocked:
+            pass
+
         tool_messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"], name=tool_name))
     return {"messages": tool_messages}
 
@@ -256,7 +294,8 @@ def build_healthcare_graph(scenario_type: str):
     
     return workflow.compile()
 
-# ================= Adapter 实例与主执行逻辑 =================
+# ================= AdapterCore 实例（生成旧格式 JSONL）=================
+_scenario_counters: dict = {}
 _adapter: AdapterCore | None = None
 
 def _get_core() -> AdapterCore:
@@ -265,19 +304,30 @@ def _get_core() -> AdapterCore:
         _adapter = AdapterCore(output_dir="data/workflows")
     return _adapter
 
+# ================= 主执行逻辑 =================
 def run_attack_scenario(title: str, attack_name: str, prompt_text: str, graph_type: str = "standard"):
-    core  = _get_core()
-    graph = build_healthcare_graph(graph_type) 
+    """运行攻击场景：AdapterCore 生成旧格式 JSONL + _audit_adapter 实时审计工具调用。"""
+    _scenario_counters[attack_name] = _scenario_counters.get(attack_name, 0) + 1
+    seq = f"{_scenario_counters[attack_name]:03d}"
+    trace_id = f"healthcare_{attack_name}_{seq}"
+
+    graph = build_healthcare_graph(graph_type)
+    _audit_adapter.set_scene_info(scene_name=attack_name, trace_id=trace_id)
+
     try:
-        core.run_scenario(
-            title       = title,
-            graph_type  = graph_type,
-            graph       = graph,
-            prompt      = prompt_text,
-            attack_name = attack_name,
+        _get_core().run_scenario(
+            title=title,
+            graph_type=graph_type,
+            graph=graph,
+            prompt=prompt_text,
+            attack_name=attack_name,
         )
     except RuntimeError as e:
         if str(e).startswith("[AuditBlock]"):
             print(f"  🔒 已拦截: {e}")
         else:
             raise
+    finally:
+        _get_core().flush()
+        _audit_adapter.finalize_workflow()
+        print(f"调用路径: {_audit_adapter.call_path}")
