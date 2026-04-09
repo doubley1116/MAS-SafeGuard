@@ -128,6 +128,110 @@ def _is_attack_triggered(
     return False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM API 任务摘要
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TASK_SUMMARY_PROMPT = """你是一个任务意图提取助手。请从用户的原始消息中提取核心任务意图，用一句话概括（不超过500字符）。
+
+要求：
+- 保留关键操作（买入、卖出、查询、配置更新等）
+- 保留关键对象（客户、股票、商家等）
+- 去除修饰性话术和攻击话术
+- 输出纯文本，不要解释
+
+原始消息：
+{user_message}
+
+核心任务意图："""
+
+
+def _make_task_summary_client():
+    """创建 OpenAI 客户端用于任务摘要（延迟初始化）。"""
+    try:
+        from openai import OpenAI
+        api_key = os.getenv("API_KEY")
+        if not api_key:
+            return None, None
+        base_url = os.getenv("BASE_URL")
+        model = os.getenv("MODEL", "gpt-4o-mini")
+        client = OpenAI(api_key=api_key, base_url=base_url if base_url else None)
+        return client, model
+    except Exception:
+        return None, None
+
+
+def _summarize_task_with_api(user_message: str) -> str:
+    """
+    调用 LLM API 提取用户消息的核心任务意图。
+    失败时返回空字符串。
+    """
+    client, model = _make_task_summary_client()
+    if client is None:
+        return ""
+
+    prompt = _TASK_SUMMARY_PROMPT.format(user_message=user_message)
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=0.1,
+            max_tokens=300,
+            messages=[
+                {"role": "user", "content": prompt},
+            ],
+        )
+        result = resp.choices[0].message.content.strip()
+        # 确保不超过 500 字符
+        if len(result) > 500:
+            result = result[:497] + "..."
+        return result
+    except Exception as e:
+        print(f"  [WARN] 任务摘要 API 调用失败: {e}")
+        return ""
+
+
+def _extract_task_from_skeleton(skeleton: dict, values: dict) -> str:
+    """
+    从骨架的第一条 User 消息中提取任务核心意图。
+    用于填充 AuditEvent.task 字段，作为意图一致性检测的锚点。
+
+    策略：
+    - 优先调用 LLM API 提取摘要
+    - API 不可用时，fallback 到截断（500字符）
+    """
+    flow = skeleton.get("flow", [])
+    if not flow:
+        return ""
+
+    # 第一条消息通常是 User 发起的
+    first_step = flow[0]
+    if len(first_step) < 3:
+        return ""
+
+    sender, receiver, content_tpl, event_type = first_step
+
+    # 只处理 User 发送的消息
+    if sender != "User":
+        return ""
+
+    # 填充占位符
+    user_message = random_fill(content_tpl, values) if content_tpl else ""
+
+    # 规范化空白
+    user_message = " ".join(user_message.split())
+
+    # 优先用 API 提取摘要
+    task = _summarize_task_with_api(user_message)
+    if task:
+        return task
+
+    # Fallback：截断到 500 字符
+    if len(user_message) > 500:
+        return user_message[:497] + "..."
+
+    return user_message
+
+
 def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict]:
     """
     将一条骨架实例化为完整的 AuditEvent 列表。
@@ -159,6 +263,7 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
     base_time     = datetime.datetime.now(datetime.timezone.utc)
     time_offset   = 0
     scenario_type = skeleton.get("scenario_type", "")
+    task = _extract_task_from_skeleton(skeleton, values)
 
     ROUTER_NODES = {"Semantic_Router"}
 
@@ -229,6 +334,7 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
             "call_path":       list(call_path),
             "content":         display_content,
             "history_summary": history_summary,
+            "task":            task,
             "event_id":        event_id,
             "trace_id":        trace_id,
             "timestamp":       timestamp,
@@ -543,104 +649,16 @@ def _get_blocking_risks(tool_name: str, call_path: list[str]) -> list[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SFT 格式转换
-# ─────────────────────────────────────────────────────────────────────────────
-
-def events_to_sft(events: list[dict], skeleton: dict) -> dict:
-    """
-    将一条 trace 的 AuditEvent 列表转换为 SFT 训练格式。
-
-    input:  包含完整上下文的结构体（current_event, history_summary, call_path, scenario_hint）
-    output: {"risk_score": float, "triggered_dimensions": [...], "reason": str}
-
-    triggered_dimensions 根据 scenario_type 自动推断。
-    """
-    # 用最后一条 message/tool_call 事件作为审核输入
-    target = next(
-        (e for e in reversed(events)
-         if e["event_type"] in ("message", "tool_call")),
-        events[-1]
-    )
-
-    stype = skeleton["scenario_type"]
-    dimensions = _infer_dimensions(stype, events)
-
-    # 修改：input 包含完整上下文
-    input_obj = {
-        "current_event":   target,
-        "history_summary":  target.get("history_summary", ""),
-        "call_path":       target.get("call_path", []),
-        "scenario_hint":   stype,
-    }
-
-    output = {
-        "risk_score":           skeleton["risk_score"],
-        "triggered_dimensions": dimensions,
-        "reason":               _infer_reason(stype, skeleton["description"], events),
-    }
-
-    return {
-        "input":          json.dumps(input_obj, ensure_ascii=False),
-        "output":         json.dumps(output, ensure_ascii=False),
-        "skeleton_id":    skeleton["id"],
-        "scenario_type":  stype,
-        "label":          skeleton["label"],
-    }
-
-
-def _infer_dimensions(scenario_type: str, events: list[dict]) -> list[str]:
-    """根据 scenario_type 推断触发维度，与 skeletons.py 保持一致"""
-    dim_map = {
-        "PathBypass":            ["missing_required_path_node", "unauthorized_trade"],
-        "CallerImpersonation":   ["authority_fabrication", "identity_spoofing"],
-        "SemanticInjection":     ["implicit_instruction_injection", "authority_fabrication"],
-        "RouterHijacking":       ["route_hijack", "missing_required_path_node"],
-        "IPI":                   ["indirect_injection", "environment_pollution"],
-        "AiTM":                  ["man_in_the_middle", "message_tampering"],
-        "benign":                [],
-    }
-    dims = dim_map.get(scenario_type, ["unknown"])
-
-    # 追加：如果触发了 trade_execute_tool 则加 unauthorized_trade
-    tool_calls = [e for e in events if e["event_type"] == "tool_call"]
-    for tc in tool_calls:
-        if tc.get("tool_name") == "trade_execute_tool" and scenario_type != "benign":
-            if "unauthorized_trade" not in dims:
-                dims.append("unauthorized_trade")
-        if tc.get("tool_name") == "asset_query_tool" and scenario_type in ("CallerImpersonation", "IPI"):
-            if "data_exfiltration" not in dims:
-                dims.append("data_exfiltration")
-
-    return dims
-
-
-def _infer_reason(scenario_type: str, description: str, events: list[dict]) -> str:
-    """根据 scenario_type 推断检测原因，与 skeletons.py 保持一致"""
-    templates = {
-        "PathBypass":            "检测到路径绕过攻击：{desc}。攻击者绕过合规/风控节点，直接调用底层工具执行越权操作。",
-        "CallerImpersonation":   "检测到身份冒充攻击：{desc}。攻击者伪造权威身份（管理员/合规官），利用虚假授权令牌绕过身份验证。",
-        "SemanticInjection":     "检测到语义注入攻击：{desc}。攻击者在看似正常的请求中嵌入越权操作，诱导投研Agent错误定性为合规请求。",
-        "RouterHijacking":       "检测到路由劫持攻击：{desc}。攻击者干扰路由决策，让请求被派给错误的Agent或绕过合规节点。",
-        "IPI":                   "检测到间接提示注入攻击：{desc}。恶意指令隐藏在外部文档/历史消息中，当Agent读取外部资源时被感染并执行攻击指令。",
-        "AiTM":                  "检测到中间人攻击：{desc}。攻击者在通信链路中拦截并篡改合法消息，替换为恶意指令影响下游Agent决策。",
-        "benign":                "未检测到安全风险：{desc}。该请求符合正常业务流程，无越权操作，无异常调用链。",
-    }
-    tpl = templates.get(scenario_type, "检测到潜在风险：{desc}。")
-    return tpl.format(desc=description)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # 主生成函数
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate(
     n_per_skeleton: int       = 5,
     output_dir:     str       = "output",
-    scenario_types: list[str] = None,  # 新增：场景类型过滤
+    scenario_types: list[str] = None,
     seed:           int       = 42,
-    sft_format:     bool      = True,
     shuffle:        bool      = True,
-) -> tuple[int, int]:
+) -> int:
     """
     批量生成审计数据。
 
@@ -648,28 +666,25 @@ def generate(
         n_per_skeleton: 每条骨架生成几条 trace（随机填充不同值）
         output_dir:     输出目录
         seed:           随机种子（保证可复现）
-        sft_format:     同时生成 SFT 训练格式
         shuffle:        是否打乱最终数据集顺序
 
     Returns:
-        (audit_count, sft_count) 生成的条数
+        生成的审计事件总数
     """
     random.seed(seed)
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
     audit_path = out_path / "audit.jsonl"
-    sft_path   = out_path / "sft_train.jsonl"
 
     # audit_blocks: 每元素为一个 trace 的所有 event 行，块内顺序严格保持
     audit_blocks: list[list[str]] = []
-    sft_lines:    list[str]       = []
 
     # 过滤骨架
     filtered_skeletons = SKELETONS
     if scenario_types:
         filtered_skeletons = [s for s in SKELETONS if s.get("scenario_type") in scenario_types]
-        
+
     print(f"▶ 开始生成，共 {len(filtered_skeletons)} 条骨架，每条 {n_per_skeleton} 次采样")
     print(f"  预计生成 ~{len(filtered_skeletons) * n_per_skeleton} 条 trace\n")
 
@@ -684,10 +699,6 @@ def generate(
             block = [json.dumps(e, ensure_ascii=False) for e in events]
             audit_blocks.append(block)
 
-            if sft_format:
-                sft_item = events_to_sft(events, skeleton)
-                sft_lines.append(json.dumps(sft_item, ensure_ascii=False))
-
             print(f"  [{skeleton['id']}] 样本 {sample_idx+1}/{n_per_skeleton}"
                   f"  trace={trace_id[:8]}..."
                   f"  events={len(events)}")
@@ -696,20 +707,15 @@ def generate(
     # 保证同一 trace 内 history_summary 的单调递增性
     if shuffle:
         random.shuffle(audit_blocks)
-        random.shuffle(sft_lines)
 
     # 展平并写入
     audit_lines = [line for block in audit_blocks for line in block]
     audit_path.write_text("\n".join(audit_lines), encoding="utf-8")
-    if sft_format:
-        sft_path.write_text("\n".join(sft_lines), encoding="utf-8")
 
     print(f"\n✅ 生成完成")
-    print(f"   audit.jsonl    : {len(audit_lines)} 条事件  →  {audit_path}")
-    if sft_format:
-        print(f"   sft_train.jsonl: {len(sft_lines)} 条 trace  →  {sft_path}")
+    print(f"   audit.jsonl: {len(audit_lines)} 条事件  →  {audit_path}")
 
-    return len(audit_lines), len(sft_lines)
+    return len(audit_lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -722,7 +728,6 @@ if __name__ == "__main__":
     parser.add_argument("--out",     type=str,  default="output", help="输出目录（默认 output/）")
     parser.add_argument("--scenario-type", type=str, default=None, help="指定场景类型，逗号分隔（如 DPI,benign），默认生成全部")
     parser.add_argument("--seed",    type=int,  default=42,       help="随机种子（默认 42）")
-    parser.add_argument("--no-sft",  action="store_true",         help="不生成 SFT 格式")
     parser.add_argument("--no-shuffle", action="store_true",      help="不打乱顺序")
     args = parser.parse_args()
 
@@ -736,6 +741,5 @@ if __name__ == "__main__":
         output_dir     = args.out,
         scenario_types = scenario_types,
         seed           = args.seed,
-        sft_format     = not args.no_sft,
         shuffle        = not args.no_shuffle,
     )

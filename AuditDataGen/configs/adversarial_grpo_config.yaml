@@ -2,8 +2,8 @@
 # 基础训练参数
 train:
   iterations: 100             # 全量训练
-  batch_size: 16              
-  group_size: 4               # GRPO组大小：每个prompt生成G个response
+  batch_size: 2              
+  group_size: 2               # GRPO组大小：每个prompt生成G个response
   learning_rate: 1e-5         # 学习率
   clip_epsilon: 0.2           # GRPO裁剪系数
   entropy_coef: 0.01          # 熵系数
@@ -13,13 +13,13 @@ train:
 models:
   attacker:
     type: "qwen"              # 攻击者模型类型: mock, qwen
-    name: "Qwen/Qwen2.5-7B-Instruct"  # 7B大模型
-    device: "cuda:0"          # A6000 第一张卡 (48GB)
-  
+    name: "Qwen/Qwen2.5-1.5B-Instruct"  # 改为本地训练好的模型路径
+    device: "cuda:4"          # A6000 空闲卡 (48GB)
+
   defender:
     type: "hf"                # 防御者模型类型: hf (HuggingFace通用加载)
-    name: "Qwen/Qwen2.5-7B-Instruct"  # 7B分类器
-    device: "cuda:1"          # A6000 第二张卡 (48GB)
+    name: "Qwen/Qwen2.5-1.5B-Instruct"  # 改为本地训练好的模型路径
+    device: "cuda:5"          # A6000 空闲卡 (48GB)
 
 # 数据配置
 data:

@@ -1,5 +1,5 @@
-# 本地单卡 16GB 显存极限测试配置 (双 1.5B 模型)
-device: "cuda"  # 关键修复1：全局设备声明，拉起 GPU 训练
+# 本地单卡测试配置 (RTX 5080 16GB, CUDA 12.8, 双 1.5B 模型)
+device: "cuda"
 
 data:
   train_path: "output/augmented_events.jsonl"
@@ -7,30 +7,32 @@ data:
 
 models:
   attacker:
-    type: "hf"  # 关键修复2：告诉代码我们要用 HuggingFace 的真实模型
+    type: "hf"
     model_name: "Qwen/Qwen2.5-1.5B-Instruct"
+    device: "cuda:0"
 
   defender:
     type: "hf"
     model_name: "Qwen/Qwen2.5-1.5B-Instruct"
+    device: "cuda:0"
 
 train:
   iterations: 10
-  batch_size: 4          
+  batch_size: 4
   group_size: 2
   learning_rate: 1.0e-5
   grpo_epochs: 2
 
-output:  # 关键修复3：对齐代码里的 output.dir 层级
+output:
   dir: "output_local_test"
   checkpoint_interval: 5
 
 rl:
   kl_coef: 0.05
-  defender_lr: 1.0e-6       # defender 比 attacker 低一个量级，避免伪收敛
+  defender_lr: 1.0e-6
   reward_weights:
     bypass: 0.7
-    diversity: 0.3           # lambda_div：避免多样性惩罚把 reward 拉负
-
+    diversity: 0.3
+ 
 curriculum:
   phase_duration: 3

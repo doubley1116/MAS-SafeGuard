@@ -4,6 +4,7 @@ hf_attacker.py
 HuggingFace Attacker 模型实现
 支持 Qwen2.5-7B-Instruct + Flash Attention 2 + LoRA (r=32)
 """
+import os
 import torch
 from typing import List
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -38,32 +39,68 @@ class HFAttackerModel(BaseAttackerModel):
     def __init__(self, model_name: str = "Qwen/Qwen2.5-7B-Instruct", device: str = "cuda"):
         self.model_name = model_name
         self.device = device
-        
-        # 加载 tokenizer（local_files_only=False 支持首次下载或离线缓存）
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            trust_remote_code=True,
-            local_files_only=False
-        )
-        
+
+        # ── 判断是本地完整模型还是 HuggingFace 模型名 ─────────────────────
+        is_local_path = os.path.exists(model_name)
+
+        # 加载 tokenizer
+        if is_local_path:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                local_files_only=True
+            )
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                local_files_only=False
+            )
+
         # H100 优化：注入 pad_token (大模型通常没有)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        
+
         # ── SDPA 加速：跨平台原生注意力机制 ──────────────────────────────
-        # 使用 PyTorch 2.0 原生的 Scaled Dot Product Attention (SDPA)
-        # 优势：全平台支持（Windows/Linux）、速度快、不依赖 flash-attn 库
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map=device,
-            attn_implementation="sdpa",  # 跨平台兼容，比 flash_attention_2 更广泛支持
-            trust_remote_code=True,
-            local_files_only=False
-        )
-        
-        # H100 显存充足：增强 LoRA 配置
-        if HAS_PEFT:
+        if is_local_path:
+            # 本地路径：优先尝试完整模型加载（不重复 apply LoRA）
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.bfloat16,
+                    device_map=device,
+                    attn_implementation="sdpa",
+                    trust_remote_code=True,
+                    local_files_only=True
+                )
+                if HAS_PEFT and hasattr(self.model, 'peft_config'):
+                    print("[OK] 从本地加载完整 PEFT 模型（已含 LoRA）")
+                else:
+                    print("[OK] 从本地加载基础模型（将应用新 LoRA）")
+            except Exception as e:
+                print(f"[WARN] 本地模型加载失败: {e}，尝试下载基础模型...")
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.bfloat16,
+                    device_map=device,
+                    attn_implementation="sdpa",
+                    trust_remote_code=True,
+                    local_files_only=False
+                )
+                is_local_path = False  # 降级为 HuggingFace 模式
+        else:
+            # HuggingFace 模型名：下载 + 应用 LoRA
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype=torch.bfloat16,
+                device_map=device,
+                attn_implementation="sdpa",
+                trust_remote_code=True,
+                local_files_only=False
+            )
+
+        # H100 显存充足：增强 LoRA 配置（仅在未从本地加载完整 PEFT 时应用）
+        if HAS_PEFT and not (is_local_path and hasattr(self.model, 'peft_config')):
             peft_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM,
                 inference_mode=False,
@@ -75,9 +112,9 @@ class HFAttackerModel(BaseAttackerModel):
             self.model = get_peft_model(self.model, peft_config)
             self.model.print_trainable_parameters()
             print("[OK] 已启用 LoRA (r=32, alpha=64) - H100 优化")
-        else:
+        elif not HAS_PEFT:
             print("[WARN] 未启用 LoRA")
-        
+
         self.optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, self.model.parameters()),
             lr=1e-5

@@ -89,7 +89,7 @@ trace_generator 生成的是完整多步 AuditEvent 序列（用于 D1 风格数
 python src/trace_generator.py --n 2 --out output_trace
 
 # 真实 Attacker + 指定场景
-python src/trace_generator.py --model-dir output/final_model/attacker --n 10 --out output_trace_real
+python src/trace_generator.py --model-dir output/final_model/attacker --n 1 --out output_trace_real
 
 # 需要 API 补全非攻击位置时，在 .env 中设置 API_KEY / BASE_URL / MODEL
 ```
