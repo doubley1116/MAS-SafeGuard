@@ -28,7 +28,6 @@ _LG_AUDITOR_DIR = os.path.join(
 )
 sys.path.insert(0, _LG_AUDITOR_DIR)
 from langgraph_adapter import LangGraphAuditAdapter, WorkflowBlocked, BLOCKED_WORKFLOW_MESSAGE
-from adapter import AdapterCore
 
 # AiTM 拦截器节点依赖这三个特定的 Prompt 常量做路由判断
 from attack_prompts import ATTACK_6_1, ATTACK_6_2, ATTACK_6_3
@@ -74,12 +73,24 @@ except FileNotFoundError:
 ASSET_QUERY_PASSWORD   = permissions_config.get("security", {}).get("asset_query_password",   "default_asset_pass")
 TRADE_EXECUTE_PASSWORD = permissions_config.get("security", {}).get("trade_execute_password", "default_trade_pass")
 
-# 场景级共享 adapter（与 @audited_tool 共用同一实例）
+# 场景级共享 adapter（实时审计 + JSONL 生成）
 _audit_adapter = LangGraphAuditAdapter(
     yaml_path=os.path.join(os.path.dirname(__file__), "trading.yaml"),
-    jsonl_path=None,
-    workflow_dir=None,
     verbose=True,
+    output_dir=os.path.join(os.path.dirname(__file__), "data/workflows/trading"),
+    scenario_prefix="trading",
+    allowed_callers={
+        "asset_query_tool":        ["Asset_Agent"],
+        "trade_execute_tool":      ["Trade_Agent"],
+        "read_external_file_tool": ["Research_Agent"],
+    },
+    required_path_nodes={
+        "trade_execute_tool": ["Research_Agent", "Risk_Agent"],
+        "asset_query_tool":   ["Research_Agent"],
+    },
+    legal_agents={
+        "Research_Agent", "Asset_Agent", "Trade_Agent", "Risk_Agent",
+    },
 )
 
 # ================= 工具定义 =================
@@ -613,40 +624,16 @@ def build_graph(scenario_type: str):
         raise ValueError(f"未知的 scenario_type: {scenario_type}")
     return workflow.compile()
 
-# ================= AdapterCore 实例（生成旧格式 JSONL）=================
-_scenario_counters: dict = {}
-_adapter: AdapterCore | None = None
-
-def _get_core() -> AdapterCore:
-    global _adapter
-    if _adapter is None:
-        _adapter = AdapterCore(output_dir="data/workflows")
-    return _adapter
-
 # ================= 主执行逻辑 =================
 def run_attack_scenario(title: str, attack_name: str, prompt_text: str, graph_type: str = "standard"):
-    """运行攻击场景：AdapterCore 生成旧格式 JSONL + _audit_adapter 实时审计工具调用。"""
-    _scenario_counters[attack_name] = _scenario_counters.get(attack_name, 0) + 1
-    seq = f"{_scenario_counters[attack_name]:03d}"
-    trace_id = f"trading_{attack_name}_{seq}"
-
+    """运行攻击场景：_audit_adapter 负责实时审计 + JSONL 生成。"""
     graph = build_graph(graph_type)
-    _audit_adapter.set_scene_info(scene_name=attack_name, trace_id=trace_id)
-
-    try:
-        _get_core().run_scenario(
-            title=title,
-            graph_type=graph_type,
-            graph=graph,
-            prompt=prompt_text,
-            attack_name=attack_name,
-        )
-    except RuntimeError as e:
-        if str(e).startswith("[AuditBlock]"):
-            print(f"  🔒 已拦截: {e}")
-        else:
-            raise
-    finally:
-        _get_core().flush()
-        _audit_adapter.finalize_workflow()
-        print(f"调用路径: {_audit_adapter.call_path}")
+    _audit_adapter.run_scenario(
+        title=title,
+        graph_type=graph_type,
+        graph=graph,
+        prompt=prompt_text,
+        attack_name=attack_name,
+    )
+    _audit_adapter.flush()
+    print(f"调用路径: {_audit_adapter.call_path}")

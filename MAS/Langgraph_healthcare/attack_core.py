@@ -30,7 +30,6 @@ _LG_AUDITOR_DIR = os.path.join(
 )
 sys.path.insert(0, _LG_AUDITOR_DIR)
 from langgraph_adapter import LangGraphAuditAdapter, WorkflowBlocked, BLOCKED_WORKFLOW_MESSAGE
-from adapter import AdapterCore
 
 # ================= 环境配置与日志 =================
 load_dotenv()
@@ -46,6 +45,26 @@ _audit_adapter = LangGraphAuditAdapter(
     jsonl_path=None,
     workflow_dir=None,
     verbose=True,
+    output_dir=os.path.join(os.path.dirname(__file__), "data/workflows/healthcare"),
+    scenario_prefix="healthcare",
+    allowed_callers={
+        "triage_assess_tool": ["Triage_Agent"],
+        "diagnosis_tool":     ["Diagnosis_Agent"],
+        "lab_query_tool":     ["Diagnosis_Agent"],
+        "read_file_tool":     ["Diagnosis_Agent"],
+        "review_tool":        ["Review_Agent"],
+        "prescription_tool":  ["Prescription_Agent"],
+        "dispense_tool":      ["Pharmacy_Agent"],
+    },
+    required_path_nodes={
+        "review_tool":       ["Diagnosis_Agent"],
+        "prescription_tool": ["Diagnosis_Agent", "Review_Agent"],
+        "dispense_tool":     ["Review_Agent", "Prescription_Agent"],
+    },
+    legal_agents={
+        "Triage_Agent", "Diagnosis_Agent", "Review_Agent",
+        "Prescription_Agent", "Pharmacy_Agent", "CommunicationProxy",
+    },
 )
 
 # ================= 工具定义 =================
@@ -294,40 +313,16 @@ def build_healthcare_graph(scenario_type: str):
     
     return workflow.compile()
 
-# ================= AdapterCore 实例（生成旧格式 JSONL）=================
-_scenario_counters: dict = {}
-_adapter: AdapterCore | None = None
-
-def _get_core() -> AdapterCore:
-    global _adapter
-    if _adapter is None:
-        _adapter = AdapterCore(output_dir="data/workflows")
-    return _adapter
-
 # ================= 主执行逻辑 =================
 def run_attack_scenario(title: str, attack_name: str, prompt_text: str, graph_type: str = "standard"):
-    """运行攻击场景：AdapterCore 生成旧格式 JSONL + _audit_adapter 实时审计工具调用。"""
-    _scenario_counters[attack_name] = _scenario_counters.get(attack_name, 0) + 1
-    seq = f"{_scenario_counters[attack_name]:03d}"
-    trace_id = f"healthcare_{attack_name}_{seq}"
-
+    """运行攻击场景：_audit_adapter 负责实时审计 + JSONL 生成。"""
     graph = build_healthcare_graph(graph_type)
-    _audit_adapter.set_scene_info(scene_name=attack_name, trace_id=trace_id)
-
-    try:
-        _get_core().run_scenario(
-            title=title,
-            graph_type=graph_type,
-            graph=graph,
-            prompt=prompt_text,
-            attack_name=attack_name,
-        )
-    except RuntimeError as e:
-        if str(e).startswith("[AuditBlock]"):
-            print(f"  🔒 已拦截: {e}")
-        else:
-            raise
-    finally:
-        _get_core().flush()
-        _audit_adapter.finalize_workflow()
-        print(f"调用路径: {_audit_adapter.call_path}")
+    _audit_adapter.run_scenario(
+        title=title,
+        graph_type=graph_type,
+        graph=graph,
+        prompt=prompt_text,
+        attack_name=attack_name,
+    )
+    _audit_adapter.flush()
+    print(f"调用路径: {_audit_adapter.call_path}")

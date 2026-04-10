@@ -29,7 +29,6 @@ _LG_AUDITOR_DIR = os.path.join(
 )
 sys.path.insert(0, _LG_AUDITOR_DIR)
 from langgraph_adapter import LangGraphAuditAdapter, WorkflowBlocked, BLOCKED_WORKFLOW_MESSAGE
-from adapter import AdapterCore
 from attack_prompts import (
     ATTACK_A_1, ATTACK_A_2, ATTACK_A_3,
     ATTACK_B_1, ATTACK_B_2, ATTACK_B_3,
@@ -86,12 +85,28 @@ CONFIG_UPDATE_PASSWORD   = permissions_config.get("security", {}).get("config_up
 TOKEN_FETCH_PASSWORD     = permissions_config.get("security", {}).get("token_fetch_password", "2026")
 LOGISTICS_ADD_PASSWORD   = permissions_config.get("security", {}).get("logistics_add_password", "2026")
 
-# 场景级共享 adapter（与 @audited_tool 共用同一实例）
+# 场景级共享 adapter（实时审计 + JSONL 生成）
 _audit_adapter = LangGraphAuditAdapter(
     yaml_path=os.path.join(os.path.dirname(__file__), "ecommerce.yaml"),
-    jsonl_path=None,
-    workflow_dir=None,
     verbose=True,
+    output_dir=os.path.join(os.path.dirname(__file__), "data/workflows/ecommerce"),
+    scenario_prefix="ecommerce",
+    allowed_callers={
+        "stats_query_tool":   ["Stats_Agent"],
+        "order_query_tool":   ["Order_Agent"],
+        "config_update_tool": ["Config_Agent"],
+        "token_fetch_tool":   ["Config_Agent"],
+        "logistics_add_tool": ["Logistics_Agent"],
+    },
+    required_path_nodes={
+        "config_update_tool": ["Compliance_Agent"],
+        "token_fetch_tool":   ["Compliance_Agent"],
+        "logistics_add_tool": ["Order_Agent"],
+    },
+    legal_agents={
+        "Router", "Stats_Agent", "Order_Agent", "Config_Agent",
+        "Logistics_Agent", "Compliance_Agent",
+    },
 )
 
 # ================= 工具定义 =================
@@ -509,45 +524,19 @@ def build_graph(scenario_type: str):
     
     return workflow.compile()
 
-# ================= AdapterCore 实例（生成旧格式 JSONL）=================
-_scenario_counters: dict = {}
-_adapter: AdapterCore | None = None
-
-def _get_core() -> AdapterCore:
-    global _adapter
-    if _adapter is None:
-        _adapter = AdapterCore(output_dir="data/workflows")
-    return _adapter
-
 # ================= 主执行逻辑 =================
 def run_attack_scenario(title: str, attack_name: str, prompt_text: str, graph_type: str = "standard"):
-    """运行攻击场景：AdapterCore 生成旧格式 JSONL + _audit_adapter 实时审计工具调用。"""
-    _scenario_counters[attack_name] = _scenario_counters.get(attack_name, 0) + 1
-    seq = f"{_scenario_counters[attack_name]:03d}"
-    trace_id = f"ecommerce_{attack_name}_{seq}"
-
+    """运行攻击场景：_audit_adapter 负责实时审计 + JSONL 生成。"""
     graph = build_graph(graph_type)
-
-    # 重置 LangGraphAuditAdapter 状态（供 tool_execution_node 使用）
-    _audit_adapter.set_scene_info(scene_name=attack_name, trace_id=trace_id)
-
-    try:
-        _get_core().run_scenario(
-            title=title,
-            graph_type=graph_type,
-            graph=graph,
-            prompt=prompt_text,
-            attack_name=attack_name,
-        )
-    except RuntimeError as e:
-        if str(e).startswith("[AuditBlock]"):
-            print(f"  🔒 已拦截: {e}")
-        else:
-            raise
-    finally:
-        _get_core().flush()
-        _audit_adapter.finalize_workflow()
-        print(f"调用路径: {_audit_adapter.call_path}")
+    _audit_adapter.run_scenario(
+        title=title,
+        graph_type=graph_type,
+        graph=graph,
+        prompt=prompt_text,
+        attack_name=attack_name,
+    )
+    _audit_adapter.flush()
+    print(f"调用路径: {_audit_adapter.call_path}")
 
 # ================= 主程序入口 =================
 if __name__ == "__main__":
