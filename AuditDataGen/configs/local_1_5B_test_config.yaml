@@ -1,38 +1,67 @@
-# 本地单卡测试配置 (RTX 5080 16GB, CUDA 12.8, 双 1.5B 模型)
-device: "cuda"
 
-data:
-  train_path: "output/augmented_events.jsonl"
-  skeleton_type: "all"
+# 基础训练参数
+train:
+  iterations: 10             # 测试轮数
+  batch_size: 1              # 降低：减少激活值显存占用
+  group_size: 1              # GRPO最小值，不能再低
+  learning_rate: 1e-5
+  clip_epsilon: 0.2
+  entropy_coef: 0.01
+  grpo_epochs: 1             # 降低：4→2，减少每批次重复训练
 
+# 模型配置
 models:
   attacker:
-    type: "hf"
-    model_name: "Qwen/Qwen2.5-1.5B-Instruct"
-    device: "cuda:0"
+    type: "qwen"
+    name: "Qwen/Qwen2.5-1.5B-Instruct"
+    device: "cuda:0"          # rtx5080
+    dtype: "bfloat16"
+    attn_impl: "sdpa"
+    max_new_tokens: 100       # 本地测试：缩短生成长度节省显存
+    top_p: 0.9
+    temperature: 0.8
+    lora:
+      r: 16                   # 本地测试：降低 LoRA 秩节省显存
+      alpha: 32
+      dropout: 0.05
 
   defender:
     type: "hf"
-    model_name: "Qwen/Qwen2.5-1.5B-Instruct"
-    device: "cuda:0"
+    name: "Qwen/Qwen2.5-1.5B-Instruct"
+    device: "cuda:0"          # rtx5080
+    dtype: "bfloat16"
+    attn_impl: "sdpa"
+    max_length: 512           # 本地测试：缩短上下文节省显存
+    num_labels: 2
 
-train:
-  iterations: 10
-  batch_size: 4
-  group_size: 2
-  learning_rate: 1.0e-5
-  grpo_epochs: 2
+# 数据配置
+data:
+  skeleton_type: "all"
 
+# 设备配置
+device: "cuda"
+
+# 输出配置
 output:
-  dir: "output_local_test"
-  checkpoint_interval: 5
+  dir: "output"
+  save_checkpoints: true
+  checkpoint_interval: 5     # 10轮中每5轮存一次
 
-rl:
-  kl_coef: 0.05
-  defender_lr: 1.0e-6
-  reward_weights:
-    bypass: 0.7
-    diversity: 0.3
- 
+# 课程学习配置
 curriculum:
-  phase_duration: 3
+  enable: true
+  phase_duration: 2          # 降低：5→2，适配10轮迭代
+  difficulty_levels:
+    easy: ["DPI", "Impersonation"]
+    medium: ["MultiHop", "Colluding", "IPI"]
+    hard: ["Byzantine", "Contradicting", "AiTM"]
+
+# 多样性奖励配置
+diversity:
+  similarity_threshold: 0.85
+  history_size: 5           # 降低：40→10，减少嵌入缓存内存
+
+# RL奖励权重配置
+rl:
+  reward_weights:
+    diversity: 1.0

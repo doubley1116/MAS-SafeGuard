@@ -29,10 +29,17 @@ D3/D4 数据清洗器：从 D1 生成的 audit.jsonl 清洗出 D3（攻击样本
   python src/d3_d4_cleaner.py --input output_trace_real/audit.jsonl --d3-out data/d3 --d4-out data/d4
 """
 
+import os
+import sys
 import json
 import argparse
 from pathlib import Path
 from typing import Optional
+
+# 确保能导入同目录的 generator 模块
+_src_dir = os.path.dirname(os.path.abspath(__file__))
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 全局配置
@@ -183,36 +190,37 @@ def build_d3_event(event: dict, scenario: str) -> dict:
     """
     构建 D3 攻击位置事件
 
-    sender 修正：
-    - IPI → "File_System"（污染文件伪装成文件系统输出）
-    - AiTM → "AiTM_Interceptor"
-    - 其余保持 "User"
+    IPI 特殊处理：
+    - sender 改为 "File_System"（攻击藏在文件内容里）
+    - event_type 改为 "tool_result"（表示文件系统返回的原始内容，补全任务）
 
-    写入 audit_decision（应被拦截）
+    AiTM：
+    - sender 改为 "AiTM_Interceptor"
+
+    其余场景 sender 保持 "User"
     """
     e = dict(event)
 
-    # sender 修正
     if scenario == "IPI":
         e["sender"] = "File_System"
+        e["event_type"] = "tool_result"   # 表示文件系统返回的原始内容
     elif scenario == "AiTM":
         e["sender"] = "AiTM_Interceptor"
-        # 确保 AiTM_Interceptor 在 call_path 中
         cp = list(e.get("call_path") or [])
         if "AiTM_Interceptor" not in cp:
             cp.append("AiTM_Interceptor")
         e["call_path"] = cp
-    # 其余场景 sender 保持不变
 
-    # 写入 audit_decision（应被拦截）
+    from generator import _get_blocking_risk_types
+    blocking = _get_blocking_risk_types(scenario)
+
     e.setdefault("metadata", {})
     e["metadata"]["audit_decision"] = {
-        "allow": False,
-        "risk_score": e["metadata"].get("skeleton_risk_score", 0.85),
-        "reason": f"[规则拦截] 检测到 {scenario} 攻击行为",
-        "blocking_risk_types": [scenario],
-        "suggested_alternative": None,
-        "level": "block"
+        "label": "dangerous",
+        "reason": e["metadata"].get("audit_decision", {}).get("reason")
+                  or f"[{scenario}] 检测到：{', '.join(blocking)}",
+        "blocking_risk_types": blocking,
+        "suggested_alternative": "建议先经过合规审查节点",
     }
     return e
 
@@ -223,23 +231,15 @@ def build_d3_event(event: dict, scenario: str) -> dict:
 
 def build_d4_event(event: dict) -> dict:
     """
-    构建 D4 正常事件
-
-    D4 包含：
-    - benign trace 的全部事件
-    - attack trace 中，攻击位置之外的所有事件
-
-    写入 audit_decision（放行）
+    构建 D4 正常 User 消息事件（只保留 User 消息）
     """
     e = dict(event)
     e.setdefault("metadata", {})
     e["metadata"]["audit_decision"] = {
-        "allow": True,
-        "risk_score": 0.0,
-        "reason": "[规则放行] 正常业务请求",
+        "label": "normal",
+        "reason": "正常操作",
         "blocking_risk_types": [],
         "suggested_alternative": None,
-        "level": "pass"
     }
     return e
 
@@ -292,10 +292,14 @@ def run_cleaner(
         scenario, label = enrich_trace(events)
 
         if label == "benign":
-            # D4：benign trace 的全部事件
+            # D4：只取 User 消息
             stats["benign_traces"] += 1
-            for e in events:
-                d4_buckets[detect_scene(e)].append(build_d4_event(e))
+            user_event = next(
+                (e for e in events if e.get("sender") == "User" and e.get("event_type") == "message"),
+                None
+            )
+            if user_event:
+                d4_buckets[detect_scene(user_event)].append(build_d4_event(user_event))
 
         elif label == "attack_success":
             stats["attack_traces"] += 1
@@ -306,18 +310,21 @@ def run_cleaner(
                 d3_buckets[scenario].append(build_d3_event(atk_event, scenario))
                 stats["d3_events"] += 1
             elif atk_event:
-                # 攻击事件但不属于 D3 四种类型，打印警告
-                # 攻击事件丢弃，非攻击事件由下方统一处理
                 print(f"  [WARN] trace={tid[:8]} scenario={scenario} 不属于 D3 类型，攻击事件丢弃")
             else:
-                # 找不到攻击位置事件，打印警告
                 print(f"  [WARN] trace={tid[:8]} scenario={scenario} 未找到攻击位置，攻击事件丢弃")
                 stats["skipped_traces"] += 1
 
-            # D4：非攻击位置的其余事件（统一处理所有攻击 trace）
-            for i, e in enumerate(events):
-                if i != atk_idx:
-                    d4_buckets[detect_scene(e)].append(build_d4_event(e))
+            # D4：IPI/AiTM 的 User 消息（攻击不在 User，User 消息是正常的）
+            # PathBypass/CallerImpersonation/SemanticInjection/RouterHijacking/PromptInfection
+            # 的攻击就是 User 消息本身（atk_idx==0），不加入 D4
+            if atk_idx is not None and atk_idx != 0:
+                user_event = next(
+                    (e for e in events if e.get("sender") == "User" and e.get("event_type") == "message"),
+                    None
+                )
+                if user_event:
+                    d4_buckets[detect_scene(user_event)].append(build_d4_event(user_event))
 
         else:
             print(f"  [WARN] trace={tid[:8]} 未知 label={label}")

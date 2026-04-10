@@ -13,13 +13,26 @@ train:
 models:
   attacker:
     type: "qwen"              # 攻击者模型类型: mock, qwen
-    name: "Qwen/Qwen2.5-1.5B-Instruct"  # 改为本地训练好的模型路径
+    name: "Qwen/Qwen2.5-3B-Instruct"  # 改为本地训练好的模型路径
     device: "cuda:4"          # A6000 空闲卡 (48GB)
+    dtype: "bfloat16"         # 推理/训练精度: bfloat16, float16, float32
+    attn_impl: "sdpa"         # 注意力实现: sdpa, flash_attention_2, eager
+    max_new_tokens: 150       # 生成最大 token 数
+    top_p: 0.9                # 采样 top-p
+    temperature: 0.8          # 采样温度
+    lora:
+      r: 32                   # LoRA 秩
+      alpha: 64               # LoRA 缩放系数
+      dropout: 0.05           # LoRA Dropout
 
   defender:
     type: "hf"                # 防御者模型类型: hf (HuggingFace通用加载)
-    name: "Qwen/Qwen2.5-1.5B-Instruct"  # 改为本地训练好的模型路径
+    name: "Qwen/Qwen2.5-3B-Instruct"  # 改为本地训练好的模型路径
     device: "cuda:5"          # A6000 空闲卡 (48GB)
+    dtype: "bfloat16"         # 推理/训练精度: bfloat16, float16, float32
+    attn_impl: "sdpa"         # 注意力实现: sdpa, flash_attention_2, eager
+    max_length: 1024          # 分类器最大输入长度
+    num_labels: 2             # 分类标签数 (SAFE / MALICIOUS)
 
 # 数据配置
 data:

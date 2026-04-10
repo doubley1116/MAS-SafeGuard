@@ -51,6 +51,7 @@ from skeletons import SKELETONS, FILLERS
 from generator import (
     sample_values, random_fill, make_timestamp, compute_hash,
     _make_metadata, _parse_tool_call, _extract_task_from_skeleton,
+    _find_interception_step_idx, _assign_label, _get_blocking_risk_types, _generate_reason_with_api,
 )
 
 
@@ -254,15 +255,15 @@ def generate_trace_with_attacker(
     attacker_generate_fn: Callable[[str, str], str],
     api_client,
     api_model: str = "gpt-4o-mini",
-    values: dict = None,
-    trace_id: str = None,
+    values: Optional[dict] = None,
+    trace_id: Optional[str] = None,
 ) -> list[dict]:
     """
     生成一条完整的 AuditEvent trace。
-    
+
     攻击位置：调用 attacker_generate_fn 生成 content
     其余位置：调用 api_client 补全 content
-    
+
     Args:
         skeleton:             骨架定义（来自 SKELETONS）
         attacker_generate_fn: Attacker 的 generate 方法
@@ -270,7 +271,7 @@ def generate_trace_with_attacker(
         api_model:            补全使用的模型名
         values:               填充值字典，None 时自动采样
         trace_id:             trace ID，None 时自动生成
-    
+
     Returns:
         AuditEvent 列表（格式与 generator.py 完全兼容）
     """
@@ -287,6 +288,9 @@ def generate_trace_with_attacker(
     time_offset = 0
     scenario_type = skeleton.get("scenario_type", "")
     task = _extract_task_from_skeleton(skeleton, values)
+    
+    # 找到拦截点
+    interception_idx = _find_interception_step_idx(skeleton)
     
     ROUTER_NODES = {"Semantic_Router"}
     
@@ -360,7 +364,31 @@ def generate_trace_with_attacker(
         }
         self_hash = compute_hash(hash_payload)
         
-        # 7. 组装事件
+        # 7. 构建 metadata（包含新的 audit_decision）
+        label = _assign_label(skeleton, i, interception_idx)
+        blocking_risk_types = _get_blocking_risk_types(scenario_type) if label != "normal" else []
+        
+        # 生成 reason
+        if label == "normal":
+            reason = "正常操作"
+        else:
+            reason = _generate_reason_with_api(
+                content=display_content,
+                tool_args=tool_args,
+                skeleton=skeleton,
+                blocking_risk_types=blocking_risk_types,
+                sender=sender
+            )
+        
+        metadata = _make_metadata(skeleton, event_type, i)
+        metadata["audit_decision"] = {
+            "label": label,
+            "reason": reason,
+            "blocking_risk_types": blocking_risk_types,
+            "suggested_alternative": "建议先经过合规审查节点" if label == "dangerous" else None,
+        }
+        
+        # 9. 组装事件
         event = {
             "event_type": event_type,
             "sender": sender,
@@ -374,15 +402,19 @@ def generate_trace_with_attacker(
             "event_id": event_id,
             "trace_id": trace_id,
             "timestamp": timestamp,
-            "metadata": _make_metadata(skeleton, event_type, i),
+            "metadata": metadata,
         }
         events.append(event)
         prev_hash = self_hash
         
-        # 8. 更新 history_lines
+        # 10. 更新 history_lines
         if event_type == "message" and display_content:
             snippet = display_content[:300].replace("\n", " ")
             history_lines.append(f"[{sender}]: {snippet}")
+        
+        # 11. 新截断：达到拦截点后停止
+        if i >= interception_idx:
+            break
     
     return events
 
@@ -391,7 +423,7 @@ def generate_trace_with_attacker(
 # 模型加载
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_attacker_model(model_dir: str = None):
+def load_attacker_model(model_dir: Optional[str] = None):
     """
     加载训练好的 Attacker 模型，失败时自动回退到 MockAttackerModel。
 
@@ -493,7 +525,7 @@ def generate_dataset(
             try:
                 events = generate_trace_with_attacker(
                     skeleton, attacker_generate_fn,
-                    api_client, api_model, values, trace_id
+                    api_client, api_model, values, trace_id,
                 )
             except Exception as e:
                 print(f"  [WARN] [{skeleton['id']}] 第{idx+1}次生成失败: {e}")

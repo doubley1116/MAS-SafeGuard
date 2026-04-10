@@ -198,20 +198,24 @@ def load_skeleton_pool(skeleton_type: str = "all") -> List[Skeleton]:
     return skeleton_pool
 
 
-def create_attacker_model(model_type: str, model_name: str = None, device: str = "cpu") -> BaseAttackerModel:
+def create_attacker_model(
+    model_type: str,
+    model_name: str = None,
+    device: str = "cpu",
+    model_config: dict = None,
+) -> BaseAttackerModel:
     """
     创建攻击者模型
-    
+
     Args:
         model_type: "mock", "gpt2", "wenozhong", "qwen"
         model_name: 可选，自定义模型名称
         device: "cpu" 或 "cuda"
+        model_config: YAML models.attacker 节完整字典，用于透传超参
     """
-    # 如果请求mock模型，直接返回
     if model_type == "mock":
         return MockAttackerModel()
-    
-    # 设置默认模型名称
+
     if model_name is None:
         if model_type == "gpt2":
             model_name = "gpt2"
@@ -221,8 +225,7 @@ def create_attacker_model(model_type: str, model_name: str = None, device: str =
             model_name = "Qwen/Qwen2.5-1.5B-Instruct"
         else:
             model_name = "gpt2"
-    
-    # 检查设备可用性（支持 cuda:N 格式）
+
     if device.startswith("cuda"):
         try:
             import torch
@@ -231,36 +234,53 @@ def create_attacker_model(model_type: str, model_name: str = None, device: str =
                 device = "cpu"
         except ImportError:
             device = "cpu"
-    
+
+    cfg = model_config or {}
+    lora_cfg = cfg.get("lora", {})
+
     try:
-        # 延迟导入HFAttackerModel
         HFAttackerModelClass = import_hf_attacker()
         if HFAttackerModelClass is None:
             print("[WARN] HFAttackerModel不可用，使用Mock模型作为后备")
             return MockAttackerModel()
-        
+
         print(f"[OK] 创建攻击者模型: {model_name} on {device}")
-        return HFAttackerModelClass(model_name=model_name, device=device)
+        return HFAttackerModelClass(
+            model_name=model_name,
+            device=device,
+            dtype=cfg.get("dtype", "bfloat16"),
+            attn_impl=cfg.get("attn_impl", "sdpa"),
+            max_new_tokens=cfg.get("max_new_tokens", 150),
+            top_p=cfg.get("top_p", 0.9),
+            temperature=cfg.get("temperature", 0.8),
+            lora_r=lora_cfg.get("r", 32),
+            lora_alpha=lora_cfg.get("alpha", 64),
+            lora_dropout=lora_cfg.get("dropout", 0.05),
+        )
     except Exception as e:
         print(f"[FAIL] 创建攻击者模型失败: {e}")
         print("[WARN] 使用Mock模型作为后备")
         return MockAttackerModel()
 
 
-def create_defender_model(model_type: str, model_name: str = None, device: str = "cpu") -> BaseDefenderModel:
+def create_defender_model(
+    model_type: str,
+    model_name: str = None,
+    device: str = "cpu",
+    model_config: dict = None,
+) -> BaseDefenderModel:
     """
     创建防御者模型
-    
+
     Args:
-        model_type: "mock", "bert", "roberta", "ernie"
+        model_type: "mock", "bert", "roberta", "ernie", "hf"
         model_name: 可选，自定义模型名称
         device: "cpu" 或 "cuda"
+        model_config: YAML models.defender 节完整字典，用于透传超参
     """
-    # 如果请求mock模型，直接返回
     if model_type == "mock":
         return MockDefenderModel()
-    
-    # 设置默认模型名称
+
     if model_name is None:
         if model_type == "bert":
             model_name = "bert-base-chinese"
@@ -269,11 +289,10 @@ def create_defender_model(model_type: str, model_name: str = None, device: str =
         elif model_type == "ernie":
             model_name = "nghuyong/ernie-3.0-base-zh"
         elif model_type == "hf":
-            model_name = "Qwen/Qwen2.5-7B-Instruct"  # H100双7B配置
+            model_name = "Qwen/Qwen2.5-7B-Instruct"
         else:
             model_name = "bert-base-chinese"
-    
-    # 检查设备可用性（支持 cuda:N 格式）
+
     if device.startswith("cuda"):
         try:
             import torch
@@ -282,24 +301,31 @@ def create_defender_model(model_type: str, model_name: str = None, device: str =
                 device = "cpu"
         except ImportError:
             device = "cpu"
-    
+
+    cfg = model_config or {}
+
     try:
-        # H100双7B：使用HFDefenderModel（7B分类器）
         if model_type == "hf":
             HFDefenderModelClass = import_hf_defender()
             if HFDefenderModelClass is None:
                 print("[WARN] HFDefenderModel不可用，使用Mock模型作为后备")
                 return MockDefenderModel()
-            
-            print(f"[OK] 创建防御者模型 (7B分类器): {model_name} on {device}")
-            return HFDefenderModelClass(model_name=model_name, device=device)
+
+            print(f"[OK] 创建防御者模型: {model_name} on {device}")
+            return HFDefenderModelClass(
+                model_name=model_name,
+                device=device,
+                dtype=cfg.get("dtype", "bfloat16"),
+                attn_impl=cfg.get("attn_impl", "sdpa"),
+                max_length=cfg.get("max_length", 1024),
+                num_labels=cfg.get("num_labels", 2),
+            )
         else:
-            # 传统BERT类分类器
             BERTDefenderModelClass = import_bert_defender()
             if BERTDefenderModelClass is None:
                 print("[WARN] BERTDefenderModel不可用，使用Mock模型作为后备")
                 return MockDefenderModel()
-            
+
             print(f"[OK] 创建防御者模型: {model_name} on {device}")
             return BERTDefenderModelClass(model_name=model_name, device=device)
     except Exception as e:
@@ -378,16 +404,16 @@ def train_from_config(config: Dict[str, Any]):
 
     attacker = create_attacker_model(
         model_type=attacker_config.get("type", "mock"),
-        # 兼容读取 model_name 或 name（YAML配置可能使用不同键名）
         model_name=attacker_config.get("model_name", attacker_config.get("name")),
-        device=attacker_device
+        device=attacker_device,
+        model_config=attacker_config,
     )
 
     defender = create_defender_model(
         model_type=defender_config.get("type", "mock"),
-        # 兼容读取 model_name 或 name（YAML配置可能使用不同键名）
         model_name=defender_config.get("model_name", defender_config.get("name")),
-        device=defender_device
+        device=defender_device,
+        model_config=defender_config,
     )
 
     # 3. 创建训练器

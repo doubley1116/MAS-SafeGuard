@@ -4,6 +4,7 @@ hf_defender.py
 HuggingFace Defender 模型实现
 支持 Qwen2.5-7B-Instruct 作为二分类器 + 原生 SDPA (Scaled Dot Product Attention)
 """
+import os
 import torch
 import torch.nn as nn
 from typing import List, Tuple
@@ -19,61 +20,91 @@ except ImportError:
     from models.base_models import BaseDefenderModel
 
 
+def _resolve_model_path(model_name: str) -> str:
+    """
+    将 HuggingFace 模型名解析为本地缓存的实际路径。
+    - 若已是本地路径，直接返回。
+    - 若在 HF 缓存中存在，返回 snapshot 目录路径（绕过网络握手）。
+    - 否则返回原始模型名（交给 from_pretrained 走联网下载）。
+    """
+    if os.path.exists(model_name):
+        return model_name
+
+    try:
+        from huggingface_hub import snapshot_download
+        path = snapshot_download(model_name, local_files_only=True)
+        print(f"[OK] 本地缓存命中: {path}")
+        return path
+    except Exception:
+        print(f"[INFO] 本地缓存未命中，将联网下载: {model_name}")
+        return model_name
+
+
+_DTYPE_MAP = {
+    "bfloat16": torch.bfloat16,
+    "float16":  torch.float16,
+    "float32":  torch.float32,
+}
+
+
 class HFDefenderModel(BaseDefenderModel):
     """
-    Defender 模型：使用 Qwen2.5-7B-Instruct 作为二分类器
-    
-    H100 优化特性：
-    - Flash Attention 2 加速
-    - bfloat16 半精度
-    - Pad Token 修复（批量打分兼容性）
+    Defender 模型：使用 Qwen2.5 系列 Instruct 模型作为二分类器。
+
+    所有超参均可通过 YAML 的 models.defender 节注入，无需修改代码。
     """
-    
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-7B-Instruct", device: str = "cuda"):
+
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen2.5-7B-Instruct",
+        device: str = "cuda",
+        dtype: str = "bfloat16",
+        attn_impl: str = "sdpa",
+        max_length: int = 1024,
+        num_labels: int = 2,
+    ):
         self.model_name = model_name
         self.device = device
-        
-        # 加载 tokenizer（local_files_only=False 支持首次下载或离线缓存）
+        self.max_length = max_length
+
+        torch_dtype = _DTYPE_MAP.get(dtype, torch.bfloat16)
+
+        # ── 解析模型路径（优先本地缓存，找不到才联网）─────────────────────
+        resolved = _resolve_model_path(model_name)
+        is_local_path = os.path.exists(resolved)
+
+        # 加载 tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
+            resolved,
             trust_remote_code=True,
-            local_files_only=False
+            local_files_only=is_local_path,
         )
-        
-        # 【关键修复】Pad Token 问题：大模型默认没有 pad_token
+
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        
-        # ── SDPA 加速：跨平台原生注意力机制 ──────────────────────────────
-        # 使用 PyTorch 2.0 原生的 Scaled Dot Product Attention (SDPA)
-        # 优势：全平台支持（Windows/Linux）、速度快、不依赖 flash-attn 库
+
+        # ── 加载序列分类模型 ──────────────────────────────────────────────
         self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_name,
-            num_labels=2,                     # 二分类：SAFE vs MALICIOUS
-            torch_dtype=torch.bfloat16,       # bfloat16 半精度
-            attn_implementation="sdpa",       # 跨平台兼容，比 flash_attention_2 更广泛支持
+            resolved,
+            num_labels=num_labels,
+            torch_dtype=torch_dtype,
+            attn_implementation=attn_impl,
             trust_remote_code=True,
-            device_map=device,                # 单卡严格绑定
-            local_files_only=False
+            device_map=device,
+            local_files_only=is_local_path,
         )
-        
-        # 【关键修复】同步 pad_token_id
+
         self.model.config.pad_token_id = self.tokenizer.pad_token_id
-        
-        # 推理模式（不保存梯度）
         self.model.eval()
-        
-        # 优化器
+
         self.optimizer = AdamW(self.model.parameters(), lr=1e-5)
         self.loss_fn = nn.CrossEntropyLoss()
-        
-        # 类别映射
+
         self.label_map = {"SAFE": 0, "MALICIOUS": 1}
         self.reverse_label_map = {0: "SAFE", 1: "MALICIOUS"}
-        
+
         print(f"[OK] HFDefender 初始化: {model_name}")
-        print(f"     - SDPA: 已启用 (跨平台兼容)")
-        print(f"     - bfloat16: 已启用")
+        print(f"     - dtype={dtype}, attn={attn_impl}, max_length={max_length}, num_labels={num_labels}")
         print(f"     - pad_token_id: {self.tokenizer.pad_token_id}")
     
     def predict(self, text: str) -> Tuple[str, float]:
@@ -88,9 +119,9 @@ class HFDefenderModel(BaseDefenderModel):
             text,
             padding=True,
             truncation=True,
-            max_length=1024,      # 7B模型支持更长上下文
+            max_length=self.max_length,
             return_tensors="pt"
-        ).to(self.device)  # 单卡严格绑定
+        ).to(self.device)
         
         with torch.no_grad():
             outputs = self.model(**inputs)
@@ -119,9 +150,9 @@ class HFDefenderModel(BaseDefenderModel):
             texts,
             padding=True,
             truncation=True,
-            max_length=1024,
+            max_length=self.max_length,
             return_tensors="pt"
-        ).to(self.device)  # 单卡严格绑定
+        ).to(self.device)
         
         with torch.no_grad():
             outputs = self.model(**inputs)
