@@ -18,6 +18,8 @@ from audit_sink import (
     PrintAuditSink,
     JsonlAuditSink,
     CompositeAuditSink,
+    EventHistoryBuffer,
+    HistoryTrackingSink,
     SecurityCoreSink,
     WorkflowBlocked,
 )
@@ -31,9 +33,8 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from audit_layer.security_core import SecurityCore as _BaseSecurityCore
-from audit_layer.rule_engine import RuleEngine as _BaseRuleEngine
-from audit_layer.audit_models import AuditEvent, AuditDecision
+from audit_layer.security_core import SecurityCore
+from audit_layer.audit_models import AuditEvent
 
 from database.healthcare_db import (
     init_healthcare_db,
@@ -69,143 +70,6 @@ class AuditDisabledSink:
 
     def is_blocked(self) -> bool:
         return False
-
-
-class RuleEngine(_BaseRuleEngine):
-    """
-    继承 audit_layer.RuleEngine，补充医疗场景特有的校验逻辑。
-    所有事件类型都走完整规则引擎 + LLM 审核，不做关键词预筛。
-    """
-
-    def evaluate(self, event: AuditEvent) -> tuple[float, list[str], str]:
-        from typing import List
-        hits: List[tuple[float, str, str]] = []
-
-        if event.event_type == "tool_call":
-            hits += self._check_tool_caller(event)
-            hits += self._check_required_path(event)
-            hits += self._check_path_rule(event)
-            hits += self._check_strict_path(event)
-            hits += self._check_blocked_tools(event)
-
-        elif event.event_type == "message":
-            hits += self._check_message_target(event)
-
-        elif event.event_type == "task_delegation":
-            pass
-
-        elif event.event_type == "tool_result":
-            pass
-
-        if not hits:
-            return 0.0, [], "规则引擎未命中任何规则"
-
-        rule_score = max(h[0] for h in hits)
-        risk_types = list({h[1] for h in hits})
-        reasons = " | ".join(h[2] for h in hits)
-        return rule_score, risk_types, reasons
-
-    def _agent_path(self, event: AuditEvent) -> list[str]:
-        path = list(event.call_path or [])
-        if path and event.tool_name and path[-1] == event.tool_name:
-            path = path[:-1]
-        return path
-
-    def _check_path_rule(self, event: AuditEvent) -> list[tuple]:
-        tool_policy = self.policy.get_tool(event.tool_name or "")
-        if not tool_policy:
-            return []
-        path_rule = tool_policy.get("path_rule")
-        if not path_rule:
-            return []
-        path_def = self.policy.paths.get(path_rule, {})
-        sequence = path_def.get("sequence", [])
-        strict = path_def.get("strict", False)
-        if not sequence:
-            return []
-        actual_path = self._agent_path(event)
-        if not actual_path:
-            return [(0.92, "missing_call_path",
-                     f"{event.tool_name} 声明了 path_rule={path_rule}，但当前 call_path 为空")]
-        if strict:
-            if actual_path != sequence:
-                return [(0.93, "strict_path_violation",
-                         f"{event.tool_name} 要求严格路径 {sequence}，实际路径：{actual_path}")]
-            return []
-        idx = 0
-        for node in actual_path:
-            if idx < len(sequence) and node == sequence[idx]:
-                idx += 1
-        if idx < len(sequence):
-            return [(0.92, "path_rule_violation",
-                     f"{event.tool_name} 要求路径包含有序序列 {sequence}，实际路径：{actual_path}")]
-        return []
-
-    def _check_strict_path(self, event: AuditEvent) -> list[tuple]:
-        tool_policy = self.policy.get_tool(event.tool_name or "")
-        if tool_policy and tool_policy.get("path_rule"):
-            return []
-        return super()._check_strict_path(event)
-
-
-_NON_BLOCKING_EVENT_TYPES = {"task_delegation", "tool_result"}
-
-
-class SecurityCore(_BaseSecurityCore):
-    def __init__(self, yaml_path: str):
-        super().__init__(yaml_path)
-        self.rule_engine = RuleEngine(self.policy)
-
-    def audit(self, event: AuditEvent) -> AuditDecision:
-        """
-        审核流程：
-        - rule_score >= 0.90 → 规则直接拦截，不走 LLM
-        - 其余所有情况 → 规则分 + LLM 语义审核
-        """
-        rule_score, risk_types, rule_reason = self.rule_engine.evaluate(event)
-        t_block = self.policy.threshold("rule_block")
-
-        if rule_score >= t_block:
-            return AuditDecision(
-                allow=False,
-                risk_score=rule_score,
-                reason=f"[规则拦截] {rule_reason}",
-                blocking_risk_types=risk_types,
-            )
-
-        # 所有事件都走 LLM 语义审核，LLM 能看到完整 history
-        llm_decision = self.llm_reviewer.review(event, rule_risk_types=risk_types)
-        if risk_types:
-            merged_types = list(set(risk_types + llm_decision.blocking_risk_types))
-            llm_decision.blocking_risk_types = merged_types
-        llm_decision.reason = f"规则分={rule_score:.2f} → {llm_decision.reason}"
-        return llm_decision
-
-    def handle_event(self, event: AuditEvent) -> AuditDecision:
-        decision = self.audit(event)
-
-        if event.event_type in _NON_BLOCKING_EVENT_TYPES and not decision.allow:
-            print(
-                f"[SecurityCore] Event: {event.event_type} | "
-                f"Sender: {event.sender} | "
-                f"LLM判定: risk_score={decision.risk_score:.2f}, "
-                f"reason={decision.reason} | ⚠️ 仅记录，不阻断"
-            )
-            decision = AuditDecision(
-                allow=True,
-                risk_score=decision.risk_score,
-                reason=f"[仅记录] {decision.reason}",
-                blocking_risk_types=decision.blocking_risk_types,
-                suggested_alternative=decision.suggested_alternative,
-            )
-        else:
-            print(
-                f"[SecurityCore] Event: {event.event_type} | "
-                f"Sender: {event.sender} | "
-                f"Decision: allow={decision.allow}, risk_score={decision.risk_score:.2f}"
-            )
-
-        return decision
 
 
 load_dotenv()
@@ -246,11 +110,13 @@ class WorkflowGuard:
 
 policy = load_policy()
 workflow_guard = WorkflowGuard()
+history_buffer = EventHistoryBuffer()
 
 if AUDIT_ENABLED:
     security_core = SecurityCore(yaml_path="policy.yaml")
     security_core_sink = SecurityCoreSink(security_core)
     audit_sink = CompositeAuditSink(
+        HistoryTrackingSink(history_buffer),
         security_core_sink,
         PrintAuditSink(),
         JsonlAuditSink("database/audit_log.jsonl"),
@@ -315,18 +181,18 @@ def set_current_trace(task_description: str, expected_output: str = "") -> str:
     CURRENT_TRACE_ID = str(uuid.uuid4())
     CURRENT_TASK_DESCRIPTION = task_description
     CURRENT_EXPECTED_OUTPUT = expected_output or ""
+    history_buffer.reset()
     audit_adapter.trace_id = CURRENT_TRACE_ID
     return CURRENT_TRACE_ID
 
 
 def get_history_summary() -> str:
-    """提供完整上下文给 LLM 审核器，但不暴露场景标识。"""
-    parts = []
-    if CURRENT_TASK_DESCRIPTION:
-        parts.append(f"task={CURRENT_TASK_DESCRIPTION.strip()}")
-    if CURRENT_EXPECTED_OUTPUT:
-        parts.append(f"expected_output={CURRENT_EXPECTED_OUTPUT.strip()}")
-    return " | ".join(parts)
+    """返回最近审计事件的滚动摘要，供 audit_layer.LLMReviewer 使用。"""
+    return history_buffer.summary()
+
+
+def get_current_task() -> str:
+    return CURRENT_TASK_DESCRIPTION.strip()
 
 
 def get_call_path(role: str) -> list[str]:
@@ -337,6 +203,9 @@ def get_call_path(role: str) -> list[str]:
     if path is not None:
         return path
     return ["manager", role]
+
+
+audit_adapter.set_task_getter(get_current_task)
 
 
 if AUDIT_ENABLED:

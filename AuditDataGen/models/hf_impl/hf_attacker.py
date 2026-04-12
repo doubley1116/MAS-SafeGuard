@@ -4,6 +4,7 @@ hf_attacker.py
 HuggingFace Attacker 模型实现
 支持 Qwen2.5-7B-Instruct + Flash Attention 2 + LoRA (r=32)
 """
+import os
 import torch
 from typing import List
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -25,59 +26,127 @@ except ImportError:
     print("[WARN] peft 库不可用，将不使用 LoRA")
 
 
+def _resolve_model_path(model_name: str) -> str:
+    """
+    将 HuggingFace 模型名解析为本地缓存的实际路径。
+    - 若已是本地路径，直接返回。
+    - 若在 HF 缓存中存在，返回 snapshot 目录路径（绕过网络握手）。
+    - 否则返回原始模型名（交给 from_pretrained 走联网下载）。
+    """
+    if os.path.exists(model_name):
+        return model_name  # 已经是本地路径
+
+    try:
+        from huggingface_hub import snapshot_download
+        path = snapshot_download(model_name, local_files_only=True)
+        print(f"[OK] 本地缓存命中: {path}")
+        return path
+    except Exception:
+        print(f"[INFO] 本地缓存未命中，将联网下载: {model_name}")
+        return model_name  # 回退到联网下载
+
+
+_DTYPE_MAP = {
+    "bfloat16": torch.bfloat16,
+    "float16":  torch.float16,
+    "float32":  torch.float32,
+}
+
+
 class HFAttackerModel(BaseAttackerModel):
     """
-    Attacker 模型：支持 Qwen2.5-7B-Instruct
-    
-    H100 优化特性：
-    - Flash Attention 2 加速
-    - bfloat16 半精度
-    - LoRA r=32, lora_alpha=64 (增强拟合能力)
+    Attacker 模型：支持 Qwen2.5 系列 Instruct 模型 + LoRA GRPO 微调。
+
+    所有超参均可通过 YAML 的 models.attacker 节注入，无需修改代码。
     """
-    
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-7B-Instruct", device: str = "cuda"):
+
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen2.5-7B-Instruct",
+        device: str = "cuda",
+        dtype: str = "bfloat16",
+        attn_impl: str = "sdpa",
+        max_new_tokens: int = 150,
+        top_p: float = 0.9,
+        temperature: float = 0.8,
+        lora_r: int = 32,
+        lora_alpha: int = 64,
+        lora_dropout: float = 0.05,
+    ):
         self.model_name = model_name
         self.device = device
-        
-        # 加载 tokenizer（local_files_only=False 支持首次下载或离线缓存）
+        self.max_new_tokens = max_new_tokens
+        self.top_p = top_p
+        self.temperature = temperature
+
+        torch_dtype = _DTYPE_MAP.get(dtype, torch.bfloat16)
+
+        # ── 解析模型路径（优先本地缓存，找不到才联网）─────────────────────
+        resolved = _resolve_model_path(model_name)
+        is_local_path = os.path.exists(resolved)
+
+        # 加载 tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
+            resolved,
             trust_remote_code=True,
-            local_files_only=False
+            local_files_only=is_local_path,
         )
-        
-        # H100 优化：注入 pad_token (大模型通常没有)
+
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        
-        # ── SDPA 加速：跨平台原生注意力机制 ──────────────────────────────
-        # 使用 PyTorch 2.0 原生的 Scaled Dot Product Attention (SDPA)
-        # 优势：全平台支持（Windows/Linux）、速度快、不依赖 flash-attn 库
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map=device,
-            attn_implementation="sdpa",  # 跨平台兼容，比 flash_attention_2 更广泛支持
-            trust_remote_code=True,
-            local_files_only=False
-        )
-        
-        # H100 显存充足：增强 LoRA 配置
-        if HAS_PEFT:
+
+        # ── 加载基础模型 ──────────────────────────────────────────────────
+        if is_local_path:
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    resolved,
+                    torch_dtype=torch_dtype,
+                    device_map=device,
+                    attn_implementation=attn_impl,
+                    trust_remote_code=True,
+                    local_files_only=True,
+                )
+                if HAS_PEFT and hasattr(self.model, 'peft_config'):
+                    print("[OK] 从本地加载完整 PEFT 模型（已含 LoRA）")
+                else:
+                    print("[OK] 从本地加载基础模型（将应用新 LoRA）")
+            except Exception as e:
+                print(f"[WARN] 本地模型加载失败: {e}，尝试下载基础模型...")
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch_dtype,
+                    device_map=device,
+                    attn_implementation=attn_impl,
+                    trust_remote_code=True,
+                    local_files_only=False,
+                )
+                is_local_path = False
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                resolved,
+                torch_dtype=torch_dtype,
+                device_map=device,
+                attn_implementation=attn_impl,
+                trust_remote_code=True,
+                local_files_only=False,
+            )
+
+        # ── LoRA ─────────────────────────────────────────────────────────
+        if HAS_PEFT and not (is_local_path and hasattr(self.model, 'peft_config')):
             peft_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM,
                 inference_mode=False,
-                r=32,                          # 增强：16G->32
-                lora_alpha=64,                 # 增强：32->64
-                lora_dropout=0.05,
+                r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
                 target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
             )
             self.model = get_peft_model(self.model, peft_config)
             self.model.print_trainable_parameters()
-            print("[OK] 已启用 LoRA (r=32, alpha=64) - H100 优化")
-        else:
+            print(f"[OK] 已启用 LoRA (r={lora_r}, alpha={lora_alpha})")
+        elif not HAS_PEFT:
             print("[WARN] 未启用 LoRA")
-        
+
         self.optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, self.model.parameters()),
             lr=1e-5
@@ -106,10 +175,10 @@ class HFAttackerModel(BaseAttackerModel):
         output = self.model.generate(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
-            max_new_tokens=150,              # 7B模型：增加生成长度
+            max_new_tokens=self.max_new_tokens,
             do_sample=True,
-            top_p=0.9,
-            temperature=0.8,
+            top_p=self.top_p,
+            temperature=self.temperature,
             pad_token_id=self.tokenizer.pad_token_id,
             **kwargs
         )

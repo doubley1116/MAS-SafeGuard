@@ -20,7 +20,14 @@ from langgraph.graph.message import add_messages
 from database.asset_db import init_asset_db, query_holdings
 from database.trade_db import init_trade_db, execute_trade
 from database.seed_data import seed_asset_data
-from adapter import AdapterCore, extract_audit_events
+
+# LangGraphAuditor imports
+_LG_AUDITOR_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "LangGraphAuditor"
+)
+sys.path.insert(0, _LG_AUDITOR_DIR)
+from langgraph_adapter import LangGraphAuditAdapter, WorkflowBlocked, BLOCKED_WORKFLOW_MESSAGE
 
 # AiTM 拦截器节点依赖这三个特定的 Prompt 常量做路由判断
 from attack_prompts import ATTACK_6_1, ATTACK_6_2, ATTACK_6_3
@@ -66,24 +73,36 @@ except FileNotFoundError:
 ASSET_QUERY_PASSWORD   = permissions_config.get("security", {}).get("asset_query_password",   "default_asset_pass")
 TRADE_EXECUTE_PASSWORD = permissions_config.get("security", {}).get("trade_execute_password", "default_trade_pass")
 
+# 场景级共享 adapter（实时审计 + JSONL 生成）
+_audit_adapter = LangGraphAuditAdapter(
+    yaml_path=os.path.join(os.path.dirname(__file__), "trading.yaml"),
+    verbose=True,
+    output_dir=os.path.join(os.path.dirname(__file__), "data/workflows/trading"),
+    scenario_prefix="trading",
+    allowed_callers={
+        "asset_query_tool":        ["Asset_Agent"],
+        "trade_execute_tool":      ["Trade_Agent"],
+        "read_external_file_tool": ["Research_Agent"],
+    },
+    required_path_nodes={
+        "trade_execute_tool": ["Research_Agent", "Risk_Agent"],
+        "asset_query_tool":   ["Research_Agent"],
+    },
+    legal_agents={
+        "Research_Agent", "Asset_Agent", "Trade_Agent", "Risk_Agent",
+    },
+)
+
 # ================= 工具定义 =================
 @tool
 def asset_query_tool(client_id: str) -> str:
     """查询客户持仓信息"""
-    import adapter as _adapter_mod
-    if _adapter_mod.TOOL_EXECUTION_BLOCKED:
-        print("  🛑 [工具拦截] asset_query_tool 调用被安全层阻断，查询未执行")
-        return "[BLOCKED] 查询被安全审核层拦截，未执行"
     data = query_holdings("Asset_Agent", client_id)
     return f"客户 {client_id} 持仓: {data}" if data else "未找到持仓数据"
 
 @tool
 def trade_execute_tool(symbol: str, action: str, amount: int) -> str:
     """执行股票交易"""
-    import adapter as _adapter_mod
-    if _adapter_mod.TOOL_EXECUTION_BLOCKED:
-        print("  🛑 [工具拦截] trade_execute_tool 调用被安全层阻断，交易未执行")
-        return "[BLOCKED] 交易被安全审核层拦截，未执行"
     return execute_trade(symbol, action, amount, "Trade_Agent")
 
 @tool
@@ -470,15 +489,37 @@ def aitm_interceptor_node(state: AgentState):
 # ================= 工具执行节点 =================
 def tool_execution_node(state: AgentState):
     last_message = state["messages"][-1]
+    sender = state.get("active_agent", "unknown")
     tool_messages = []
     for tc in last_message.tool_calls:
         tool_name = tc["name"]
         tool_args = tc["args"]
         print(f"\n>>>>>>>> EXECUTING FUNCTION {tool_name}...")
+
+        if _audit_adapter.is_blocked():
+            tool_messages.append(
+                ToolMessage(content=BLOCKED_WORKFLOW_MESSAGE, tool_call_id=tc["id"], name=tool_name)
+            )
+            continue
+
+        try:
+            _audit_adapter.emit_tool_call(sender=sender, tool_name=tool_name, tool_args=tool_args)
+        except WorkflowBlocked as e:
+            tool_messages.append(
+                ToolMessage(content=f"[阻断] {e}", tool_call_id=tc["id"], name=tool_name)
+            )
+            continue
+
         try:
             result = tools_map[tool_name].invoke(tool_args)
         except Exception as e:
             result = f"工具执行异常: {str(e)}"
+
+        try:
+            _audit_adapter.emit_tool_result(sender=sender, tool_name=tool_name, result=result)
+        except WorkflowBlocked:
+            pass
+
         tool_messages.append(
             ToolMessage(content=str(result), tool_call_id=tc["id"], name=tool_name)
         )
@@ -583,28 +624,16 @@ def build_graph(scenario_type: str):
         raise ValueError(f"未知的 scenario_type: {scenario_type}")
     return workflow.compile()
 
-# ================= Adapter 实例与主执行逻辑 =================
-_adapter: AdapterCore | None = None
-
-def _get_core() -> AdapterCore:
-    global _adapter
-    if _adapter is None:
-        _adapter = AdapterCore(output_dir="data/workflows")
-    return _adapter
-
+# ================= 主执行逻辑 =================
 def run_attack_scenario(title: str, attack_name: str, prompt_text: str, graph_type: str = "standard"):
-    core  = _get_core()
+    """运行攻击场景：_audit_adapter 负责实时审计 + JSONL 生成。"""
     graph = build_graph(graph_type)
-    try:
-        core.run_scenario(
-            title       = title,
-            graph_type  = graph_type,
-            graph       = graph,
-            prompt      = prompt_text,
-            attack_name = attack_name,
-        )
-    except RuntimeError as e:
-        if str(e).startswith("[AuditBlock]"):
-            print(f"  🔒 已拦截: {e}")
-        else:
-            raise
+    _audit_adapter.run_scenario(
+        title=title,
+        graph_type=graph_type,
+        graph=graph,
+        prompt=prompt_text,
+        attack_name=attack_name,
+    )
+    _audit_adapter.flush()
+    print(f"调用路径: {_audit_adapter.call_path}")

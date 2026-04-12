@@ -19,6 +19,7 @@ from audit_sink import AuditSink, WorkflowBlocked
 BLOCKED_WORKFLOW_MESSAGE = "[会话已终止] SecurityCore 已阻断本次工作流，后续操作全部短路。"
 
 HistorySummaryGetter = Callable[[], str]
+TaskGetter = Callable[[], str]
 MetadataGetter = Callable[[], Dict[str, Any]]
 CallPathGetter = Callable[[], List[str]]
 RoleCallPathGetter = Callable[[str], List[str]]
@@ -103,9 +104,24 @@ class CrewAIAuditAdapter:
     只负责把 CrewAI 内部行为映射成 AuditEvent。
     """
 
-    def __init__(self, sink: AuditSink, trace_id: str) -> None:
+    def __init__(
+        self,
+        sink: AuditSink,
+        trace_id: str,
+        task_getter: Optional[TaskGetter] = None,
+    ) -> None:
         self.sink = sink
         self.trace_id = trace_id
+        self.task_getter = task_getter or (lambda: "")
+
+    def set_task_getter(self, task_getter: Optional[TaskGetter]) -> None:
+        self.task_getter = task_getter or (lambda: "")
+
+    def _current_task(self) -> str:
+        try:
+            return _safe_str(self.task_getter()).strip()
+        except Exception:
+            return ""
 
     def _emit(
         self,
@@ -128,6 +144,7 @@ class CrewAIAuditAdapter:
             call_path=list(call_path or []),
             content=content,
             history_summary=history_summary,
+            task=self._current_task(),
             trace_id=self.trace_id,
             metadata=dict(metadata or {}),
         )
@@ -197,6 +214,7 @@ class CrewAIAuditAdapter:
     def emit_tool_result(
         self,
         sender: str,
+        receiver: str,
         tool_name: str,
         result: Any,
         call_path: Optional[List[str]] = None,
@@ -206,7 +224,7 @@ class CrewAIAuditAdapter:
         return self._emit(
             event_type="tool_result",
             sender=sender,
-            receiver=None,
+            receiver=receiver,
             tool_name=tool_name,
             tool_args=None,
             call_path=call_path,
@@ -482,7 +500,8 @@ class AuditedToolWrapper:
         metadata: Dict[str, Any],
     ) -> None:
         self.adapter.emit_tool_result(
-            sender=context.sender,
+            sender=self.tool_name,
+            receiver=context.sender,
             tool_name=self.tool_name,
             result=_safe_serialize(result),
             call_path=context.tool_call_path,

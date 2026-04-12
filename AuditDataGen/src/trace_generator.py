@@ -15,7 +15,7 @@ trace_generator.py
        ↓
   组装完整 AuditEvent 列表（含哈希链、history_summary、call_path）
        ↓
-  写入 audit.jsonl + sft_train.jsonl
+  写入 audit.jsonl
 
 使用示例：
   # Mock Attacker + API 补全（测试管线）
@@ -36,7 +36,7 @@ import random
 import datetime
 import hashlib
 import argparse
-from typing import Optional, Callable, Tuple
+from typing import Optional, Callable
 
 # 路径设置
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -50,8 +50,8 @@ if current_dir not in sys.path:
 from skeletons import SKELETONS, FILLERS
 from generator import (
     sample_values, random_fill, make_timestamp, compute_hash,
-    _make_metadata, _parse_tool_call, _infer_dimensions, _infer_reason,
-    events_to_sft
+    _make_metadata, _parse_tool_call, _extract_task_from_skeleton,
+    _find_interception_step_idx, _assign_label, _get_blocking_risk_types, _generate_reason_with_api,
 )
 
 
@@ -255,15 +255,15 @@ def generate_trace_with_attacker(
     attacker_generate_fn: Callable[[str, str], str],
     api_client,
     api_model: str = "gpt-4o-mini",
-    values: dict = None,
-    trace_id: str = None,
+    values: Optional[dict] = None,
+    trace_id: Optional[str] = None,
 ) -> list[dict]:
     """
     生成一条完整的 AuditEvent trace。
-    
+
     攻击位置：调用 attacker_generate_fn 生成 content
     其余位置：调用 api_client 补全 content
-    
+
     Args:
         skeleton:             骨架定义（来自 SKELETONS）
         attacker_generate_fn: Attacker 的 generate 方法
@@ -271,7 +271,7 @@ def generate_trace_with_attacker(
         api_model:            补全使用的模型名
         values:               填充值字典，None 时自动采样
         trace_id:             trace ID，None 时自动生成
-    
+
     Returns:
         AuditEvent 列表（格式与 generator.py 完全兼容）
     """
@@ -287,6 +287,10 @@ def generate_trace_with_attacker(
     base_time = datetime.datetime.now(datetime.timezone.utc)
     time_offset = 0
     scenario_type = skeleton.get("scenario_type", "")
+    task = _extract_task_from_skeleton(skeleton, values)
+    
+    # 找到拦截点
+    interception_idx = _find_interception_step_idx(skeleton)
     
     ROUTER_NODES = {"Semantic_Router"}
     
@@ -360,7 +364,31 @@ def generate_trace_with_attacker(
         }
         self_hash = compute_hash(hash_payload)
         
-        # 7. 组装事件
+        # 7. 构建 metadata（包含新的 audit_decision）
+        label = _assign_label(skeleton, i, interception_idx)
+        blocking_risk_types = _get_blocking_risk_types(scenario_type) if label != "normal" else []
+        
+        # 生成 reason
+        if label == "normal":
+            reason = "正常操作"
+        else:
+            reason = _generate_reason_with_api(
+                content=display_content,
+                tool_args=tool_args,
+                skeleton=skeleton,
+                blocking_risk_types=blocking_risk_types,
+                sender=sender
+            )
+        
+        metadata = _make_metadata(skeleton, event_type, i)
+        metadata["audit_decision"] = {
+            "label": label,
+            "reason": reason,
+            "blocking_risk_types": blocking_risk_types,
+            "suggested_alternative": "建议先经过合规审查节点" if label == "dangerous" else None,
+        }
+        
+        # 9. 组装事件
         event = {
             "event_type": event_type,
             "sender": sender,
@@ -370,18 +398,23 @@ def generate_trace_with_attacker(
             "call_path": list(call_path),
             "content": display_content,
             "history_summary": history_summary,
+            "task": task,
             "event_id": event_id,
             "trace_id": trace_id,
             "timestamp": timestamp,
-            "metadata": _make_metadata(skeleton, event_type, i),
+            "metadata": metadata,
         }
         events.append(event)
         prev_hash = self_hash
         
-        # 8. 更新 history_lines
+        # 10. 更新 history_lines
         if event_type == "message" and display_content:
             snippet = display_content[:300].replace("\n", " ")
             history_lines.append(f"[{sender}]: {snippet}")
+        
+        # 11. 新截断：达到拦截点后停止
+        if i >= interception_idx:
+            break
     
     return events
 
@@ -390,9 +423,14 @@ def generate_trace_with_attacker(
 # 模型加载
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_attacker_model(model_dir: str = None):
+def load_attacker_model(model_dir: Optional[str] = None):
     """
     加载训练好的 Attacker 模型，失败时自动回退到 MockAttackerModel。
+
+    优先级：
+    1. model_dir 存在且完整 → 直接从本地加载（不下载）
+    2. model_dir 不存在或加载失败 → 回退到 HuggingFace 默认模型下载
+    3. 上述全部失败 → MockAttackerModel
 
     Args:
         model_dir: 训练好的模型目录路径，None 表示直接使用 Mock
@@ -403,10 +441,22 @@ def load_attacker_model(model_dir: str = None):
     if model_dir and os.path.exists(model_dir):
         try:
             from models.hf_impl.hf_attacker import HFAttackerModel
-            print(f"🔄 加载 Attacker 模型: {model_dir}")
+            print(f"🔄 尝试从本地加载 Attacker 模型: {model_dir}")
+            model = HFAttackerModel(model_name=model_dir)
+            print("✅ Attacker 模型从本地加载成功")
+            return model
+        except Exception as e:
+            print(f"⚠ 本地模型加载失败: {e}")
+            print("💡 尝试从 HuggingFace 下载基础模型 + 本地 LoRA...")
+
+    # 回退：下载基础模型，再加载 LoRA
+    if model_dir and os.path.exists(model_dir):
+        try:
+            from models.hf_impl.hf_attacker import HFAttackerModel
+            print(f"🔄 下载基础模型并应用本地 LoRA: {model_dir}")
             model = HFAttackerModel()
             model.load(model_dir)
-            print("✅ Attacker 模型加载成功")
+            print("✅ Attacker 模型加载成功（HuggingFace base + local LoRA）")
             return model
         except ImportError as e:
             print(f"⚠ HFAttackerModel 不可用: {e}，回退到 MockAttackerModel")
@@ -425,13 +475,12 @@ def generate_dataset(
     attacker_generate_fn: Callable,
     api_client,
     n_per_skeleton: int = 3,
-    scenario_filter: list = None,
+    scenario_filter: Optional[list] = None,
     output_dir: str = "output_trace",
     api_model: str = "gpt-4o-mini",
     seed: int = 42,
-    sft_format: bool = True,
     shuffle: bool = True,
-) -> Tuple[int, int]:
+) -> int:
     """
     批量生成完整 trace 数据集。
 
@@ -443,20 +492,17 @@ def generate_dataset(
         output_dir:           输出目录
         api_model:            API 补全使用的模型
         seed:                 随机种子
-        sft_format:           是否同时生成 sft_train.jsonl
         shuffle:              是否打乱 trace 顺序（块内顺序严格保持）
 
     Returns:
-        (audit_event_count, sft_trace_count)
+        生成的审计事件总数
     """
     random.seed(seed)
 
     os.makedirs(output_dir, exist_ok=True)
     audit_path = os.path.join(output_dir, "audit.jsonl")
-    sft_path = os.path.join(output_dir, "sft_train.jsonl")
 
     audit_blocks: list[list[str]] = []
-    sft_lines: list[str] = []
 
     skeletons = SKELETONS
     if scenario_filter:
@@ -479,7 +525,7 @@ def generate_dataset(
             try:
                 events = generate_trace_with_attacker(
                     skeleton, attacker_generate_fn,
-                    api_client, api_model, values, trace_id
+                    api_client, api_model, values, trace_id,
                 )
             except Exception as e:
                 print(f"  [WARN] [{skeleton['id']}] 第{idx+1}次生成失败: {e}")
@@ -488,37 +534,21 @@ def generate_dataset(
             block = [json.dumps(e, ensure_ascii=False) for e in events]
             audit_blocks.append(block)
 
-            if sft_format:
-                sft_item = events_to_sft(events, skeleton)
-                sft_lines.append(json.dumps(sft_item, ensure_ascii=False))
-
             print(f"  [{skeleton['id']}] {idx+1}/{n_per_skeleton} "
                   f"trace={trace_id[:8]} events={len(events)}")
 
-    # 打乱（trace 块作为整体打乱，块内事件顺序不变，sft 与 audit 保持对齐）
+    # 打乱（trace 块作为整体打乱，块内事件顺序不变）
     if shuffle and audit_blocks:
-        if sft_format and sft_lines:
-            paired = list(zip(audit_blocks, sft_lines))
-            random.shuffle(paired)
-            audit_blocks, sft_lines = zip(*paired)
-            audit_blocks = list(audit_blocks)
-            sft_lines = list(sft_lines)
-        else:
-            random.shuffle(audit_blocks)
+        random.shuffle(audit_blocks)
 
     audit_lines = [line for block in audit_blocks for line in block]
     with open(audit_path, "w", encoding="utf-8") as f:
         f.write("\n".join(audit_lines))
-    if sft_format:
-        with open(sft_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(sft_lines))
 
     print(f"\n✅ 生成完成")
-    print(f"   audit.jsonl:     {len(audit_lines)} 条事件 → {audit_path}")
-    if sft_format:
-        print(f"   sft_train.jsonl: {len(sft_lines)} 条 trace → {sft_path}")
+    print(f"   audit.jsonl: {len(audit_lines)} 条事件 → {audit_path}")
 
-    return len(audit_lines), len(sft_lines)
+    return len(audit_lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -540,8 +570,8 @@ if __name__ == "__main__":
     --n 10 --out output_data \\
     --scenario PathBypass,SemanticInjection
 
-  # 不生成 SFT 格式，不打乱顺序
-  python src/trace_generator.py --model-dir output/final_model/attacker --no-sft --no-shuffle
+  # 不打乱顺序
+  python src/trace_generator.py --model-dir output/final_model/attacker --no-shuffle
 
 环境变量：
   API_KEY    - OpenAI API 密钥
@@ -563,8 +593,6 @@ if __name__ == "__main__":
                         help="API 补全使用的模型（默认从 .env 的 MODEL 读取）")
     parser.add_argument("--seed", type=int, default=42,
                         help="随机种子（默认 42）")
-    parser.add_argument("--no-sft", action="store_true",
-                        help="不生成 sft_train.jsonl")
     parser.add_argument("--no-shuffle", action="store_true",
                         help="不打乱 trace 顺序")
 
@@ -612,7 +640,7 @@ if __name__ == "__main__":
         print(f"🎯 场景过滤: 全部")
 
     # 5. 生成数据集
-    audit_count, sft_count = generate_dataset(
+    audit_count = generate_dataset(
         attacker_generate_fn=attacker_fn,
         api_client=api_client,
         n_per_skeleton=args.n,
@@ -620,10 +648,8 @@ if __name__ == "__main__":
         output_dir=args.out,
         api_model=api_model,
         seed=args.seed,
-        sft_format=not args.no_sft,
         shuffle=not args.no_shuffle,
     )
 
     print(f"\n📊 生成统计:")
     print(f"   - 审计事件数: {audit_count}")
-    print(f"   - SFT trace数: {sft_count}")

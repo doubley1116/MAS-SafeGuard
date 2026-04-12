@@ -28,6 +28,67 @@ class AuditSink(Protocol):
         ...
 
 
+def _preview_text(value: Any, limit: int = 160) -> str:
+    text = str(value).replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+class EventHistoryBuffer:
+    """保存最近若干条审计事件，供 history_summary 使用。"""
+
+    def __init__(self, max_entries: int = 10) -> None:
+        self.max_entries = max_entries
+        self._entries: list[str] = []
+
+    def record(self, event: AuditEvent) -> None:
+        entry = self._format_event(event)
+        if not entry:
+            return
+        self._entries.append(entry)
+        if len(self._entries) > self.max_entries:
+            self._entries = self._entries[-self.max_entries:]
+
+    def summary(self) -> str:
+        return "\n---\n".join(self._entries)
+
+    def reset(self) -> None:
+        self._entries = []
+
+    def _format_event(self, event: AuditEvent) -> str:
+        if event.event_type == "tool_call":
+            args = json.dumps(event.tool_args or {}, ensure_ascii=False)
+            return f"[{event.sender} -> {event.tool_name or 'tool_call'}]: {_preview_text(args)}"
+
+        if event.event_type == "tool_result":
+            target = event.receiver or "tool_result_consumer"
+            return f"[{event.sender} -> {target}]: {_preview_text(event.content or '')}"
+
+        if event.event_type == "task_delegation":
+            return f"[{event.sender} -> {event.receiver or 'delegate'}]: {_preview_text(event.content or '')}"
+
+        if event.event_type == "message":
+            return f"[{event.sender} -> {event.receiver or 'message'}]: {_preview_text(event.content or '')}"
+
+        if event.event_type == "state_transition":
+            target = event.receiver or "state_transition"
+            return f"[{event.sender} -> {target}]: {_preview_text(event.content or '')}"
+
+        target = event.receiver or event.tool_name or event.event_type
+        return f"[{event.sender} -> {target}]: {_preview_text(event.content or '')}"
+
+
+class HistoryTrackingSink:
+    """将审计事件追加到滚动 history 缓冲。"""
+
+    def __init__(self, history_buffer: EventHistoryBuffer) -> None:
+        self.history_buffer = history_buffer
+
+    def emit(self, event: AuditEvent) -> None:
+        self.history_buffer.record(event)
+
+
 class PrintAuditSink:
     """直接打印到控制台"""
     def emit(self, event: AuditEvent) -> None:
@@ -73,8 +134,14 @@ class SecurityCoreSink:
         self.blocked_event: AuditEvent | None = None
         self.blocked_decision: AuditDecision | None = None
 
+    def _audit(self, event: AuditEvent) -> AuditDecision:
+        handle_event = getattr(self.security_core, "handle_event", None)
+        if callable(handle_event):
+            return handle_event(event)
+        return self.security_core.audit(event)
+
     def emit(self, event: AuditEvent) -> None:
-        decision = self.security_core.handle_event(event)
+        decision = self._audit(event)
 
         # 将 security_decision 写入 event.metadata
         if decision is not None:

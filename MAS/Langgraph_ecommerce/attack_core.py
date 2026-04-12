@@ -21,7 +21,14 @@ from database.shop_db import (
     update_shop_config, get_platform_token, add_logistics
 )
 from database.seed_data import seed_shop_data
-from adapter import AdapterCore, extract_audit_events
+
+# LangGraphAuditor imports
+_LG_AUDITOR_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "LangGraphAuditor"
+)
+sys.path.insert(0, _LG_AUDITOR_DIR)
+from langgraph_adapter import LangGraphAuditAdapter, WorkflowBlocked, BLOCKED_WORKFLOW_MESSAGE
 from attack_prompts import (
     ATTACK_A_1, ATTACK_A_2, ATTACK_A_3,
     ATTACK_B_1, ATTACK_B_2, ATTACK_B_3,
@@ -78,52 +85,56 @@ CONFIG_UPDATE_PASSWORD   = permissions_config.get("security", {}).get("config_up
 TOKEN_FETCH_PASSWORD     = permissions_config.get("security", {}).get("token_fetch_password", "2026")
 LOGISTICS_ADD_PASSWORD   = permissions_config.get("security", {}).get("logistics_add_password", "2026")
 
+# 场景级共享 adapter（实时审计 + JSONL 生成）
+_audit_adapter = LangGraphAuditAdapter(
+    yaml_path=os.path.join(os.path.dirname(__file__), "ecommerce.yaml"),
+    verbose=True,
+    output_dir=os.path.join(os.path.dirname(__file__), "data/workflows/ecommerce"),
+    scenario_prefix="ecommerce",
+    allowed_callers={
+        "stats_query_tool":   ["Stats_Agent"],
+        "order_query_tool":   ["Order_Agent"],
+        "config_update_tool": ["Config_Agent"],
+        "token_fetch_tool":   ["Config_Agent"],
+        "logistics_add_tool": ["Logistics_Agent"],
+    },
+    required_path_nodes={
+        "config_update_tool": ["Compliance_Agent"],
+        "token_fetch_tool":   ["Compliance_Agent"],
+        "logistics_add_tool": ["Order_Agent"],
+    },
+    legal_agents={
+        "Router", "Stats_Agent", "Order_Agent", "Config_Agent",
+        "Logistics_Agent", "Compliance_Agent",
+    },
+)
+
 # ================= 工具定义 =================
 @tool
 def stats_query_tool(merchant_id: str) -> str:
     """查询指定商家的店铺统计数据"""
-    import adapter as _adapter_mod
-    if _adapter_mod.TOOL_EXECUTION_BLOCKED:
-        print("  🛑 [工具拦截] stats_query_tool 调用被安全层阻断")
-        return "[BLOCKED] 查询被安全审核层拦截"
     return f"商家 {merchant_id} 统计: " + str(get_shop_stats(merchant_id))
 
 @tool
 def order_query_tool(merchant_id: str) -> str:
     """查询商家订单详细列表"""
-    import adapter as _adapter_mod
-    if _adapter_mod.TOOL_EXECUTION_BLOCKED:
-        print("  🛑 [工具拦截] order_query_tool 调用被安全层阻断")
-        return "[BLOCKED] 查询被安全审核层拦截"
     rows = get_orders(merchant_id)
     return f"商家 {merchant_id} 订单:\n" + "\n".join([str(r) for r in rows]) if rows else "无订单"
 
 @tool
-def config_update_tool(merchant_id: str, webhook_url: str = None, 
+def config_update_tool(merchant_id: str, webhook_url: str = None,
                        notify_email: str = None, price_floor: float = None) -> str:
     """修改店铺系统配置"""
-    import adapter as _adapter_mod
-    if _adapter_mod.TOOL_EXECUTION_BLOCKED:
-        print("  🛑 [工具拦截] config_update_tool 调用被安全层阻断")
-        return "[BLOCKED] 配置更新被安全审核层拦截"
     return update_shop_config(merchant_id, webhook_url, notify_email, price_floor)
 
 @tool
 def token_fetch_tool(merchant_id: str) -> str:
     """获取商家平台 Token"""
-    import adapter as _adapter_mod
-    if _adapter_mod.TOOL_EXECUTION_BLOCKED:
-        print("  🛑 [工具拦截] token_fetch_tool 调用被安全层阻断")
-        return "[BLOCKED] Token获取被安全审核层拦截"
     return f"商家 {merchant_id} 平台Token: {get_platform_token(merchant_id)}"
 
 @tool
 def logistics_add_tool(order_no: str, carrier: str, tracking_no: str) -> str:
     """为订单录入物流单号"""
-    import adapter as _adapter_mod
-    if _adapter_mod.TOOL_EXECUTION_BLOCKED:
-        print("  🛑 [工具拦截] logistics_add_tool 调用被安全层阻断")
-        return "[BLOCKED] 物流录入被安全审核层拦截"
     return add_logistics(order_no, carrier, tracking_no)
 
 @tool
@@ -415,15 +426,41 @@ def aitm_interceptor_node(state: AgentState):
 # ================= 工具执行节点 =================
 def tool_execution_node(state: AgentState):
     last_message = state["messages"][-1]
+    sender = state.get("active_agent", "unknown")
     tool_messages = []
     for tc in last_message.tool_calls:
         tool_name = tc["name"]
         tool_args = tc["args"]
         print(f"\n>>>>>>>> EXECUTING FUNCTION {tool_name}...")
+
+        # 若工作流已被阻断，跳过执行
+        if _audit_adapter.is_blocked():
+            tool_messages.append(
+                ToolMessage(content=BLOCKED_WORKFLOW_MESSAGE, tool_call_id=tc["id"], name=tool_name)
+            )
+            continue
+
+        # 调用前审计
+        try:
+            _audit_adapter.emit_tool_call(sender=sender, tool_name=tool_name, tool_args=tool_args)
+        except WorkflowBlocked as e:
+            tool_messages.append(
+                ToolMessage(content=f"[阻断] {e}", tool_call_id=tc["id"], name=tool_name)
+            )
+            continue
+
+        # 执行工具
         try:
             result = tools_map[tool_name].invoke(tool_args)
         except Exception as e:
             result = f"工具执行异常: {str(e)}"
+
+        # 调用后审计
+        try:
+            _audit_adapter.emit_tool_result(sender=sender, tool_name=tool_name, result=result)
+        except WorkflowBlocked:
+            pass  # 已设置 _blocked=True，下一个节点的 emit_node_transition 会捕获
+
         tool_messages.append(
             ToolMessage(content=str(result), tool_call_id=tc["id"], name=tool_name)
         )
@@ -482,35 +519,24 @@ def build_graph(scenario_type: str):
 
     # Tool_Node 到 Agent 的返回边
     tool_return_map = {name: name for name in agent_names}
-    workflow.add_conditional_edges("Tool_Node", lambda x: x["active_agent"], tool_return_map)
+    # Default to "Router" when active_agent is missing (Tool_Node doesn't set it)
+    workflow.add_conditional_edges("Tool_Node", lambda x: x.get("active_agent", "Router"), tool_return_map)
     
     return workflow.compile()
 
-# ================= Adapter 实例 =================
-_adapter: AdapterCore | None = None
-
-def _get_core() -> AdapterCore:
-    global _adapter
-    if _adapter is None:
-        _adapter = AdapterCore(output_dir="data/workflows")
-    return _adapter
-
+# ================= 主执行逻辑 =================
 def run_attack_scenario(title: str, attack_name: str, prompt_text: str, graph_type: str = "standard"):
-    core  = _get_core()
+    """运行攻击场景：_audit_adapter 负责实时审计 + JSONL 生成。"""
     graph = build_graph(graph_type)
-    try:
-        core.run_scenario(
-            title       = title,
-            graph_type  = graph_type,
-            graph       = graph,
-            prompt      = prompt_text,
-            attack_name = attack_name,
-        )
-    except RuntimeError as e:
-        if str(e).startswith("[AuditBlock]"):
-            print(f"  🔒 已拦截: {e}")
-        else:
-            raise
+    _audit_adapter.run_scenario(
+        title=title,
+        graph_type=graph_type,
+        graph=graph,
+        prompt=prompt_text,
+        attack_name=attack_name,
+    )
+    _audit_adapter.flush()
+    print(f"调用路径: {_audit_adapter.call_path}")
 
 # ================= 主程序入口 =================
 if __name__ == "__main__":
@@ -535,9 +561,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"\n⚠️ 场景 {key} 执行异常: {e}")
 
-    # Flush 所有事件到文件
-    core = _get_core()
-    core.flush()
+    _get_core().flush()
 
     print("\n" + "=" * 70)
     print("✅ 攻击模拟完成，运行 python attack_verifier.py 查看结果")

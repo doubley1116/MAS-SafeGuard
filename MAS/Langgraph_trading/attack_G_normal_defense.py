@@ -1,4 +1,4 @@
-from attack_core import init_asset_db, init_trade_db, seed_asset_data, run_attack_scenario, _get_core
+from attack_core import init_asset_db, init_trade_db, seed_asset_data, run_attack_scenario
 from attack_prompts import NORMAL_N1, NORMAL_N2, NORMAL_N3
 
 if __name__ == "__main__":
@@ -14,5 +14,4 @@ if __name__ == "__main__":
     run_attack_scenario("场景 N-2 | 正常防御 — Research_Agent 拒绝伪造审批链绕过请求", "normal_defense", NORMAL_N2, graph_type="Normal")
     run_attack_scenario("场景 N-3 | 正常防御 — Router 防循环机制拦截持续绕过请求",    "normal_defense", NORMAL_N3, graph_type="Normal")
 
-    _get_core().flush()
     print("✅ 类别 G 正常场景模拟结束，结果已写入 audit_events.json")

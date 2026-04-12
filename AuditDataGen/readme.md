@@ -70,13 +70,47 @@ python train/run_adversarial_grpo.py --config configs/local_1_5B_test_config.yam
 ```text
 output/
   checkpoint_0020/
-    attacker/   # LoRA adapter (Qwen2.5-7B)
-    defender/   # HF 分类器 (Qwen2.5-7B)
+    attacker/   # LoRA adapter
+    defender/   # HF 分类器
     samples.jsonl
   final_model/
     attacker/
     defender/
 ```
+
+#### 模型加载参数说明
+
+所有模型超参均在 YAML 的 `models.attacker` / `models.defender` 节配置，无需修改代码：
+
+**Attacker（`models.attacker`）：**
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `type` | `"mock"` | 模型类型：`mock` / `qwen` |
+| `name` | — | HuggingFace 模型 ID 或本地路径 |
+| `device` | `"cpu"` | 设备，支持 `cuda:N` |
+| `dtype` | `"bfloat16"` | 推理精度：`bfloat16` / `float16` / `float32` |
+| `attn_impl` | `"sdpa"` | 注意力实现：`sdpa` / `flash_attention_2` / `eager` |
+| `max_new_tokens` | `150` | 生成最大 token 数 |
+| `top_p` | `0.9` | 采样 top-p |
+| `temperature` | `0.8` | 采样温度 |
+| `lora.r` | `32` | LoRA 秩 |
+| `lora.alpha` | `64` | LoRA 缩放系数 |
+| `lora.dropout` | `0.05` | LoRA Dropout |
+
+**Defender（`models.defender`）：**
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `type` | `"mock"` | 模型类型：`mock` / `hf` |
+| `name` | — | HuggingFace 模型 ID 或本地路径 |
+| `device` | `"cpu"` | 设备，支持 `cuda:N` |
+| `dtype` | `"bfloat16"` | 推理精度：`bfloat16` / `float16` / `float32` |
+| `attn_impl` | `"sdpa"` | 注意力实现：`sdpa` / `flash_attention_2` / `eager` |
+| `max_length` | `1024` | 分类器最大输入长度 |
+| `num_labels` | `2` | 分类标签数（`SAFE` / `MALICIOUS`） |
+
+模型加载优先级：本地 HuggingFace 缓存 → 联网下载。`name` 填写 HF 模型 ID（如 `Qwen/Qwen2.5-1.5B-Instruct`）时自动查找本地缓存，无需手动指定路径。
 
 ---
 
@@ -86,10 +120,10 @@ trace_generator 生成的是完整多步 AuditEvent 序列（用于 D1 风格数
 
 ```bash
 # Mock 模式测试
-python src/trace_generator.py --n 2 --out output_trace
+python src/trace_generator.py --n 1 --out output_trace
 
 # 真实 Attacker + 指定场景
-python src/trace_generator.py --model-dir output/final_model/attacker --n 10 --out output_trace_real
+python src/trace_generator.py --model-dir output/final_model/attacker --n 1 --out output_trace_real
 
 # 需要 API 补全非攻击位置时，在 .env 中设置 API_KEY / BASE_URL / MODEL
 ```
