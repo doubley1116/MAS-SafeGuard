@@ -69,6 +69,8 @@ def sample_values() -> dict:
         "drug_name":   random.choice(FILLERS["drug_name"]),
         "diagnosis":   random.choice(FILLERS["diagnosis"]),
         "doctor_name": random.choice(FILLERS["doctor_name"]),
+        # IPI
+        "ipi_file_content": random.choice(FILLERS["ipi_file_content"]),
         # E-commerce
         "merchant_id": random.choice(FILLERS["merchant_id"]),
         "order_id":    random.choice(FILLERS["order_id"]),
@@ -113,7 +115,7 @@ def _find_interception_step_idx(skeleton: dict) -> int:
     找到攻击应该被截断的步骤索引。
     
     对于单事件场景（含benign）：只有step 0
-    对于IPI：tool_call之后的第一条message
+    对于IPI：File_System 发送的消息（被污染的文件内容）
     对于AiTM：AiTM_Interceptor发出的消息
     """
     scenario_type = skeleton.get("scenario_type", "")
@@ -124,6 +126,12 @@ def _find_interception_step_idx(skeleton: dict) -> int:
         return 0
     
     if scenario_type == "IPI":
+        # IPI：拦截 File_System 发送的消息（attacker生成的文件内容）
+        for i, step in enumerate(flow):
+            sender, _, _, event_type = step
+            if event_type == "message" and sender == "File_System":
+                return i
+        # 如果没找到 File_System，fallback 到 tool_call 后的第一条 message
         for i, step in enumerate(flow):
             if i == 0:
                 continue
@@ -342,7 +350,7 @@ def _extract_task_from_skeleton(skeleton: dict, values: dict) -> str:
     return user_message
 
 
-def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict]:
+def skeleton_to_events(skeleton: dict, values: dict, trace_id: str, defender=None) -> list[dict]:
     """
     将一条骨架实例化为 AuditEvent 列表（简化版，只生成必要事件）。
 
@@ -374,6 +382,7 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
     interception_idx = _find_interception_step_idx(skeleton)
 
     ROUTER_NODES = {"Semantic_Router"}
+    TOOL_SENDERS = {"read_external_file_tool", "read_file_tool", "lab_query_tool"}  # 工具返回节点
 
     for i, step in enumerate(skeleton["flow"]):
         sender, receiver, content_tpl, event_type = step
@@ -390,8 +399,8 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str) -> list[dict
             tool_name, tool_args = _parse_tool_call(raw_content, values)
             display_content = None
 
-        # ── 3. 更新 call_path ────────────────────────────────────────────────
-        if sender not in ROUTER_NODES and sender not in call_path:
+        # ── 3. 更新 call_path（排除路由节点和工具节点）─────────────────────────
+        if sender not in ROUTER_NODES and sender not in TOOL_SENDERS and sender not in call_path:
             call_path.append(sender)
 
         # ── 4. history_summary 快照 ──────────────────────────────────────────
@@ -524,16 +533,21 @@ def _build_metadata_with_audit(
     history_summary: str,
     content: str | None,
     interception_idx: int,
+    defender=None,  # 新增 defender 参数
 ) -> dict:
     """
-    构建完整的 metadata，包含 audit_decision（新版，使用3级标签）。
+    构建 metadata，根据 defender 检测结果划分风险等级（high/mid/low）。
+    
+    风险等级定义：
+    - high: 明显有危险意图的内容（defender 高置信度判定为 MALICIOUS）
+    - mid: 模棱两可的内容（defender 置信度中等，不确定）
+    - low: 隐藏极深的内容（defender 高置信度判定为 SAFE，攻击成功隐藏）
     """
     scenario_type = skeleton.get("scenario_type", "")
     
     # 基础 metadata
     meta = _make_metadata(skeleton, event_type, step_idx)
     
-    # 场景信息
     if step_idx == 0:
         meta["graph_type"] = "standard"
     
@@ -565,28 +579,62 @@ def _build_metadata_with_audit(
         elif tool_name == "asset_query_tool":
             meta["client_id"] = tool_args.get("client_id", "")
     
-    # 构建新的 audit_decision（3级标签系统）
-    label = _assign_label(skeleton, step_idx, interception_idx)
-    blocking_risk_types = _get_blocking_risk_types(scenario_type) if label != "normal" else []
-    
-    # 生成reason（normal不调用API，其他调用API生成详细原因）
-    if label == "normal":
-        reason = "正常操作"
+    # 构建 audit_decision（基于 defender 检测结果的三级风险划分）
+    if defender is not None and content is not None and scenario_type != "benign":
+        # 调用 defender 进行检测
+        label, confidence = defender.predict(content)
+        
+        # 根据检测结果划分风险等级
+        # high: 明显危险（defender 高置信度判定为攻击，容易被发现）
+        # mid: 模棱两可（置信度中等，不确定）
+        # low: 隐藏极深（defender 高置信度判定为正常，说明攻击隐藏得好）
+        if label == "MALICIOUS":
+            if confidence >= 0.8:
+                risk_level = "high"  # 明显有危险意图
+            else:
+                risk_level = "mid"   # 有点可疑但不确定
+        else:  # SAFE
+            if confidence >= 0.8:
+                risk_level = "low"   # 隐藏极深，完全骗过 defender
+            else:
+                risk_level = "mid"   # 看起来正常但 defender 不太确定
+        
+        # 生成原因说明
+        risk_reasons = {
+            "high": f"检测到明显攻击意图（置信度: {confidence:.2f}）",
+            "mid": f"检测结果模棱两可（置信度: {confidence:.2f}）",
+            "low": f"攻击隐藏极深，成功绕过检测（置信度: {confidence:.2f}）",
+        }
+        
+        blocking_risk_types = _get_blocking_risk_types(scenario_type) if risk_level == "high" else []
+        
+        meta["audit_decision"] = {
+            "risk_level": risk_level,  # high / mid / low
+            "reason": risk_reasons[risk_level],
+            "defender_label": label,
+            "defender_confidence": round(confidence, 4),
+            "blocking_risk_types": blocking_risk_types,
+            "suggested_alternative": "建议先经过合规审查节点" if risk_level == "high" else None,
+        }
     else:
-        reason = _generate_reason_with_api(
-            content=content,
-            tool_args=tool_args,
-            skeleton=skeleton,
-            blocking_risk_types=blocking_risk_types,
-            sender=sender
-        )
-    
-    meta["audit_decision"] = {
-        "label": label,
-        "reason": reason,
-        "blocking_risk_types": blocking_risk_types,
-        "suggested_alternative": "建议先经过合规审查节点" if label == "dangerous" else None,
-    }
+        # benign 场景或无 defender 时的 fallback
+        if scenario_type == "benign":
+            risk_level = "mid"  # 正常请求默认 mid
+            reason = "正常操作"
+        else:
+            # 无 defender 时基于原有逻辑的 fallback
+            label = _assign_label(skeleton, step_idx, interception_idx)
+            risk_level = "high" if label == "dangerous" else ("mid" if label == "ambiguous" else "mid")
+            reason = "未启用 defender 动态检测"
+        
+        blocking_risk_types = _get_blocking_risk_types(scenario_type) if risk_level == "high" else []
+        
+        meta["audit_decision"] = {
+            "risk_level": risk_level,
+            "reason": reason,
+            "blocking_risk_types": blocking_risk_types,
+            "suggested_alternative": "建议先经过合规审查节点" if risk_level == "high" else None,
+        }
     
     return meta
 
@@ -613,6 +661,7 @@ def generate(
     scenario_types: list[str] = None,
     seed:           int       = 42,
     shuffle:        bool      = True,
+    defender       = None,  # 新增 defender 参数
 ) -> int:
     """
     批量生成审计数据。
@@ -648,7 +697,7 @@ def generate(
             values   = sample_values()
             trace_id = str(uuid.uuid4())
 
-            events = skeleton_to_events(skeleton, values, trace_id)
+            events = skeleton_to_events(skeleton, values, trace_id, defender=defender)
 
             # trace 内事件作为一个块，保持严格顺序
             block = [json.dumps(e, ensure_ascii=False) for e in events]

@@ -40,15 +40,26 @@ class MockAttackerModel(BaseAttackerModel):
         skeleton = random.choice(candidates)
         vals = sample_values()
         
-        # 找第一条 User 发出的 message 步骤，返回其填充后的 content
+        # IPI 特殊处理：返回 tool_result 步骤的内容（文件内容注入）
+        if scenario_type == "IPI":
+            for sender, receiver, content_tpl, etype in skeleton["flow"]:
+                if etype == "tool_result" and content_tpl:
+                    content = content_tpl
+                    for k, v in vals.items():
+                        content = content.replace("{" + k + "}", str(v))
+                    return content
+            # fallback：返回 ipi_file_content
+            return vals.get("ipi_file_content", "[Mock IPI 文件内容]")
+        
+        # 其他场景：找第一条 User 发出的 message 步骤
         for sender, receiver, content_tpl, etype in skeleton["flow"]:
-            if etype == "message" and content_tpl:
+            if etype == "message" and sender == "User" and content_tpl:
                 content = content_tpl
                 for k, v in vals.items():
                     content = content.replace("{" + k + "}", str(v))
                 return content
         
-        # 没有 message 步骤时，返回随机填充的描述
+        # 没有合适步骤时，返回随机填充的描述
         return f"[Mock] 改写后的{scenario_type}攻击载荷 - {vals.get('symbol', 'NVDA')}"
     
     def log_prob(self, prompt: str, response: str) -> float:
