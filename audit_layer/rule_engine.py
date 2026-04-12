@@ -22,6 +22,7 @@ class RuleEngine:
             hits += self._check_blocked_tools(event)
             hits += self._check_intent_confidence_required(event)
             hits += self._check_route_hijack(event)
+            hits += self._check_arg_constraints(event)
 
         elif event.event_type == "message":
             hits += self._check_message_target(event)
@@ -266,6 +267,60 @@ class RuleEngine:
 
     # ── 规则5：消息目标必须在 allowed_message_targets 内（AutoGen 场景）──
     # LangGraph / CrewAI 版 YAML 不含此字段时自动跳过
+
+    # ── 规则：工具参数范围校验（arg_constraints）──────────────────
+    # YAML 中为工具定义参数约束，超出范围直接拦截
+    # 示例 YAML：
+    #   prescribe_tool:
+    #     arg_constraints:
+    #       dosage_mg: { min: 0, max: 7.5, label: "佐匹克隆剂量(mg)" }
+    #       quantity:   { min: 1, max: 30,  label: "开药数量(片)" }
+
+    def _check_arg_constraints(self, event: AuditEvent) -> List[tuple]:
+        tool_policy = self.policy.get_tool(event.tool_name or "")
+        if not tool_policy:
+            return []
+        constraints = tool_policy.get("arg_constraints")
+        if not constraints or not event.tool_args:
+            return []
+
+        hits = []
+        for param_name, rule in constraints.items():
+            value = event.tool_args.get(param_name)
+            if value is None:
+                continue
+            try:
+                num_val = float(value)
+            except (ValueError, TypeError):
+                # 非数值参数：检查 allowed_values 枚举
+                allowed = rule.get("allowed_values")
+                if allowed and str(value) not in [str(v) for v in allowed]:
+                    label = rule.get("label", param_name)
+                    hits.append((
+                        0.93,
+                        "arg_constraint_violation",
+                        f"{label}={value} 不在允许值 {allowed} 中"
+                    ))
+                continue
+
+            label = rule.get("label", param_name)
+            min_val = rule.get("min")
+            max_val = rule.get("max")
+
+            if min_val is not None and num_val < float(min_val):
+                hits.append((
+                    0.93,
+                    "arg_constraint_violation",
+                    f"{label}={num_val} 低于最小值 {min_val}"
+                ))
+            if max_val is not None and num_val > float(max_val):
+                hits.append((
+                    0.93,
+                    "arg_constraint_violation",
+                    f"{label}={num_val} 超过最大值 {max_val}"
+                ))
+
+        return hits
 
     def _check_message_target(self, event: AuditEvent) -> List[tuple]:
         agent_policy = self.policy.get_agent(event.sender)

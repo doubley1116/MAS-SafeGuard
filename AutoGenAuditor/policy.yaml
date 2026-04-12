@@ -46,6 +46,7 @@ agents:
       - tool_b        # 明确禁止调用的工具
     allowed_message_targets:
       - UserProxy
+      - Agent_B
     notes: "业务 Agent A，只能使用 tool_a"
 
   # 示例 Agent B（需要 Agent A 前置审批的敏感操作）
@@ -58,6 +59,7 @@ agents:
       - tool_a
     allowed_message_targets:
       - UserProxy
+      - Agent_A
     notes: "敏感操作 Agent，调用 tool_b 前必须经过 Agent_A 审批"
 
 

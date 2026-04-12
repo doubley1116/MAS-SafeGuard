@@ -156,9 +156,10 @@ class AutoGenAuditAdapter:
     def _rule_based_extract(text: str) -> str:
         """
         基于规则的意图提取。
-        取第一个实质性句子（跳过格式行、注意事项、列表项等）。
+        拼接所有实质性行（跳过格式行、注意事项、列表项等），截断到 80 字符。
         """
         lines = text.strip().split("\n")
+        candidates = []
         for line in lines:
             line = line.strip()
             if not line:
@@ -169,8 +170,10 @@ class AutoGenAuditAdapter:
                 continue
             if line.startswith(("[", "{")):
                 continue
-            return line[:80]
-        return text[:80]
+            candidates.append(line)
+        if candidates:
+            return " ".join(candidates)[:80]
+        return text.replace("\n", " ")[:80]
 
     def build_history_summary(self) -> str:
         """
@@ -433,6 +436,7 @@ class AutoGenAuditAdapter:
                 if history_summary is not None
                 else self.build_history_summary()
             ),
+            task=self._user_task,
             trace_id=self.trace_id,
             metadata=dict(metadata or {}),
         )
@@ -583,13 +587,19 @@ class AutoGenAuditAdapter:
             "content": str(result)[:200],
         })
 
+        # 截断 content，防止超长工具返回值与 history_summary 截断版不一致
+        # 导致 LLM 审核器误判为"数据伪造"
+        audit_content = content or str(result)
+        if len(audit_content) > 500:
+            audit_content = audit_content[:500] + "...(truncated)"
+
         return self._emit(
             "tool_result",
             tool_name,       # AuditEvent.sender = 工具
             sender,          # AuditEvent.receiver = 调用该工具的 Agent
             tool_name=tool_name,
             call_path=final_call_path,
-            content=content or str(result),
+            content=audit_content,
             history_summary=history_summary,
             metadata=metadata,
         )

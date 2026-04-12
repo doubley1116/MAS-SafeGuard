@@ -88,12 +88,10 @@ class AuditedGroupChatManager(autogen.GroupChatManager):
         """
         for entry in reversed(self._audit_adapter.conversation_history):
             etype = entry.get("type", "")
-            # tool_result：receiver 是调用工具的 Agent
             if etype == "tool_result" and entry.get("receiver") == agent_name:
                 content = entry.get("content", "")
                 if content:
                     return content
-            # Agent 发出的消息
             if etype == "message" and entry.get("sender") == agent_name:
                 content = entry.get("content", "")
                 if content:

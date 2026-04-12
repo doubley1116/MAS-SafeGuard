@@ -52,7 +52,7 @@ llm_config = {"config_list": config_list, "temperature": 0, "timeout": 120}
 # ═══════════════════════════════════════════════════════════════
 
 audit_adapter = AutoGenAuditAdapter(
-    #yaml_path="ecommerce_policy.yaml",
+    yaml_path="ecommerce_policy.yaml",
     trace_id="",
 )
 
