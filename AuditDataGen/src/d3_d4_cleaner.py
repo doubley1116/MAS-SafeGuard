@@ -155,7 +155,7 @@ def find_attack_event(events: list[dict], scenario: str) -> tuple[Optional[int],
     攻击位置逻辑（与 adversarial_grpo.py 的 rollout() 和 _save_augmented_events() 保持一致）：
     - PathBypass / CallerImpersonation / SemanticInjection / PromptInfection / RouterHijacking：
       攻击者是 User，取第一条 User message
-    - IPI：tool_call 之后的第一条 message
+    - IPI：tool_result
     - AiTM：sender 为 AiTM_Interceptor 的 message
     """
     if scenario in ("PathBypass", "CallerImpersonation", "SemanticInjection",
@@ -168,7 +168,7 @@ def find_attack_event(events: list[dict], scenario: str) -> tuple[Optional[int],
     elif scenario == "IPI":
         # 攻击位置是 tool_call 之后的第一条 message（被污染文件内容经 Agent 转发）
         for i in range(1, len(events)):
-            if (events[i].get("event_type") == "message" and
+            if (events[i].get("event_type") == "tool_result" and
                     events[i - 1].get("event_type") == "tool_call"):
                 return i, events[i]
 
@@ -201,10 +201,7 @@ def build_d3_event(event: dict, scenario: str) -> dict:
     """
     e = dict(event)
 
-    if scenario == "IPI":
-        e["sender"] = "File_System"
-        e["event_type"] = "tool_result"   # 表示文件系统返回的原始内容
-    elif scenario == "AiTM":
+    if scenario == "AiTM":
         e["sender"] = "AiTM_Interceptor"
         cp = list(e.get("call_path") or [])
         if "AiTM_Interceptor" not in cp:

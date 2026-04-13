@@ -49,8 +49,23 @@ def random_fill(template: str, values: dict) -> str:
     return result
 
 
-def sample_values() -> dict:
-    """随机采样一组填充值，每次调用返回不同组合。"""
+def sample_values(scenario_type: str | None = None) -> dict:
+    """
+    随机采样一组填充值，每次调用返回不同组合。
+
+    Args:
+        scenario_type: 场景类型，用于采样对应场景的 ipi_file_content。
+                      可选值：None, "financial", "healthcare", "ecommerce"
+    """
+    # 根据场景类型选择对应的 ipi_file_content
+    if scenario_type in ("healthcare", "HC-IPI"):
+        ipi_key = "ipi_file_content_healthcare"
+    elif scenario_type in ("ecommerce", "EC-IPI"):
+        ipi_key = "ipi_file_content_ecommerce"
+    else:
+        # 默认金融场景（包含 IPI-001/002/003 等金融 IPI，以及 benign 等非 IPI 场景）
+        ipi_key = "ipi_file_content_financial"
+
     return {
         # 通用金融
         "symbol":      random.choice(FILLERS["symbol"]),
@@ -69,8 +84,8 @@ def sample_values() -> dict:
         "drug_name":   random.choice(FILLERS["drug_name"]),
         "diagnosis":   random.choice(FILLERS["diagnosis"]),
         "doctor_name": random.choice(FILLERS["doctor_name"]),
-        # IPI
-        "ipi_file_content": random.choice(FILLERS["ipi_file_content"]),
+        # IPI（按场景采样）
+        "ipi_file_content": random.choice(FILLERS[ipi_key]),
         # E-commerce
         "merchant_id": random.choice(FILLERS["merchant_id"]),
         "order_id":    random.choice(FILLERS["order_id"]),
