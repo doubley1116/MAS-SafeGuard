@@ -38,6 +38,11 @@ import hashlib
 import argparse
 from typing import Optional, Callable
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 # 路径设置
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -818,6 +823,22 @@ def generate_trace_with_attacker(
 # 模型加载
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _load_attacker_cfg() -> dict:
+    """从默认 YAML 配置读取 models.attacker 节。"""
+    if yaml is None:
+        return {}
+    cfg_path = os.path.join(project_root, "configs", "adversarial_grpo_config.yaml")
+    if not os.path.exists(cfg_path):
+        return {}
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        return cfg.get("models", {}).get("attacker", {}) or {}
+    except Exception as e:
+        print(f"[WARN] 读取配置文件失败: {e}")
+        return {}
+
+
 def load_attacker_model(model_dir: Optional[str] = None):
     """
     加载训练好的 Attacker 模型，失败时自动回退到 MockAttackerModel。
@@ -833,11 +854,32 @@ def load_attacker_model(model_dir: Optional[str] = None):
     Returns:
         AttackerModel 实例（实现 .generate(prompt, scenario_type) -> str）
     """
+    # 读取 YAML 中的 attacker 配置
+    attacker_cfg = _load_attacker_cfg()
+    lora_cfg = attacker_cfg.get("lora", {})
+
+    def _make_hf_model(HFAttackerModelClass, model_name: str):
+        """使用配置参数构造 HFAttackerModel。"""
+        device = attacker_cfg.get("device", "cuda")
+        print(f"   [Config] 从 YAML 读取 device={device}, dtype={attacker_cfg.get('dtype', 'bfloat16')}")
+        return HFAttackerModelClass(
+            model_name=model_name,
+            device=device,
+            dtype=attacker_cfg.get("dtype", "bfloat16"),
+            attn_impl=attacker_cfg.get("attn_impl", "sdpa"),
+            max_new_tokens=attacker_cfg.get("max_new_tokens", 150),
+            top_p=attacker_cfg.get("top_p", 0.9),
+            temperature=attacker_cfg.get("temperature", 0.8),
+            lora_r=lora_cfg.get("r", 32),
+            lora_alpha=lora_cfg.get("alpha", 64),
+            lora_dropout=lora_cfg.get("dropout", 0.05),
+        )
+
     if model_dir and os.path.exists(model_dir):
         try:
             from models.hf_impl.hf_attacker import HFAttackerModel
             print(f"🔄 尝试从本地加载 Attacker 模型: {model_dir}")
-            model = HFAttackerModel(model_name=model_dir)
+            model = _make_hf_model(HFAttackerModel, model_name=model_dir)
             print("✅ Attacker 模型从本地加载成功")
             return model
         except Exception as e:
@@ -849,7 +891,8 @@ def load_attacker_model(model_dir: Optional[str] = None):
         try:
             from models.hf_impl.hf_attacker import HFAttackerModel
             print(f"🔄 下载基础模型并应用本地 LoRA: {model_dir}")
-            model = HFAttackerModel()
+            base_name = attacker_cfg.get("name", "Qwen/Qwen2.5-3B-Instruct")
+            model = _make_hf_model(HFAttackerModel, model_name=base_name)
             model.load(model_dir)
             print("✅ Attacker 模型加载成功（HuggingFace base + local LoRA）")
             return model
