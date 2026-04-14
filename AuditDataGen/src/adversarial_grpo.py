@@ -694,7 +694,6 @@ class AdversarialGRPOTrainer:
             if len(self.history_embs[scenario_type]) > self.max_history_size:
                 self.history_embs[scenario_type] = self.history_embs[scenario_type][-self.max_history_size:]
 
-        self.samples.extend(batch_samples)
         return batch_samples, defender_batch
 
     def _save_augmented_events(self, batch_samples: list, iteration: int, output_dir: str):

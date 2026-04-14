@@ -227,10 +227,7 @@ class HFDefenderModel(BaseDefenderModel):
         """
         REINFORCE 策略梯度更新 Defender。
 
-        Defender 的"策略"是分类分布 P(label | text)。
-        "动作"是 argmax 预测的标签，log_prob 是该标签的对数概率。
-        loss = -mean(log_prob(predicted_label) * reward)
-
+        使用 Categorical 分布采样动作，计算 log_prob * reward 的梯度。
         与攻击场景奖励对称（attacker_r + defender_r = 1.0），
         让 defender 直接从博弈对抗结果中学习，而不依赖 ground truth 标签。
         """
@@ -256,17 +253,12 @@ class HFDefenderModel(BaseDefenderModel):
         outputs = self.model(input_ids, attention_mask=attention_mask)
         logits = outputs.logits  # [B, 2]
 
-        # log P(label | text) for each label
-        log_probs = torch.log_softmax(logits, dim=-1)  # [B, 2]
+        # 标准 REINFORCE：从策略分布中采样动作并计算 log_prob
+        dist = torch.distributions.Categorical(logits=logits)
+        actions = dist.sample()  # [B]
+        log_probs = dist.log_prob(actions)  # [B]
 
-        # 取 argmax（实际预测的动作）对应的 log_prob
-        predicted_classes = torch.argmax(logits, dim=-1)  # [B]
-        selected_log_probs = log_probs.gather(
-            1, predicted_classes.unsqueeze(1)
-        ).squeeze(1)  # [B]
-
-        # REINFORCE loss: -log_prob * reward（梯度裁剪防止爆炸）
-        loss = -(selected_log_probs * rewards_tensor).mean()
+        loss = -(log_probs * rewards_tensor).mean()
 
         self.optimizer.zero_grad()
         loss.backward()
