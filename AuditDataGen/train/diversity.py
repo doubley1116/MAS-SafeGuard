@@ -21,11 +21,14 @@ class DiversityReward:
             self.model = SentenceTransformer(model_name, device=device, local_files_only=True)
             print(f"[DiversityReward] 加载本地缓存模型: {model_name}")
         except Exception:
+            print(f"[DiversityReward] 本地缓存未命中，尝试 ModelScope 下载: {model_name}")
             try:
-                self.model = SentenceTransformer(model_name, device=device)
-                print(f"[DiversityReward] 在线下载模型: {model_name}")
+                from modelscope import snapshot_download
+                local_path = snapshot_download(model_name)
+                self.model = SentenceTransformer(local_path, device=device, local_files_only=True)
+                print(f"[DiversityReward] ModelScope 下载并加载成功: {local_path}")
             except Exception as e:
-                print(f"[DiversityReward][WARN] 无法加载 SentenceTransformer ({e})，降级为词袋相似度")
+                print(f"[DiversityReward][WARN] ModelScope 下载失败 ({e})，降级为词袋相似度")
                 self.model = None
                 self._use_fallback = True
 

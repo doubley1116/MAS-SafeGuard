@@ -431,7 +431,7 @@ def train_from_config(config: Dict[str, Any]):
         batch_size=train_config.get("batch_size", 8),
         group_size=train_config.get("group_size", 4),
         grpo_epochs=train_config.get("grpo_epochs", 4),
-        lr=train_config.get("learning_rate", 1e-5),
+        lr=float(train_config.get("learning_rate", 1e-5)),
         clip_epsilon=train_config.get("clip_epsilon", 0.2),
         entropy_coef=train_config.get("entropy_coef", 0.01)
     )
@@ -451,7 +451,7 @@ def train_from_config(config: Dict[str, Any]):
     checkpoint_interval = output_config.get("checkpoint_interval", 20)
     output_dir = output_config.get("dir", "output_grpo")
     lambda_div = reward_weights.get("diversity", 0.3)
-    defender_lr = train_config.get("defender_lr", rl_config.get("defender_lr", 1e-6))
+    defender_lr = float(train_config.get("defender_lr", rl_config.get("defender_lr", 1e-6)))
 
     trainer = AdversarialGRPOTrainer(
         attacker=attacker,

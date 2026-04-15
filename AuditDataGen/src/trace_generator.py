@@ -845,7 +845,7 @@ def load_attacker_model(model_dir: Optional[str] = None):
 
     优先级：
     1. model_dir 存在且完整 → 直接从本地加载（不下载）
-    2. model_dir 不存在或加载失败 → 回退到 HuggingFace 默认模型下载
+    2. model_dir 不存在或加载失败 → 回退到 ModelScope 默认模型下载
     3. 上述全部失败 → MockAttackerModel
 
     Args:
@@ -884,7 +884,7 @@ def load_attacker_model(model_dir: Optional[str] = None):
             return model
         except Exception as e:
             print(f"⚠ 本地模型加载失败: {e}")
-            print("💡 尝试从 HuggingFace 下载基础模型 + 本地 LoRA...")
+            print("💡 尝试从 ModelScope 下载基础模型 + 本地 LoRA...")
 
     # 回退：下载基础模型，再加载 LoRA
     if model_dir and os.path.exists(model_dir):
@@ -894,7 +894,7 @@ def load_attacker_model(model_dir: Optional[str] = None):
             base_name = attacker_cfg.get("name", "Qwen/Qwen2.5-3B-Instruct")
             model = _make_hf_model(HFAttackerModel, model_name=base_name)
             model.load(model_dir)
-            print("✅ Attacker 模型加载成功（HuggingFace base + local LoRA）")
+            print("✅ Attacker 模型加载成功（ModelScope base + local LoRA）")
             return model
         except ImportError as e:
             print(f"⚠ HFAttackerModel 不可用: {e}，回退到 MockAttackerModel")

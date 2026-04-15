@@ -1,7 +1,7 @@
 """
 hf_attacker.py
 --------------
-HuggingFace Attacker 模型实现
+Attacker 模型实现 (via ModelScope)
 支持 Qwen2.5-7B-Instruct + Flash Attention 2 + LoRA (r=32)
 """
 import os
@@ -28,22 +28,32 @@ except ImportError:
 
 def _resolve_model_path(model_name: str) -> str:
     """
-    将 HuggingFace 模型名解析为本地缓存的实际路径。
+    将模型名解析为本地缓存的实际路径。
     - 若已是本地路径，直接返回。
-    - 若在 HF 缓存中存在，返回 snapshot 目录路径（绕过网络握手）。
-    - 否则返回原始模型名（交给 from_pretrained 走联网下载）。
+    - 使用 ModelScope 优先查找本地缓存并自动下载。
     """
     if os.path.exists(model_name):
         return model_name  # 已经是本地路径
 
     try:
-        from huggingface_hub import snapshot_download
+        from modelscope import snapshot_download
+    except Exception as ie:
+        print(f"[WARN] 无法导入 modelscope: {ie}，回退到原始模型名")
+        return model_name
+
+    try:
         path = snapshot_download(model_name, local_files_only=True)
         print(f"[OK] 本地缓存命中: {path}")
         return path
     except Exception:
-        print(f"[INFO] 本地缓存未命中，将联网下载: {model_name}")
-        return model_name  # 回退到联网下载
+        print(f"[INFO] 本地缓存未命中，将联网下载 (ModelScope): {model_name}")
+        try:
+            path = snapshot_download(model_name)
+            print(f"[OK] ModelScope 下载完成: {path}")
+            return path
+        except Exception as e:
+            print(f"[WARN] ModelScope 下载失败: {e}，回退到原始模型名")
+            return model_name  # 回退到联网下载
 
 
 _DTYPE_MAP = {
@@ -255,7 +265,7 @@ class HFAttackerModel(BaseAttackerModel):
         self.model.train()
 
         # 更新学习率
-        lr = getattr(config, "lr", 1e-5)
+        lr = float(getattr(config, "lr", 1e-5))
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
 

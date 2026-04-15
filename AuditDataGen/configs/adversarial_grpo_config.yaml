@@ -2,8 +2,8 @@
 # 基础训练参数
 train:
   iterations: 100             # 全量训练
-  batch_size: 2              
-  group_size: 2               # GRPO组大小：每个prompt生成G个response
+  batch_size: 4              
+  group_size: 4               # GRPO组大小：每个prompt生成G个response
   learning_rate: 1e-5         # 学习率
   clip_epsilon: 0.2           # GRPO裁剪系数
   entropy_coef: 0.01          # 熵系数
