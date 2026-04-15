@@ -174,13 +174,21 @@ def load_skeleton_pool(skeleton_type: str = "all") -> List[Skeleton]:
                 filled_flow.append((sender, receiver, content, event_type))
                 continue
                 
-            # 替换占位符
+            # 替换占位符（按键长度降序，避免短键破坏长键）
             filled_content = content
-            for placeholder, values in FILLERS.items():
+            # {ipi_file_content} 不直接存在于 FILLERS，需合并各场景池后采样
+            if "{ipi_file_content}" in filled_content:
+                all_ipi = [v for k, vs in FILLERS.items()
+                           if k.startswith("ipi_file_content_") for v in vs]
+                if all_ipi:
+                    filled_content = filled_content.replace(
+                        "{ipi_file_content}", str(random.choice(all_ipi))
+                    )
+            for placeholder, values in sorted(FILLERS.items(), key=lambda x: len(x[0]), reverse=True):
                 placeholder_str = f"{{{placeholder}}}"
                 if placeholder_str in filled_content:
                     filled_content = filled_content.replace(
-                        placeholder_str, 
+                        placeholder_str,
                         str(random.choice(values))
                     )
             filled_flow.append((sender, receiver, filled_content, event_type))
@@ -436,6 +444,9 @@ def train_from_config(config: Dict[str, Any]):
     reward_weights = rl_config.get("reward_weights", {})
 
     phase_duration = curriculum_config.get("phase_duration", 5)
+    # 读取 YAML 中的课程难度配置（如未配置则用代码默认值）
+    # 注意：场景名必须与 SKELETONS 中 scenario_type 一致（新名称体系）
+    yaml_difficulty = curriculum_config.get("difficulty_levels", None)
     max_history_size = diversity_config.get("history_size", 100)
     checkpoint_interval = output_config.get("checkpoint_interval", 20)
     output_dir = output_config.get("dir", "output_grpo")
@@ -451,6 +462,7 @@ def train_from_config(config: Dict[str, Any]):
         phase_duration=phase_duration,
         lambda_div=lambda_div,
         defender_lr=defender_lr,
+        difficulty_levels=yaml_difficulty,
     )
 
     os.makedirs(output_dir, exist_ok=True)

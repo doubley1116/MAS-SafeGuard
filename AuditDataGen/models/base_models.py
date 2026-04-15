@@ -82,10 +82,11 @@ class RolloutSample:
 
 class DefenderRolloutSample:
     """Defender RL 训练样本（REINFORCE）"""
-    def __init__(self, text: str, reward: float, is_attack: bool):
+    def __init__(self, text: str, reward: float, is_attack: bool, action: int = -1):
         self.text = text          # defender 看到的输入文本
         self.reward = reward      # 正确检测→高正奖励；漏检/误报→低/负奖励
         self.is_attack = is_attack  # 是否为攻击场景（便于统计）
+        self.action = action      # rollout 时实际执行的动作（0=SAFE, 1=MALICIOUS）；-1 表示未记录
 
 
 class GRPOConfig:
@@ -194,7 +195,8 @@ class BaseDefenderModel(ABC):
         pass
 
     @abstractmethod
-    def update_rl(self, samples: List[str], rewards: List[float], config: dict):
+    def update_rl(self, samples: List[str], rewards: List[float], config: dict,
+                  actions: Optional[List[int]] = None):
         """
         REINFORCE 策略梯度更新。
 
@@ -203,6 +205,14 @@ class BaseDefenderModel(ABC):
           - 攻击场景预测 SAFE（漏检）     → 低/负奖励
           - 良性场景预测 SAFE（正确）     → 高正奖励
           - 良性场景预测 MALICIOUS（误报）→ 低/负奖励
+
+        Args:
+            samples: 输入文本列表
+            rewards: 对应的奖励列表
+            config:  训练配置（含 lr 等）
+            actions: rollout 时实际执行的动作索引（0=SAFE, 1=MALICIOUS）。
+                     必须传入以保证 on-policy 信用分配正确；若为 None 则从
+                     当前模型重新推导（fallback，有 off-policy 风险）。
         """
         pass
     

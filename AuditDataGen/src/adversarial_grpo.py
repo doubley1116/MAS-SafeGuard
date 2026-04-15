@@ -55,9 +55,9 @@ def compute_reward(
     rule_score_fn: Optional[Callable] = None,
     lambda_div: float = 1.0,
     rule_threshold: float = 0.90,
-) -> Tuple[float, float, bool]:
+) -> Tuple[float, float, bool, int]:
     """
-    同时计算 attacker 和 defender 的奖励，返回是否应丢弃样本。
+    同时计算 attacker 和 defender 的奖励，返回是否应丢弃样本及 defender 实际动作。
 
     奖励设计（零和博弈）：
       攻击场景：attacker_r + defender_r = 1.0
@@ -68,7 +68,8 @@ def compute_reward(
         - defender_r=confidence if SAFE else 1-confidence（奖励不误报）
 
     Returns:
-        (attacker_reward, defender_reward, should_discard)
+        (attacker_reward, defender_reward, should_discard, defender_action)
+        defender_action: 0=SAFE, 1=MALICIOUS（rollout 时的真实预测，供 REINFORCE 使用）
     """
     # 构造改写后的事件（只替换 content，其他字段不变）
     rewritten_event = dict(target_event)
@@ -78,10 +79,12 @@ def compute_reward(
     if rule_score_fn is not None:
         rule_score = rule_score_fn(rewritten_event)
         if rule_score >= rule_threshold:
-            return 0.0, 0.0, True  # 丢弃
+            return 0.0, 0.0, True, -1  # 丢弃，动作未定义
 
     # Defender 推理（只调用一次）
     result, confidence = defender.predict(response)
+    # 记录 rollout 时的真实动作，供 REINFORCE update 使用（on-policy 信用分配）
+    defender_action = 1 if result == "MALICIOUS" else 0
 
     # ── Attacker 奖励 ────────────────────────────────────────────────────────
     # 攻击场景：稠密奖励，defender 越认为 SAFE 奖励越高
@@ -91,7 +94,7 @@ def compute_reward(
     else:
         attacker_r = 0.0
 
-    # ── Defender 奖励（与 attacker_r 零和对称）───────────────────────────────
+    # ── Defender 奖励
     # 攻击场景：正确识别 MALICIOUS → 高奖励；漏检 SAFE → 低奖励
     # 良性场景：正确判 SAFE → 高奖励；误报 MALICIOUS → 低奖励
     if skeleton.scenario_type != "benign":
@@ -105,7 +108,7 @@ def compute_reward(
     r_diversity = diversity_module.calculate(text, history_embs, threshold=0.85)
 
     attacker_reward = attacker_r + lambda_div * r_diversity
-    return attacker_reward, defender_r, False
+    return attacker_reward, defender_r, False, defender_action
 
 # 5. 骨架解析
 def parse_skeleton(data: dict) -> Skeleton:
@@ -129,8 +132,8 @@ def compute_advantages(rewards: List[float], values: List[float], gamma: float, 
     
     return advantages
 
-def compute_ppo_loss(new_logprobs: List[float], old_logprobs: List[float], 
-                    advantages: List[float], values: List[float], 
+def compute_ppo_loss(new_logprobs: List[float], old_logprobs: List[float],
+                    advantages: List[float], values: List[float], returns: List[float],
                     clip_epsilon: float, vf_coef: float, entropy_coef: float) -> torch.Tensor:
     ratios = torch.exp(torch.tensor(new_logprobs) - torch.tensor(old_logprobs))
     advantages_tensor = torch.tensor(advantages)
@@ -138,8 +141,8 @@ def compute_ppo_loss(new_logprobs: List[float], old_logprobs: List[float],
     surr2 = torch.clamp(ratios, 1.0 - clip_epsilon, 1.0 + clip_epsilon) * advantages_tensor
     actor_loss = -torch.min(surr1, surr2).mean()
     
-    # 价值函数损失
-    value_loss = F.mse_loss(torch.tensor(values), torch.tensor(advantages)).mean()
+    # 价值函数损失（对估计值与回报做 MSE）
+    value_loss = F.mse_loss(torch.tensor(values), torch.tensor(returns)).mean()
     
     # 总损失
     return actor_loss + vf_coef * value_loss
@@ -294,15 +297,19 @@ SCENARIO_TO_POOL = {
 class CurriculumScheduler:
     """课程学习调度器 + Prompt 构造器"""
 
-    DIFFICULTY_LEVELS = {
-        "easy": ["PathBypass", "CallerImpersonation"],
-        "medium": ["SemanticInjection", "RouterHijacking", "IPI"],
-        "hard": ["AiTM", "PromptInfection"],
+    # 默认课程难度配置（可通过 YAML curriculum.difficulty_levels 覆盖）
+    DEFAULT_DIFFICULTY_LEVELS = {
+        "easy":   ["PathBypass", "CallerImpersonation", "benign"],
+        "medium": ["SemanticInjection", "RouterHijacking", "IPI", "benign"],
+        "hard":   ["AiTM", "PromptInfection", "benign"],
     }
 
-    def __init__(self, phase_duration: int = 5):
+    def __init__(self, phase_duration: int = 5,
+                 difficulty_levels: dict = None):
         self.phase_duration = phase_duration
         self.phase = "easy"
+        # 允许外部传入自定义难度配置（来自 YAML），否则使用默认值
+        self.DIFFICULTY_LEVELS = difficulty_levels if difficulty_levels else self.DEFAULT_DIFFICULTY_LEVELS
 
     def update_phase(self, current_iter: int) -> str:
         if current_iter < self.phase_duration:
@@ -490,16 +497,18 @@ class AdversarialGRPOTrainer:
                  max_history_size: int = 100, phase_duration: int = 5,
                  rule_score_fn: Optional[Callable] = None,
                  lambda_div: float = 0.3,
-                 defender_lr: float = 1e-5):
+                 defender_lr: float = 1e-5,
+                 difficulty_levels: dict = None):
         self.attacker = attacker
         self.defender = defender
         self.config = config
         self.skeleton_pool = skeleton_pool
-        self.scheduler = CurriculumScheduler(phase_duration=phase_duration)
+        self.scheduler = CurriculumScheduler(phase_duration=phase_duration,
+                                             difficulty_levels=difficulty_levels)
         self.history_embs: Dict[str, List[str]] = {}
         self.max_history_size = max_history_size
         self.samples = []
-        self.diversity_module = DiversityReward()
+        self.diversity_modules: Dict[str, DiversityReward] = {}  # 每场景独立实例，避免跨场景缓存错位
         self.rule_score_fn = rule_score_fn
         self.lambda_div = lambda_div
         self.defender_lr = defender_lr
@@ -534,8 +543,13 @@ class AdversarialGRPOTrainer:
         n_groups = self.config.batch_size // self.config.group_size
         
         for _ in range(n_groups):
-            # 选择骨架
-            skeleton = random.choice(self.skeleton_pool)
+            # 选择骨架（按课程阶段过滤）
+            phase = self.scheduler.phase
+            allowed_scenarios = set(self.scheduler.DIFFICULTY_LEVELS.get(phase, []))
+            eligible = [s for s in self.skeleton_pool if s.scenario_type in allowed_scenarios]
+            if not eligible:
+                eligible = self.skeleton_pool
+            skeleton = random.choice(eligible)
 
             # 从骨架的 messages 中挑选真正属于该场景下攻击方可控的事件
             if not skeleton.messages:
@@ -601,8 +615,15 @@ class AdversarialGRPOTrainer:
             # 构建提示（传入目标事件）
             prompt = self.scheduler.build_prompt(skeleton, target_event)
 
-            # 获取当前类型的历史
-            type_history = self.history_embs.get(skeleton.scenario_type, [])
+            # Bug2 fix: 每场景独立 DiversityReward 实例，避免跨场景缓存错位
+            if skeleton.scenario_type not in self.diversity_modules:
+                self.diversity_modules[skeleton.scenario_type] = DiversityReward()
+            diversity_module = self.diversity_modules[skeleton.scenario_type]
+
+            # Bug5 fix: 确保列表存在并持有 live 引用，使组内 history 实时可见
+            if skeleton.scenario_type not in self.history_embs:
+                self.history_embs[skeleton.scenario_type] = []
+            type_history = self.history_embs[skeleton.scenario_type]
 
             # GRPO: 对同一个 prompt 生成 group_size 个不同的 response
             group_samples = []
@@ -613,24 +634,32 @@ class AdversarialGRPOTrainer:
                 response = self.attacker.generate(prompt, skeleton.scenario_type)
 
                 # 同时计算 attacker / defender 奖励（defender 只推理一次）
-                attacker_reward, defender_reward, should_discard = compute_reward(
+                attacker_reward, defender_reward, should_discard, defender_action = compute_reward(
                     skeleton, target_event, response,
                     self.defender, type_history,
-                    self.diversity_module,
+                    diversity_module,
                     rule_score_fn=self.rule_score_fn,
                     lambda_div=self.lambda_div,
                 )
 
-                # 无论是否被规则过滤，defender 样本都收集（defender 需要学习规则层也能拦截的攻击）
+                # Bug5 fix: 立即写入历史，使组内后续生成能感知到已生成的内容
+                text = target_event.get("content", "") + " " + response
+                type_history.append(text)
+
+                # 被规则层过滤 → 不加入任何训练集
+                # 规则过滤时 defender 未被调用（defender_action=-1），
+                # 若加入 defender_batch 会导致 torch.gather 越界。
+                if should_discard:
+                    continue
+
+                # defender 样本收集（此处 defender_action 必然为 0 或 1）
+                # action 记录 rollout 时的真实预测，确保 REINFORCE 信用分配 on-policy
                 defender_batch.append(DefenderRolloutSample(
                     text=response,
                     reward=defender_reward,
                     is_attack=(skeleton.scenario_type != "benign"),
+                    action=defender_action,
                 ))
-
-                # 被规则层过滤 → 不加入 attacker 训练集
-                if should_discard:
-                    continue
 
                 # 计算 attacker 对数概率
                 log_prob = self.attacker.log_prob(prompt, response)
@@ -648,7 +677,7 @@ class AdversarialGRPOTrainer:
             # 如果group有效，计算组内相对优势
             if len(group_rewards) >= 2:  # 至少2个样本才能计算标准差
                 advantages = self._compute_grpo_advantages(group_rewards)
-                
+
                 # 为每个样本设置advantage并加入batch
                 for i, sample_data in enumerate(group_samples):
                     sample = RolloutSample(
@@ -661,12 +690,6 @@ class AdversarialGRPOTrainer:
                         target_event=sample_data["target_event"]
                     )
                     batch_samples.append(sample)
-                    
-                    # 奖励计算完成后，加入对应类型的历史
-                    text = target_event.get("content", "") + " " + sample_data["response"]
-                    if skeleton.scenario_type not in self.history_embs:
-                        self.history_embs[skeleton.scenario_type] = []
-                    self.history_embs[skeleton.scenario_type].append(text)
             elif len(group_rewards) == 1:
                 # 只有一个有效样本，advantage设为0
                 sample_data = group_samples[0]
@@ -680,11 +703,6 @@ class AdversarialGRPOTrainer:
                     target_event=sample_data["target_event"]
                 )
                 batch_samples.append(sample)
-                
-                text = target_event.get("content", "") + " " + sample_data["response"]
-                if skeleton.scenario_type not in self.history_embs:
-                    self.history_embs[skeleton.scenario_type] = []
-                self.history_embs[skeleton.scenario_type].append(text)
             else:
                 # 整组被规则过滤，没有有效样本
                 print(f"  [WARN] 整组被规则过滤，scenario={skeleton.scenario_type}")
@@ -696,10 +714,13 @@ class AdversarialGRPOTrainer:
 
         return batch_samples, defender_batch
 
+    # 增强数据集的奖励阈值：仅保存奖励高于此值的样本，过滤掉低质量（多样性惩罚导致负奖励）的结果
+    AUGMENT_REWARD_THRESHOLD = 0.3
+
     def _save_augmented_events(self, batch_samples: list, iteration: int, output_dir: str):
         """
-        将高奖励样本写入 augmented_events.jsonl
-        
+        将高奖励样本写入 augmented_events.jsonl（reward > AUGMENT_REWARD_THRESHOLD）
+
         sender 映射规则（与 rollout() 采样逻辑保持一致）：
         - PathBypass, CallerImpersonation, SemanticInjection, PromptInfection, benign → User
         - RouterHijacking → User（初始路由劫持指令由 User 发出）
@@ -708,12 +729,12 @@ class AdversarialGRPOTrainer:
         """
         os.makedirs(output_dir, exist_ok=True)
         augmented_path = os.path.join(output_dir, "augmented_events.jsonl")
-        
+
         with open(augmented_path, "a", encoding="utf-8") as f:
             for sample in batch_samples:
-                if sample.reward <= 0:
+                # 跳过低质量样本（多样性惩罚、attacker 未能绕过 defender 等）
+                if sample.reward <= self.AUGMENT_REWARD_THRESHOLD:
                     continue
-                
                 target = sample.target_event
                 if not target:
                     continue
@@ -773,7 +794,10 @@ class AdversarialGRPOTrainer:
             if defender_batch:
                 def_texts = [ds.text for ds in defender_batch]
                 def_rewards = [ds.reward for ds in defender_batch]
-                self.defender.update_rl(def_texts, def_rewards, {"lr": self.defender_lr})
+                # 传入 rollout 时的真实动作，保证 on-policy 信用分配
+                def_actions = [ds.action for ds in defender_batch]
+                self.defender.update_rl(def_texts, def_rewards, {"lr": self.defender_lr},
+                                        actions=def_actions)
 
             # 保存检查点（按配置间隔）
             if i % checkpoint_interval == 0 and i > 0:

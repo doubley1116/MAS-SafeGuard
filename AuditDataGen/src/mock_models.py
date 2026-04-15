@@ -101,7 +101,7 @@ class MockDefenderModel(BaseDefenderModel):
         print(f"  [MockDefender] update() detection_rate → {self.detection_rate:.2f}")
         return {"loss": 0.0, "accuracy": self.detection_rate}
 
-    def update_rl(self, samples, rewards, config):
+    def update_rl(self, samples, rewards, config, actions=None):
         """Mock RL 更新：奖励高时提升检测率，奖励低时小幅回退。"""
         self._n_updates += 1
         avg_reward = sum(rewards) / max(len(rewards), 1)

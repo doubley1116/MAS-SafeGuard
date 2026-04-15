@@ -73,7 +73,7 @@ def skeleton_to_sft_example(skeleton: dict) -> dict:
 try:
     # 优先尝试直接导入（同目录）
     from skeletons import SKELETONS, FILLERS
-    from generator import sample_values, random_fill, skeleton_to_events, events_to_sft
+    from generator import sample_values, random_fill, skeleton_to_events
 except ImportError:
     # 备选方案：相对导入
     from .skeletons import SKELETONS, FILLERS
@@ -351,15 +351,20 @@ def parse_llm_output(raw: str) -> Optional[dict]:
     解析 LLM 输出的 JSON，返回骨架 dict 或 None（解析/验证失败）。
     """
     # 提取 JSON 块（LLM 有时会在前后加 markdown）
-    text = raw  # ← 修复：初始化 text
-    if "```json" in text:
-        text = text[text.index("```json") + 7:]
-        if "```" in text:
-            text = text[:text.index("```")]
-    elif "```" in text:
-        text = text[text.index("```") + 3:]
-        if "```" in text:
-            text = text[:text.index("```")]
+    text = raw
+    json_start = text.find("```json")
+    if json_start != -1:
+        text = text[json_start + 7:]
+        json_end = text.find("```")
+        if json_end != -1:
+            text = text[:json_end]
+    else:
+        fence_start = text.find("```")
+        if fence_start != -1:
+            text = text[fence_start + 3:]
+            fence_end = text.find("```")
+            if fence_end != -1:
+                text = text[:fence_end]
     text = text.strip()
 
     try:
@@ -768,7 +773,10 @@ def augment(
             block = [json.dumps(e, ensure_ascii=False) for e in events]
             audit_blocks.append(block)
 
-            sft_item = events_to_sft(events, skeleton)
+            sft_item = {
+                "input": f"Scenario: {skeleton['scenario_type']}\nDescription: {skeleton['description']}",
+                "output": "\n".join([json.dumps(e, ensure_ascii=False) for e in events]),
+            }
             sft_lines.append(json.dumps(sft_item, ensure_ascii=False))
 
             ok_count += 1

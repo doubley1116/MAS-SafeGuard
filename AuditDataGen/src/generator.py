@@ -1,20 +1,10 @@
 """
 generator.py
 ────────────
-批量审计数据生成器。
+审计数据生成工具库（供 llm_augment / mock_models 等内部调用）。
 
-流程：
-  骨架库 (skeletons.py)
-    → 随机填充占位符（symbol / amount / client / ...）
-    → 模拟 MAS 自然流转，生成完整 AuditEvent 序列
-    → 计算哈希链
-    → 写入 audit.jsonl
-
-特点：
-  - 零 LLM API 调用，完全本地运行，无成本
-  - 每条骨架可重复采样 N 次（每次填充不同的随机值）
-  - 生成数据格式与真实系统产生的 audit_events.json 完全一致
-  - 支持导出为 SFT 训练格式（input/output 对）
+不直接运行，入口为 trace_generator.py（生成完整 trace）和
+train/run_adversarial_grpo.py（对抗训练）。
 """
 
 from __future__ import annotations
@@ -26,7 +16,6 @@ import uuid
 import random
 import hashlib
 import datetime
-import argparse
 from pathlib import Path
 
 # 路径设置，确保可以导入 skeletons
@@ -167,31 +156,7 @@ def _find_interception_step_idx(skeleton: dict) -> int:
     return 0
 
 
-def _assign_label(skeleton: dict, step_idx: int, interception_idx: int, defender_score: float = None) -> str:
-    """
-    为事件分配标签：normal | ambiguous | dangerous
-    """
-    scenario_type = skeleton.get("scenario_type", "")
-    
-    # benign场景：全部normal
-    if scenario_type == "benign":
-        return "normal"
-    
-    # IPI/AiTM：拦截点之前的事件是normal
-    if scenario_type in ("IPI", "AiTM") and step_idx < interception_idx:
-        return "normal"
-    
-    # 明确的危险场景
-    if scenario_type in CLEARLY_DANGEROUS:
-        return "dangerous"
-    
-    # 默认模糊场景
-    if scenario_type in AMBIGUOUS_DEFAULT:
-        if defender_score is not None and defender_score > 0.7:
-            return "dangerous"
-        return "ambiguous"
-    
-    return "dangerous"
+
 
 
 def _get_blocking_risk_types(scenario_type: str) -> list[str]:
@@ -455,7 +420,7 @@ def skeleton_to_events(skeleton: dict, values: dict, trace_id: str, defender=Non
             call_path=list(call_path),
             history_summary=history_summary,
             content=display_content,
-            interception_idx=interception_idx,
+            defender=defender,
         )
         
         # ── 8. 写入事件 ──────────────────────────────────────────────────────
@@ -547,14 +512,12 @@ def _build_metadata_with_audit(
     call_path: list[str],
     history_summary: str,
     content: str | None,
-    interception_idx: int,
-    defender=None,  # 新增 defender 参数
+    defender=None,
 ) -> dict:
     """
-    构建 metadata，根据 defender 检测结果划分风险等级（high/mid/low）。
-    
-    风险等级定义：
-    - high: 明显有危险意图的内容（defender 高置信度判定为 MALICIOUS）
+    构建 metadata，risk_level 语义：
+    - high: 危险动作（攻击行为）
+    - low:  安全动作（正常请求）
     - mid: 模棱两可的内容（defender 置信度中等，不确定）
     - low: 隐藏极深的内容（defender 高置信度判定为 SAFE，攻击成功隐藏）
     """
@@ -594,62 +557,40 @@ def _build_metadata_with_audit(
         elif tool_name == "asset_query_tool":
             meta["client_id"] = tool_args.get("client_id", "")
     
-    # 构建 audit_decision（基于 defender 检测结果的三级风险划分）
+    # 构建 audit_decision
+    # risk_level 语义：high = 危险动作（攻击行为），low = 安全动作（正常请求）
     if defender is not None and content is not None and scenario_type != "benign":
-        # 调用 defender 进行检测
+        # 调用 defender 进行检测（置信度作为辅助信息保留）
         label, confidence = defender.predict(content)
-        
-        # 根据检测结果划分风险等级
-        # high: 明显危险（defender 高置信度判定为攻击，容易被发现）
-        # mid: 模棱两可（置信度中等，不确定）
-        # low: 隐藏极深（defender 高置信度判定为正常，说明攻击隐藏得好）
-        if label == "MALICIOUS":
-            if confidence >= 0.8:
-                risk_level = "high"  # 明显有危险意图
-            else:
-                risk_level = "mid"   # 有点可疑但不确定
-        else:  # SAFE
-            if confidence >= 0.8:
-                risk_level = "low"   # 隐藏极深，完全骗过 defender
-            else:
-                risk_level = "mid"   # 看起来正常但 defender 不太确定
-        
-        # 生成原因说明
-        risk_reasons = {
-            "high": f"检测到明显攻击意图（置信度: {confidence:.2f}）",
-            "mid": f"检测结果模棱两可（置信度: {confidence:.2f}）",
-            "low": f"攻击隐藏极深，成功绕过检测（置信度: {confidence:.2f}）",
-        }
-        
-        blocking_risk_types = _get_blocking_risk_types(scenario_type) if risk_level == "high" else []
-        
+
+        # 攻击场景：无论 defender 是否识破，动作本身即为危险
+        blocking_risk_types = _get_blocking_risk_types(scenario_type)
         meta["audit_decision"] = {
-            "risk_level": risk_level,  # high / mid / low
-            "reason": risk_reasons[risk_level],
+            "risk_level": "high",
+            "reason": f"检测到攻击行为（defender判定: {label}, 置信度: {confidence:.2f}）",
             "defender_label": label,
             "defender_confidence": round(confidence, 4),
             "blocking_risk_types": blocking_risk_types,
-            "suggested_alternative": "建议先经过合规审查节点" if risk_level == "high" else None,
+            "suggested_alternative": "建议先经过合规审查节点",
         }
     else:
         # benign 场景或无 defender 时的 fallback
         if scenario_type == "benign":
-            risk_level = "mid"  # 正常请求默认 mid
-            reason = "正常操作"
+            meta["audit_decision"] = {
+                "risk_level": "low",   # 安全动作
+                "reason": "正常操作",
+                "blocking_risk_types": [],
+                "suggested_alternative": None,
+            }
         else:
-            # 无 defender 时基于原有逻辑的 fallback
-            label = _assign_label(skeleton, step_idx, interception_idx)
-            risk_level = "high" if label == "dangerous" else ("mid" if label == "ambiguous" else "mid")
-            reason = "未启用 defender 动态检测"
-        
-        blocking_risk_types = _get_blocking_risk_types(scenario_type) if risk_level == "high" else []
-        
-        meta["audit_decision"] = {
-            "risk_level": risk_level,
-            "reason": reason,
-            "blocking_risk_types": blocking_risk_types,
-            "suggested_alternative": "建议先经过合规审查节点" if risk_level == "high" else None,
-        }
+            # 攻击场景但无 defender：动作本身仍为危险
+            blocking_risk_types = _get_blocking_risk_types(scenario_type)
+            meta["audit_decision"] = {
+                "risk_level": "high",  # 危险动作
+                "reason": "未启用 defender 动态检测",
+                "blocking_risk_types": blocking_risk_types,
+                "suggested_alternative": "建议先经过合规审查节点",
+            }
     
     return meta
 
@@ -709,7 +650,7 @@ def generate(
 
     for skeleton in filtered_skeletons:
         for sample_idx in range(n_per_skeleton):
-            values   = sample_values()
+            values   = sample_values(scenario_type=skeleton.get("scenario_type"))
             trace_id = str(uuid.uuid4())
 
             events = skeleton_to_events(skeleton, values, trace_id, defender=defender)
@@ -737,28 +678,3 @@ def generate(
     return len(audit_lines)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CLI
-# ─────────────────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AuditDataGen —— 批量审计数据生成器")
-    parser.add_argument("--n",       type=int,  default=5,        help="每条骨架的采样次数（默认 5）")
-    parser.add_argument("--out",     type=str,  default="output", help="输出目录（默认 output/）")
-    parser.add_argument("--scenario-type", type=str, default=None, help="指定场景类型，逗号分隔（如 DPI,benign），默认生成全部")
-    parser.add_argument("--seed",    type=int,  default=42,       help="随机种子（默认 42）")
-    parser.add_argument("--no-shuffle", action="store_true",      help="不打乱顺序")
-    args = parser.parse_args()
-
-    # 解析 scenario_types
-    scenario_types = None
-    if args.scenario_type:
-        scenario_types = [t.strip() for t in args.scenario_type.split(",")]
-
-    generate(
-        n_per_skeleton = args.n,
-        output_dir     = args.out,
-        scenario_types = scenario_types,
-        seed           = args.seed,
-        shuffle        = not args.no_shuffle,
-    )

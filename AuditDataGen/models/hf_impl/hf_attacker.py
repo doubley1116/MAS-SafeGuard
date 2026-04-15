@@ -192,7 +192,7 @@ class HFAttackerModel(BaseAttackerModel):
         return generated.strip()
 
     def log_prob(self, prompt: str, response: str) -> float:
-        """计算对数概率"""
+        """计算对数概率（序列总对数概率）"""
         prompt_text = self._build_prompt_text(prompt, add_generation_prompt=True)
         full_text = prompt_text + response
 
@@ -201,6 +201,17 @@ class HFAttackerModel(BaseAttackerModel):
 
         prompt_ids = self.tokenizer(prompt_text, return_tensors="pt", truncation=True, max_length=1024)["input_ids"].to(self.device)
         prompt_len = prompt_ids.shape[1]
+
+        # 前缀校验：防止 prompt 与 full_text 分词边界错位
+        if not input_ids[0, :prompt_len].equal(prompt_ids[0]):
+            max_match = min(input_ids.shape[1], prompt_ids.shape[1])
+            match_len = 0
+            for i in range(max_match):
+                if input_ids[0, i] == prompt_ids[0, i]:
+                    match_len += 1
+                else:
+                    break
+            prompt_len = match_len
 
         with torch.no_grad():
             outputs = self.model(input_ids, output_hidden_states=False)
@@ -211,23 +222,30 @@ class HFAttackerModel(BaseAttackerModel):
         shift_log_probs = torch.log_softmax(shift_logits, dim=-1)
         shift_targets = input_ids[:, 1:]                 # [1, L-1]
 
-        # Response 截取：
-        # 原本 Response 在 input_ids 中的起点是 prompt_len。
-        # 由于 targets 向左 shift 了一位，起点变成了 prompt_len - 1。
+        # Response 截取：与 update() 中的 response_mask 保持一致
+        # shift_targets[i] = token_{i+1}，即 shift_logits[i] 预测 token_{i+1}
+        # update 中 mask 从 prompt_len-1 开始（包含第1个 response token R0）
+        # log_prob 也应从 prompt_len-1 开始，保持一致
+        # 例如：prompt=[P0,P1], response=[R0,R1] → full=[P0,P1,R0,R1]
+        # shift后 targets=[P1,R0,R1]，pos_idx=[0,1,2]
+        # mask 从 prompt_len-1=1 开始 → [F,T,T]，包含 R0,R1
         if shift_targets.size(1) < prompt_len:
+            # 序列被截断，prompt 末尾丢失，无法准确计算 response 对数概率
+            # 返回 0.0 使得 ratio 计算时 ratio = exp(lp_new - 0) 不会溢出，
+            # 且 update 中 response_mask 会全为 False（因 attention_mask 对应位置为 0），
+            # 导致该样本在 update 时被 silent drop
             return 0.0
 
-        response_shift_targets = shift_targets[:, prompt_len-1:]
-        response_shift_log_probs = shift_log_probs[:, prompt_len-1:, :]
+        response_shift_targets = shift_targets[:, prompt_len - 1:]  # 从第1个response token开始
+        response_shift_log_probs = shift_log_probs[:, prompt_len - 1:, :]
 
-        # 此时 targets 和 log_probs 完美对齐
         response_log_probs = torch.gather(
             response_shift_log_probs,
             dim=2,
             index=response_shift_targets.unsqueeze(-1)
         ).squeeze(-1)
 
-        return response_log_probs.mean().item()
+        return response_log_probs.sum().item()
 
     def update(self, samples: List[RolloutSample], config: GRPOConfig):
         """GRPO 更新（Batch 版本）"""
@@ -267,17 +285,33 @@ class HFAttackerModel(BaseAttackerModel):
         input_ids = encoded["input_ids"]          # [B, L]
         attention_mask = encoded["attention_mask"]  # [B, L]
 
-        # 获取每个 prompt 的 token 长度
+        # 获取每个 prompt 的 token 长度（必须送到与 input_ids 相同的 device）
         prompt_encoded = self.tokenizer(
             prompt_texts,
             return_tensors="pt",
             padding=True,
             truncation=True,
             max_length=1024
-        )
+        ).to(self.device)
         prompt_lengths = prompt_encoded["attention_mask"].sum(dim=1)  # [B]
 
+        # 前缀校验：确保 full_text 的前缀与 prompt 分词结果一致
+        for i in range(n):
+            full_ids = input_ids[i]
+            prompt_ids_i = prompt_encoded["input_ids"][i]
+            prompt_len_i = prompt_lengths[i].item()
+            if not full_ids[:prompt_len_i].equal(prompt_ids_i[:prompt_len_i]):
+                match_len = 0
+                max_match = min(full_ids.shape[0], prompt_ids_i.shape[0])
+                for j in range(max_match):
+                    if full_ids[j] == prompt_ids_i[j]:
+                        match_len += 1
+                    else:
+                        break
+                prompt_lengths[i] = match_len
+
         total_policy_loss = 0.0
+        actual_epochs = 0
         for epoch in range(grpo_epochs):
             self.optimizer.zero_grad()
 
@@ -299,18 +333,22 @@ class HFAttackerModel(BaseAttackerModel):
             ).squeeze(2)  # [B, L-1]
 
             # build response mask
+            # shift 后 pos_idx[i] 负责预测 token_{i+1}，即 shift_targets[i] = input_ids[i+1]
+            # prompt=[P0,...,P_{L_p-1}] 共 L_p 个 token，response=[R0,R1,...] 从 index L_p 开始
+            # R0 = input_ids[L_p]，由 shift_logits[L_p-1] 预测（即 pos_idx = L_p - 1）
+            # 因此 response mask 起点为 pos_idx >= L_p - 1
+            # 注意：log_prob() 也从 prompt_len-1 开始切片，两者保持一致
             seq_len = input_ids.size(1)
             pos_idx = torch.arange(seq_len - 1, device=self.device).unsqueeze(0)  # [1, L-1]
-            response_mask = (pos_idx >= (prompt_lengths.unsqueeze(1) - 1)) & (attention_mask[:, 1:].bool())
+            response_mask = (pos_idx >= (prompt_lengths - 1).unsqueeze(1)) & (attention_mask[:, 1:].bool())
 
             valid_mask = response_mask.sum(dim=1) > 0
             if not valid_mask.any():
                 continue
 
-            # sample-level mean
-            mask_sum = response_mask.sum(dim=1).clamp(min=1)
-            sample_log_probs = (token_log_probs * response_mask).sum(dim=1) / mask_sum
-            sample_entropy = (shift_entropy * response_mask).sum(dim=1) / mask_sum
+            # sample-level sum（标准 GRPO/PPO 使用序列总对数概率）
+            sample_log_probs = (token_log_probs * response_mask).sum(dim=1)
+            sample_entropy = (shift_entropy * response_mask).sum(dim=1) / response_mask.sum(dim=1).clamp(min=1)
 
             # 只保留有效样本
             sample_log_probs = sample_log_probs[valid_mask]
@@ -327,10 +365,11 @@ class HFAttackerModel(BaseAttackerModel):
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.optimizer.step()
             total_policy_loss += loss.item()
+            actual_epochs += 1
 
         avg_reward = torch.tensor([s.reward for s in samples]).mean().item()
         stats = {
-            "policy_loss": total_policy_loss / grpo_epochs,
+            "policy_loss": total_policy_loss / max(actual_epochs, 1),
             "avg_reward": avg_reward,
             "samples": n,
         }
@@ -342,17 +381,33 @@ class HFAttackerModel(BaseAttackerModel):
     def save(self, path: str):
         self.model.save_pretrained(path)
         self.tokenizer.save_pretrained(path)
+        # 保存基础模型名，便于 PEFT 加载
+        import json
+        with open(os.path.join(path, "base_model_name.json"), "w", encoding="utf-8") as f:
+            json.dump({"base_model_name": self.model_name}, f)
         print(f"[OK] 攻击者模型保存到: {path}")
 
     def load(self, path: str):
-        self.model = AutoModelForCausalLM.from_pretrained(
-            path,
-            torch_dtype=torch.bfloat16,
-            device_map=self.device,
-            attn_implementation="sdpa",  # 跨平台兼容
-            trust_remote_code=True,
-            local_files_only=True
-        )
+        adapter_config_path = os.path.join(path, "adapter_config.json")
+        if os.path.exists(adapter_config_path):
+            from peft import PeftModel
+            base = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.bfloat16,
+                device_map=self.device,
+                attn_implementation="sdpa",
+                trust_remote_code=True,
+            )
+            self.model = PeftModel.from_pretrained(base, path)
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                path,
+                torch_dtype=torch.bfloat16,
+                device_map=self.device,
+                attn_implementation="sdpa",
+                trust_remote_code=True,
+                local_files_only=True,
+            )
         self.tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True, local_files_only=True)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token

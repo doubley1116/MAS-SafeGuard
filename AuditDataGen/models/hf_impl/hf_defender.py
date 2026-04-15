@@ -213,7 +213,9 @@ class HFDefenderModel(BaseDefenderModel):
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        
+
+        self.model.eval()
+
         # 计算准确率
         preds = torch.argmax(logits, dim=1)
         correct = (preds == label_ids).sum().item()
@@ -223,13 +225,15 @@ class HFDefenderModel(BaseDefenderModel):
         
         return {"loss": loss.item(), "accuracy": accuracy}
     
-    def update_rl(self, samples: List[str], rewards: List[float], config: dict):
+    def update_rl(self, samples: List[str], rewards: List[float], config: dict,
+                  actions: List[int] = None):
         """
         REINFORCE 策略梯度更新 Defender。
 
-        使用 Categorical 分布采样动作，计算 log_prob * reward 的梯度。
-        与攻击场景奖励对称（attacker_r + defender_r = 1.0），
-        让 defender 直接从博弈对抗结果中学习，而不依赖 ground truth 标签。
+        Args:
+            actions: rollout 时实际执行的动作索引（0=SAFE, 1=MALICIOUS）。
+                     必须与 rollout 时的 predict() 结果一致，才能保证 on-policy
+                     信用分配正确。若为 None 则从当前模型 argmax 推导（有 off-policy 风险）。
         """
         if not samples or not rewards:
             return
@@ -253,12 +257,20 @@ class HFDefenderModel(BaseDefenderModel):
         outputs = self.model(input_ids, attention_mask=attention_mask)
         logits = outputs.logits  # [B, 2]
 
-        # 标准 REINFORCE：从策略分布中采样动作并计算 log_prob
-        dist = torch.distributions.Categorical(logits=logits)
-        actions = dist.sample()  # [B]
-        log_probs = dist.log_prob(actions)  # [B]
+        log_probs = torch.log_softmax(logits, dim=-1)  # [B, 2]
 
-        loss = -(log_probs * rewards_tensor).mean()
+        if actions is not None:
+            # 使用 rollout 时记录的真实动作——on-policy REINFORCE 的正确做法
+            actions_tensor = torch.tensor(actions, dtype=torch.long).to(self.device)  # [B]
+        else:
+            # fallback：从当前模型推导（off-policy，仅兼容旧接口）
+            actions_tensor = torch.argmax(logits, dim=-1)  # [B]
+
+        action_log_probs = torch.gather(log_probs, dim=1, index=actions_tensor.unsqueeze(1)).squeeze(1)  # [B]
+
+        # Bug3 fix: 减去批次均值作为基线，降低 REINFORCE 方差（对齐 attacker 的 advantage 归一化）
+        baseline = rewards_tensor.mean().detach()
+        loss = -(action_log_probs * (rewards_tensor - baseline)).mean()
 
         self.optimizer.zero_grad()
         loss.backward()

@@ -12,8 +12,10 @@ class DiversityReward:
         # 强制使用 GPU 计算，防止 GPU 0% 利用率问题
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
-        self.history_embeddings = []
         self._use_fallback = False
+        # 缓存历史文本与对应 embedding，避免重复编码
+        self._history_cache: list[str] = []
+        self._embedding_cache: list = []
 
         try:
             self.model = SentenceTransformer(model_name, device=device, local_files_only=True)
@@ -26,7 +28,7 @@ class DiversityReward:
                 print(f"[DiversityReward][WARN] 无法加载 SentenceTransformer ({e})，降级为词袋相似度")
                 self.model = None
                 self._use_fallback = True
-        
+
     def calculate(self, new_content: str, history_contents: list, threshold=0.85) -> float:
         """计算多样性奖励值
         Args:
@@ -38,21 +40,45 @@ class DiversityReward:
         """
         if self._use_fallback:
             return self._fallback_diversity(new_content, history_contents, threshold)
-        
+
         # 编码新内容
         new_embedding = self.model.encode(new_content, convert_to_tensor=True)
-        
+
         # 首次生成无历史记录
         if not history_contents:
             return 0.5
-            
-        # 编码历史内容
-        history_embeddings = self.model.encode(history_contents, convert_to_tensor=True)
-        
+
+        # 增量编码：只处理新增的历史内容
+        # 使用内容哈希校验，防止外部修改 history_contents 后缓存错位
+        current_cache_len = len(self._history_cache)
+        if current_cache_len < len(history_contents):
+            new_histories = history_contents[current_cache_len:]
+            new_embs = self.model.encode(new_histories, convert_to_tensor=True)
+            if len(new_embs.shape) == 1:
+                new_embs = new_embs.unsqueeze(0)
+            self._embedding_cache.append(new_embs)
+            self._history_cache.extend(new_histories)
+        elif current_cache_len > len(history_contents):
+            # history_contents 被外部缩短，重置缓存以避免错位
+            self._history_cache.clear()
+            self._embedding_cache.clear()
+            current_cache_len = 0
+            if current_cache_len < len(history_contents):
+                new_histories = history_contents
+                new_embs = self.model.encode(new_histories, convert_to_tensor=True)
+                if len(new_embs.shape) == 1:
+                    new_embs = new_embs.unsqueeze(0)
+                self._embedding_cache.append(new_embs)
+                self._history_cache.extend(new_histories)
+
+        if not self._embedding_cache:
+            return 0.5
+
         # 计算与历史内容的最大相似度
-        similarities = cos_sim(new_embedding, history_embeddings)
+        all_history_embeddings = torch.cat(self._embedding_cache, dim=0)
+        similarities = cos_sim(new_embedding, all_history_embeddings)
         max_similarity = torch.max(similarities).item()
-        
+
         # 根据相似度返回奖励值
         if max_similarity > threshold:
             return -0.5  # 重复内容惩罚
