@@ -841,13 +841,15 @@ def load_attacker_model(model_dir: Optional[str] = None):
         print(f"   [Device] 使用 {device}")
         return device
 
+    # 只询问一次，所有加载路径共用
+    chosen_device = _ask_cuda_device()
+    print(f"   [Config] dtype={attacker_cfg.get('dtype', 'bfloat16')}")
+
     def _make_hf_model(HFAttackerModelClass, model_name: str):
         """使用配置参数构造 HFAttackerModel。"""
-        device = _ask_cuda_device()
-        print(f"   [Config] dtype={attacker_cfg.get('dtype', 'bfloat16')}")
         return HFAttackerModelClass(
             model_name=model_name,
-            device=device,
+            device=chosen_device,
             dtype=attacker_cfg.get("dtype", "bfloat16"),
             attn_impl=attacker_cfg.get("attn_impl", "sdpa"),
             max_new_tokens=attacker_cfg.get("max_new_tokens", 150),
@@ -874,7 +876,16 @@ def load_attacker_model(model_dir: Optional[str] = None):
         try:
             from models.hf_impl.hf_attacker import HFAttackerModel
             print(f"🔄 下载基础模型并应用本地 LoRA: {model_dir}")
-            base_name = attacker_cfg.get("name", "Qwen/Qwen2.5-3B-Instruct")
+            # 优先从 save() 写入的 base_model_name.json 读取，保证与训练时一致
+            _bmn_path = os.path.join(model_dir, "base_model_name.json")
+            if os.path.exists(_bmn_path):
+                import json as _json
+                base_name = _json.load(open(_bmn_path, encoding="utf-8")).get(
+                    "base_model_name", attacker_cfg.get("name", "Qwen/Qwen2.5-1.5B-Instruct")
+                )
+                print(f"   [BaseModel] 从 base_model_name.json 读取: {base_name}")
+            else:
+                base_name = attacker_cfg.get("name", "Qwen/Qwen2.5-1.5B-Instruct")
             model = _make_hf_model(HFAttackerModel, model_name=base_name)
             model.load(model_dir)
             print("✅ Attacker 模型加载成功（ModelScope base + local LoRA）")

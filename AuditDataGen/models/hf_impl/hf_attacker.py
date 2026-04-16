@@ -157,11 +157,13 @@ class HFAttackerModel(BaseAttackerModel):
         elif not HAS_PEFT:
             print("[WARN] 未启用 LoRA")
 
-        self.optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.model.parameters()),
-            lr=1e-5
-        )
-        print("[OK] 使用自定义 GRPO 训练器（AdamW + clip）")
+        trainable = [p for p in self.model.parameters() if p.requires_grad]
+        if trainable:
+            self.optimizer = torch.optim.AdamW(trainable, lr=1e-5)
+            print("[OK] 使用自定义 GRPO 训练器（AdamW + clip）")
+        else:
+            self.optimizer = None
+            print("[OK] 推理模式（无可训练参数，跳过优化器）")
 
     def _build_prompt_text(self, prompt: str, add_generation_prompt: bool = False) -> str:
         """
@@ -260,6 +262,9 @@ class HFAttackerModel(BaseAttackerModel):
     def update(self, samples: List[RolloutSample], config: GRPOConfig):
         """GRPO 更新（Batch 版本）"""
         if not samples:
+            return {}
+        if self.optimizer is None:
+            print("  [HFAttacker] 推理模式，跳过 GRPO 更新（无可训练参数）")
             return {}
 
         self.model.train()

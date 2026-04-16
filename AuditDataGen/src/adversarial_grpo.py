@@ -697,7 +697,7 @@ class AdversarialGRPOTrainer:
 
         return batch_samples, defender_batch
 
-    AUGMENT_REWARD_THRESHOLD = 0.3
+    AUGMENT_REWARD_THRESHOLD = 0
 
     def _save_augmented_events(self, batch_samples: list, iteration: int, output_dir: str):
         """将高奖励样本写入 augmented_events.jsonl"""
