@@ -7,14 +7,11 @@ run_adversarial_grpo.py
 
 import os
 import sys
-import json
 import copy
-import random
 import argparse
 import yaml
 import collections.abc
 from typing import List, Dict, Any
-import numpy as np
 
 # 添加项目根目录到Python路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -89,8 +86,7 @@ DEFAULT_CONFIG = {
 
 # 导入必要的模块（基础模块）
 try:
-    from src.skeletons import SKELETONS, FILLERS
-    from src.adversarial_grpo import Skeleton, parse_skeleton, AdversarialGRPOTrainer, GRPOConfig
+    from src.adversarial_grpo import AdversarialGRPOTrainer, GRPOConfig
     from src.mock_models import MockAttackerModel, MockDefenderModel
     from models.base_models import BaseAttackerModel, BaseDefenderModel
     print("[OK] 基础模块导入成功")
@@ -131,79 +127,6 @@ def import_bert_defender():
         print("[WARN] 将回退到Mock模型")
         return None
 
-
-# 旧→新的 scenario_type 映射表（问题1修复）
-SCENARIO_RENAME = {
-    "DPI":           "SemanticInjection",
-    "Impersonation": "CallerImpersonation",
-    "MultiHop":      "SemanticInjection",
-    "Colluding":     "PathBypass",
-    "IPI":           "IPI",
-    "Byzantine":     "PathBypass",
-    "Contradicting": "PathBypass",
-    "AiTM":          "AiTM",
-    "benign":        "benign",
-}
-
-
-def load_skeleton_pool(skeleton_type: str = "all") -> List[Skeleton]:
-    """
-    从骨架库加载训练数据
-    
-    Args:
-        skeleton_type: "all" 或指定场景类型如 "DPI", "Impersonation"等
-    """
-    skeleton_pool = []
-    
-    for skeleton_def in SKELETONS:
-        # 过滤场景类型
-        if skeleton_type != "all" and skeleton_def["scenario_type"] != skeleton_type:
-            continue
-        
-        # 映射旧名称到新名称（问题1修复）
-        old_scenario = skeleton_def["scenario_type"]
-        scenario_type = SCENARIO_RENAME.get(old_scenario, old_scenario)
-        
-        # 填充占位符
-        filled_flow = []
-        for step in skeleton_def["flow"]:
-            if len(step) < 4:
-                continue
-            sender, receiver, content, event_type = step
-            if content is None:
-                filled_flow.append((sender, receiver, content, event_type))
-                continue
-                
-            # 替换占位符（按键长度降序，避免短键破坏长键）
-            filled_content = content
-            # {ipi_file_content} 不直接存在于 FILLERS，需合并各场景池后采样
-            if "{ipi_file_content}" in filled_content:
-                all_ipi = [v for k, vs in FILLERS.items()
-                           if k.startswith("ipi_file_content_") for v in vs]
-                if all_ipi:
-                    filled_content = filled_content.replace(
-                        "{ipi_file_content}", str(random.choice(all_ipi))
-                    )
-            for placeholder, values in sorted(FILLERS.items(), key=lambda x: len(x[0]), reverse=True):
-                placeholder_str = f"{{{placeholder}}}"
-                if placeholder_str in filled_content:
-                    filled_content = filled_content.replace(
-                        placeholder_str,
-                        str(random.choice(values))
-                    )
-            filled_flow.append((sender, receiver, filled_content, event_type))
-        
-        # 创建Skeleton对象（使用映射后的 scenario_type）
-        skeleton = Skeleton(
-            scenario_type=scenario_type,
-            description=skeleton_def["description"],
-            messages=[{"sender": s, "receiver": r, "content": c, "event_type": e} 
-                     for s, r, c, e in filled_flow if c is not None]
-        )
-        skeleton_pool.append(skeleton)
-    
-    print(f"[OK] 加载了 {len(skeleton_pool)} 个骨架样本")
-    return skeleton_pool
 
 
 def create_attacker_model(
@@ -391,24 +314,15 @@ def train_from_config(config: Dict[str, Any]):
     print("对抗性GRPO训练启动 (从配置文件)")
     print("=" * 60)
 
-    # 1. 加载骨架数据
-    print("\n[1/4] 加载训练数据...")
-    skeleton_type = config.get("data", {}).get("skeleton_type", "all")
-    skeleton_pool = load_skeleton_pool(skeleton_type=skeleton_type)
-
-    if not skeleton_pool:
-        print("[FAIL] 没有找到可用的骨架数据")
-        return
-
-    # 2. 创建模型
+    # 1. 创建模型
     attacker_config = config.get("models", {}).get("attacker", {})
     defender_config = config.get("models", {}).get("defender", {})
     
     # 从各自模型配置读取设备信息，支持独立双卡部署
     attacker_device = attacker_config.get("device", config.get("device", "cpu"))
     defender_device = defender_config.get("device", config.get("device", "cpu"))
-    
-    print(f"\n[2/4] 创建模型 (attacker: {attacker_device}, defender: {defender_device})...")
+
+    print(f"\n[1/3] 创建模型 (attacker: {attacker_device}, defender: {defender_device})...")
 
     attacker = create_attacker_model(
         model_type=attacker_config.get("type", "mock"),
@@ -424,8 +338,8 @@ def train_from_config(config: Dict[str, Any]):
         model_config=defender_config,
     )
 
-    # 3. 创建训练器
-    print(f"\n[3/4] 创建训练器...")
+    # 2. 创建训练器
+    print(f"\n[2/3] 创建训练器...")
     train_config = config.get("train", {})
     config_grpo = GRPOConfig(
         batch_size=train_config.get("batch_size", 8),
@@ -445,7 +359,7 @@ def train_from_config(config: Dict[str, Any]):
 
     phase_duration = curriculum_config.get("phase_duration", 5)
     # 读取 YAML 中的课程难度配置（如未配置则用代码默认值）
-    # 注意：场景名必须与 SKELETONS 中 scenario_type 一致（新名称体系）
+    # 注意：场景名必须与 ATTACK_CONFIGS 中的 key 一致
     yaml_difficulty = curriculum_config.get("difficulty_levels", None)
     max_history_size = diversity_config.get("history_size", 100)
     checkpoint_interval = output_config.get("checkpoint_interval", 20)
@@ -457,7 +371,6 @@ def train_from_config(config: Dict[str, Any]):
         attacker=attacker,
         defender=defender,
         config=config_grpo,
-        skeleton_pool=skeleton_pool,
         max_history_size=max_history_size,
         phase_duration=phase_duration,
         lambda_div=lambda_div,
@@ -474,9 +387,9 @@ def train_from_config(config: Dict[str, Any]):
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True, indent=2)
     print(f"[OK] 训练配置保存到: {config_file}")
 
-    # 6. 开始训练
+    # 3. 开始训练
     iterations = train_config.get("iterations", 50)
-    print(f"\n[4/4] 开始训练 (迭代次数: {iterations})...")
+    print(f"\n[3/3] 开始训练 (迭代次数: {iterations})...")
     print("-" * 40)
 
     trainer.train(

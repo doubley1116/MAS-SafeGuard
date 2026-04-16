@@ -1,7 +1,7 @@
 
 # 基础训练参数
 train:
-  iterations: 100             # 全量训练
+  iterations: 200             # 全量训练
   batch_size: 4              
   group_size: 4               # GRPO组大小：每个prompt生成G个response
   learning_rate: 1e-5         # 学习率
@@ -45,7 +45,7 @@ device: "cuda"                # 计算设备
 output:
   dir: "output"               # 输出目录
   save_checkpoints: true      # 是否保存检查点
-  checkpoint_interval: 20     # 检查点保存间隔
+  checkpoint_interval: 40     # 检查点保存间隔
 
 # 课程学习配置
 curriculum:
@@ -69,4 +69,4 @@ rl:
   reward_weights:
     # 多样性奖励权重。r_diversity ∈ [-0.5, 0.5]，attacker_r ∈ [0, 1]。
     # 建议 ≤ 0.5，避免多样性信号压过攻击成功信号，扭曲训练目标。
-    diversity: 0.3
+    diversity: 0.5

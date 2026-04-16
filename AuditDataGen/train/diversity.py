@@ -4,33 +4,50 @@ from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import cos_sim
 
 class DiversityReward:
-    def __init__(self, model_name='paraphrase-MiniLM-L6-v2'):
-        """初始化多样性奖励计算器
-        Args:
-            model_name: 使用的embedding模型
-        """
-        # 强制使用 GPU 计算，防止 GPU 0% 利用率问题
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.device = device
-        self._use_fallback = False
-        # 缓存历史文本与对应 embedding，避免重复编码
-        self._history_cache: list[str] = []
-        self._embedding_cache: list = []
+    # 类级别共享模型缓存：所有实例共用同一个 SentenceTransformer，只加载一次
+    _shared_model = None
+    _shared_model_name: str = ""
+    _shared_use_fallback: bool = False
 
+    @classmethod
+    def _load_shared_model(cls, model_name: str, device: str):
+        """首次调用时加载模型并缓存到类变量，后续实例直接复用。"""
+        if cls._shared_model is not None and cls._shared_model_name == model_name:
+            return  # 已加载，直接返回
         try:
-            self.model = SentenceTransformer(model_name, device=device, local_files_only=True)
+            cls._shared_model = SentenceTransformer(model_name, device=device, local_files_only=True)
+            cls._shared_model_name = model_name
+            cls._shared_use_fallback = False
             print(f"[DiversityReward] 加载本地缓存模型: {model_name}")
         except Exception:
             print(f"[DiversityReward] 本地缓存未命中，尝试 ModelScope 下载: {model_name}")
             try:
                 from modelscope import snapshot_download
                 local_path = snapshot_download(model_name)
-                self.model = SentenceTransformer(local_path, device=device, local_files_only=True)
+                cls._shared_model = SentenceTransformer(local_path, device=device, local_files_only=True)
+                cls._shared_model_name = model_name
+                cls._shared_use_fallback = False
                 print(f"[DiversityReward] ModelScope 下载并加载成功: {local_path}")
             except Exception as e:
                 print(f"[DiversityReward][WARN] ModelScope 下载失败 ({e})，降级为词袋相似度")
-                self.model = None
-                self._use_fallback = True
+                cls._shared_model = None
+                cls._shared_model_name = model_name
+                cls._shared_use_fallback = True
+
+    def __init__(self, model_name='paraphrase-MiniLM-L6-v2'):
+        """初始化多样性奖励计算器
+        Args:
+            model_name: 使用的embedding模型
+        """
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device = device
+        # 确保共享模型已加载
+        DiversityReward._load_shared_model(model_name, device)
+        self.model = DiversityReward._shared_model
+        self._use_fallback = DiversityReward._shared_use_fallback
+        # 每个实例独立维护自己的历史缓存（不同 attack_type 的历史不共享）
+        self._history_cache: list[str] = []
+        self._embedding_cache: list = []
 
     def calculate(self, new_content: str, history_contents: list, threshold=0.85) -> float:
         """计算多样性奖励值

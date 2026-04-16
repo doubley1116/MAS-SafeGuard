@@ -13,7 +13,7 @@ train:
 models:
   attacker:
     type: "qwen"              # 攻击者模型类型: mock, qwen
-    name: "Qwen/Qwen2.5-3B-Instruct"  # 改为本地训练好的模型路径
+    name: "Qwen/Qwen2.5-1.5B-Instruct"  # 改为本地训练好的模型路径
     device: "cuda:0"          # A6000 空闲卡 (48GB)
     dtype: "bfloat16"         # 推理/训练精度: bfloat16, float16, float32
     attn_impl: "sdpa"         # 注意力实现: sdpa, flash_attention_2, eager
@@ -27,7 +27,7 @@ models:
 
   defender:
     type: "hf"                # 防御者模型类型: hf (HuggingFace通用加载)
-    name: "Qwen/Qwen2.5-3B-Instruct"  # 改为本地训练好的模型路径
+    name: "Qwen/Qwen2.5-1.5B-Instruct"  # 改为本地训练好的模型路径
     device: "cuda:0"          # A6000 空闲卡 (48GB)
     dtype: "bfloat16"         # 推理/训练精度: bfloat16, float16, float32
     attn_impl: "sdpa"         # 注意力实现: sdpa, flash_attention_2, eager
@@ -69,4 +69,4 @@ rl:
   reward_weights:
     # 多样性奖励权重。r_diversity ∈ [-0.5, 0.5]，attacker_r ∈ [0, 1]。
     # 建议 ≤ 0.5，避免多样性信号压过攻击成功信号，扭曲训练目标。
-    diversity: 0.3
+    diversity: 0.5
