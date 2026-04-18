@@ -1,19 +1,21 @@
 # ================================================================
 # AuditDataGen - 对抗训练依赖
-# 环境：Python 3.10+，CUDA 12.4，2×A6000 (Linux)
+# 环境：Python 3.10+，CUDA 12.1，RTX 4090 (Linux)
 # ================================================================
 #
-# 第一步：安装 PyTorch（CUDA 12.4）
-#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+# 第一步：安装 PyTorch（CUDA 12.1）
+#   pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu121
 #
 # 第二步：安装其余依赖
 #   pip install -r requirements.txt
+#
+# 注意：HuggingFace 回退下载需设置镜像
+#   export HF_ENDPOINT=https://hf-mirror.com
 #
 # ================================================================
 
 # 模型核心 (通过 ModelScope 下载)
 transformers>=4.40.0
-accelerate>=0.30.0
 safetensors>=0.4.0
 peft>=0.10.0
 modelscope>=1.9.0
