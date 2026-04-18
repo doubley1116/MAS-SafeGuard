@@ -79,16 +79,12 @@ MODEL=gpt-4o-mini                    # 可选，默认 gpt-4o-mini
 **使用训练好的 Attacker 生成全部数据**
 
 ```bash
-python src/trace_generator.py \
-  --model-dir output/final_model/attacker \
-  --n 3 \
-  --n-freeform 50 \
-  --out output_trace_real
+python src/trace_generator.py  --model-dir output/final_model/attacker --n 3 --n-freeform 50 --out output_trace_real
 ```
 
 > 同时生成：
 >
-> - 骨架场景（`IPI` / `AiTM` / `benign`）：80 条骨架 × 3 次 = 240 条 trace
+> - 骨架场景（`IPI` / `AiTM` / `benign`）：19 条骨架 × 3 次
 > - 自由生成场景：50 条单条攻击事件
 
 **只生成骨架中的 IPI 和 AiTM**

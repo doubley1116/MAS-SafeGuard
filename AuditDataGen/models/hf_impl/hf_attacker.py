@@ -93,6 +93,7 @@ class HFAttackerModel(BaseAttackerModel):
 
         # ── 解析模型路径（优先本地缓存，找不到才联网）─────────────────────
         resolved = _resolve_model_path(model_name)
+        self._resolved_path = resolved  # 供 load() 复用，避免重新联网解析
         is_local_path = os.path.exists(resolved)
 
         # 加载 tokenizer
@@ -182,6 +183,7 @@ class HFAttackerModel(BaseAttackerModel):
 
     def generate(self, prompt: str, scenario_type: str, **kwargs) -> str:
         """生成攻击内容"""
+        max_new_tokens = kwargs.pop("max_new_tokens", self.max_new_tokens)
         text = self._build_prompt_text(prompt, add_generation_prompt=True)
         inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
 
@@ -189,7 +191,7 @@ class HFAttackerModel(BaseAttackerModel):
         output = self.model.generate(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
-            max_new_tokens=self.max_new_tokens,
+            max_new_tokens=max_new_tokens,
             do_sample=True,
             top_p=self.top_p,
             temperature=self.temperature,
@@ -406,12 +408,14 @@ class HFAttackerModel(BaseAttackerModel):
         adapter_config_path = os.path.join(path, "adapter_config.json")
         if os.path.exists(adapter_config_path):
             from peft import PeftModel
+            base_path = getattr(self, "_resolved_path", None) or self.model_name
             base = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
+                base_path,
                 torch_dtype=torch.bfloat16,
                 device_map=self.device,
                 attn_implementation="sdpa",
                 trust_remote_code=True,
+                local_files_only=os.path.exists(base_path),
             )
             self.model = PeftModel.from_pretrained(base, path)
         else:

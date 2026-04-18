@@ -80,10 +80,29 @@ def enrich_trace(events: list[dict]) -> tuple[str, str]:
 
     scenario_type: 'PathBypass'/'AiTM'/... 或 'benign'
     label: 'attack_success' 或 'benign'
+
+    兼容两种来源：
+    - 骨架生成：metadata["skeleton_label"] = "attack_success" / "benign"
+    - 自由生成：metadata["audit_decision"]["label"] = "dangerous" / "normal"
     """
     first_meta = events[0].get("metadata", {})
     scenario = first_meta.get("scenario", "")
+
+    # 优先读骨架 label
     label = first_meta.get("skeleton_label", "")
+
+    # 回退到 audit_decision.label（自由生成事件）
+    if not label:
+        ad_label = first_meta.get("audit_decision", {}).get("label", "")
+        if ad_label == "dangerous":
+            label = "attack_success"
+        elif ad_label == "normal":
+            label = "benign"
+
+    # benign 场景名统一为 "benign"
+    if label == "benign" and not scenario:
+        scenario = "benign"
+
     return scenario, label
 
 

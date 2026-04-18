@@ -1,7 +1,7 @@
 
 # 基础训练参数
 train:
-  iterations: 200             # 全量训练
+  iterations: 300             # 全量训练
   batch_size: 4              
   group_size: 4               # GRPO组大小：每个prompt生成G个response
   learning_rate: 1e-5         # 学习率
@@ -50,19 +50,18 @@ output:
 # 课程学习配置
 curriculum:
   enable: true                # 是否启用课程学习
-  phase_duration: 5           # 每个难度阶段的持续时间
+  phase_duration: 30          # 每个难度阶段的持续时间
   # difficulty_levels 可选，场景名须与 SKELETONS.scenario_type 一致（新名称体系）。
   # 不配置则使用代码默认值（见 CurriculumScheduler.DEFAULT_DIFFICULTY_LEVELS）。
-  # 示例：
-  # difficulty_levels:
-  #   easy:   ["PathBypass", "CallerImpersonation", "benign"]
-  #   medium: ["SemanticInjection", "RouterHijacking", "IPI", "benign"]
-  #   hard:   ["AiTM", "PromptInfection", "benign"]
+  difficulty_levels:
+    easy:   ["PathBypass", "CallerImpersonation", "benign"]
+    medium: ["SemanticInjection", "RouterHijacking", "IPI", "benign"]
+    hard:   ["PathBypass", "CallerImpersonation", "SemanticInjection", "RouterHijacking", "IPI", "AiTM", "PromptInfection", "benign"]
 
 # 多样性奖励配置
 diversity:
   similarity_threshold: 0.85  # 相似度阈值
-  history_size: 40             # 历史嵌入缓存大小（每类型，覆盖约20轮×2条/轮）
+  history_size: 100             # 历史嵌入缓存大小
 
 # RL奖励权重配置（lambda_div实际读取路径）
 rl:
