@@ -229,16 +229,11 @@ def build_d3_event(event: dict, scenario: str) -> dict:
             cp.append("AiTM_Interceptor")
         e["call_path"] = cp
 
-    from generator import _get_blocking_risk_types
-    blocking = _get_blocking_risk_types(scenario)
-
     e.setdefault("metadata", {})
+    existing_reason = e["metadata"].get("audit_decision", {}).get("reason") or ""
     e["metadata"]["audit_decision"] = {
         "label": "dangerous",
-        "reason": e["metadata"].get("audit_decision", {}).get("reason")
-                  or f"[{scenario}] 检测到：{', '.join(blocking)}",
-        "blocking_risk_types": blocking,
-        "suggested_alternative": "建议先经过合规审查节点",
+        "reason": existing_reason,
     }
     return e
 
@@ -256,8 +251,6 @@ def build_d4_event(event: dict) -> dict:
     e["metadata"]["audit_decision"] = {
         "label": "normal",
         "reason": "正常操作",
-        "blocking_risk_types": [],
-        "suggested_alternative": None,
     }
     return e
 
