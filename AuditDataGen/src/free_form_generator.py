@@ -646,17 +646,20 @@ def generate_freeform_events(
     attack_type_filter: list[str] | None = None,
     domain_filter: list[str] | None = None,
     seed: int = 42,
+    attacker_fn=None,
 ) -> list[dict]:
     """
     批量生成无骨架攻击记录，返回事件字典列表（不写文件）。
 
     Args:
-        client:              OpenAI 兼容客户端
+        client:              OpenAI 兼容客户端（用于 auditor step 及 benign）
         model:               模型名称
         n:                   总生成条数
         attack_type_filter:  只生成指定攻击类型，None = 全部
         domain_filter:       只生成指定领域，None = 全部
         seed:                随机种子
+        attacker_fn:         若提供，用于生成攻击 content（签名同 HFAttacker.generate）；
+                             否则退回 API 模型
 
     Returns:
         事件字典列表
@@ -691,7 +694,7 @@ def generate_freeform_events(
         receiver    = random.choice(cfg["receivers"][domain])
 
         if attack_type == "benign":
-            # benign：生成正常请求，无需审计员
+            # benign：生成正常请求，无需审计员；benign 语义简单，用 API 即可
             prompt  = _build_benign_prompt(domain, receiver)
             content = _call_text(client, model, prompt, temperature=0.7, max_tokens=400)
 
@@ -704,7 +707,10 @@ def generate_freeform_events(
             label   = "normal"
         elif attack_type == "IPI":
             prompt  = _build_ipi_prompt(domain)
-            content = _call_text(client, model, prompt, temperature=0.85, max_tokens=600)
+            if attacker_fn:
+                content = attacker_fn(prompt, "IPI", max_new_tokens=1024, repetition_penalty=1.15)
+            else:
+                content = _call_text(client, model, prompt, temperature=0.85, max_tokens=600)
 
             if not content or len(content.strip()) < 50:
                 print(f"  [attempt {attempt}] content 过短或为空，跳过")
@@ -715,11 +721,14 @@ def generate_freeform_events(
             audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=300)
             audit  = _parse_json(audit_raw) if audit_raw else None
             task   = (audit.get("task",   "").strip() if audit else "") or content[:77] + "..."
-            reason = (audit.get("reason", "").strip() if audit else "") or f"[IPI] 检测到文件注入攻击"
+            reason = (audit.get("reason", "").strip() if audit else "") or "[IPI] 检测到文件注入攻击"
             label  = "dangerous"
         elif attack_type == "AiTM":
             prompt  = _build_aitm_prompt(domain)
-            content = _call_text(client, model, prompt, temperature=0.85, max_tokens=500)
+            if attacker_fn:
+                content = attacker_fn(prompt, "AiTM")
+            else:
+                content = _call_text(client, model, prompt, temperature=0.85, max_tokens=500)
 
             if not content or len(content.strip()) < 50:
                 print(f"  [attempt {attempt}] content 过短或为空，跳过")
@@ -730,19 +739,22 @@ def generate_freeform_events(
             audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=300)
             audit  = _parse_json(audit_raw) if audit_raw else None
             task   = (audit.get("task",   "").strip() if audit else "") or content[:77] + "..."
-            reason = (audit.get("reason", "").strip() if audit else "") or f"[AiTM] 检测到中间人篡改"
+            reason = (audit.get("reason", "").strip() if audit else "") or "[AiTM] 检测到中间人篡改"
             label  = "dangerous"
         else:
             # 第一步：攻击者生成 content
             attacker_prompt = _build_attacker_prompt(attack_type, domain)
-            content = _call_text(client, model, attacker_prompt, temperature=0.85, max_tokens=500)
+            if attacker_fn:
+                content = attacker_fn(attacker_prompt, attack_type)
+            else:
+                content = _call_text(client, model, attacker_prompt, temperature=0.85, max_tokens=500)
 
             if not content or len(content.strip()) < 50:
                 print(f"  [attempt {attempt}] content 过短或为空，跳过")
                 continue
             content = content.strip()
 
-            # 第二步：审计员生成 task + reason
+            # 第二步：审计员生成 task + reason（始终用 API，质量更稳定）
             auditor_prompt = _build_auditor_prompt(attack_type, content)
             audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=300)
             audit = _parse_json(audit_raw) if audit_raw else None

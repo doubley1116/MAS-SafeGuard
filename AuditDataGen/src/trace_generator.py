@@ -210,7 +210,7 @@ def _generate_reason_with_api(
         resp = client.chat.completions.create(
             model=model,
             temperature=0.3,
-            max_tokens=200,
+            max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
         return resp.choices[0].message.content.strip()
@@ -243,7 +243,7 @@ def _summarize_task_with_api(user_message: str) -> str:
         resp = client.chat.completions.create(
             model=model,
             temperature=0.1,
-            max_tokens=300,
+            max_tokens=512,
             messages=[
                 {"role": "user", "content": prompt},
             ],
@@ -570,7 +570,7 @@ def api_complete(
         resp = client.chat.completions.create(
             model=model,
             temperature=0.7,
-            max_tokens=200,
+            max_tokens=512,
             messages=[
                 {"role": "system", "content": API_COMPLETION_SYSTEM},
                 {"role": "user", "content": prompt},
@@ -854,7 +854,7 @@ def load_attacker_model(model_dir: Optional[str] = None):
             device=chosen_device,
             dtype=attacker_cfg.get("dtype", "bfloat16"),
             attn_impl=attacker_cfg.get("attn_impl", "sdpa"),
-            max_new_tokens=attacker_cfg.get("max_new_tokens", 150),
+            max_new_tokens=attacker_cfg.get("max_new_tokens", 1024),
             top_p=attacker_cfg.get("top_p", 0.9),
             temperature=attacker_cfg.get("temperature", 0.8),
             lora_r=lora_cfg.get("r", 32),
@@ -996,6 +996,7 @@ def generate_dataset(
                 attack_type_filter=list(freeform_types),
                 domain_filter=domain_filter,
                 seed=seed,
+                attacker_fn=attacker_generate_fn,
             )
             for event in freeform_events:
                 audit_blocks.append([json.dumps(event, ensure_ascii=False)])
