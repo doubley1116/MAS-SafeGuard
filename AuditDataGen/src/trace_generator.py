@@ -867,6 +867,12 @@ def load_attacker_model(model_dir: Optional[str] = None):
             lora_dropout=lora_cfg.get("dropout", 0.05),
         )
 
+    # 未指定 model_dir 时，尝试加载默认模型目录
+    default_model_dir = os.path.join(project_root, "output", "final_model", "attacker")
+    if not model_dir and os.path.exists(default_model_dir):
+        model_dir = default_model_dir
+        print(f"🔄 未指定模型目录，自动尝试默认路径: {model_dir}")
+
     if model_dir and os.path.exists(model_dir):
         try:
             from models.hf_impl.hf_attacker import HFAttackerModel
@@ -904,7 +910,7 @@ def load_attacker_model(model_dir: Optional[str] = None):
     elif model_dir:
         print(f"⚠ 模型目录不存在: {model_dir}，回退到 MockAttackerModel")
     else:
-        print("💡 未指定模型目录，使用 MockAttackerModel")
+        print("💡 未指定模型目录且默认路径不存在，使用 MockAttackerModel")
 
     from mock_models import MockAttackerModel
     return MockAttackerModel()
