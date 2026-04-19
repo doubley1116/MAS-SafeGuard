@@ -214,7 +214,7 @@ def _generate_reason_with_api(
         resp = client.chat.completions.create(
             model=model,
             temperature=0.3,
-            max_tokens=200,
+            max_tokens=512,
             messages=[
                 {"role": "user", "content": prompt},
             ],
@@ -273,7 +273,7 @@ def _summarize_task_with_api(user_message: str) -> str:
         resp = client.chat.completions.create(
             model=model,
             temperature=0.1,
-            max_tokens=300,
+            max_tokens=512,
             messages=[
                 {"role": "user", "content": prompt},
             ],

@@ -210,7 +210,7 @@ def _generate_reason_with_api(
         resp = client.chat.completions.create(
             model=model,
             temperature=0.3,
-            max_tokens=512,
+            max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )
         return resp.choices[0].message.content.strip()
@@ -243,7 +243,7 @@ def _summarize_task_with_api(user_message: str) -> str:
         resp = client.chat.completions.create(
             model=model,
             temperature=0.1,
-            max_tokens=512,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": prompt},
             ],
@@ -570,7 +570,7 @@ def api_complete(
         resp = client.chat.completions.create(
             model=model,
             temperature=0.7,
-            max_tokens=512,
+            max_tokens=1024,
             messages=[
                 {"role": "system", "content": API_COMPLETION_SYSTEM},
                 {"role": "user", "content": prompt},
@@ -676,7 +676,7 @@ def generate_trace_with_attacker(
                 )
             
             # IPI 文档需要足够长才能嵌入恶意指令；repetition_penalty 抑制重复循环
-            gen_kwargs = {"max_new_tokens": 1024, "repetition_penalty": 1.15} if scenario_type == "IPI" else {}
+            gen_kwargs = {"max_new_tokens": 2048, "repetition_penalty": 1.15} if scenario_type == "IPI" else {}
             filled_content = attacker_generate_fn(prompt, scenario_type, **gen_kwargs)
 
             # IPI 后处理：截断免责声明和自我暴露尾注
@@ -859,7 +859,7 @@ def load_attacker_model(model_dir: Optional[str] = None):
             device=chosen_device,
             dtype=attacker_cfg.get("dtype", "bfloat16"),
             attn_impl=attacker_cfg.get("attn_impl", "sdpa"),
-            max_new_tokens=attacker_cfg.get("max_new_tokens", 1024),
+            max_new_tokens=attacker_cfg.get("max_new_tokens", 2048),
             top_p=attacker_cfg.get("top_p", 0.9),
             temperature=attacker_cfg.get("temperature", 0.8),
             lora_r=lora_cfg.get("r", 32),

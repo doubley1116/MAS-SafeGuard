@@ -7,7 +7,7 @@ D3/D4 数据清洗器：从 D1 生成的 audit.jsonl 清洗出 D3（攻击样本
 数据流：
   D1 输出 output_trace_real/audit.jsonl（完整结构化 AuditEvent 数据流）
     → D3 清洗：提取攻击位置事件（SemanticInjection/RouterHijacking/IPI/PromptInfection）
-    → D4 清洗：提取正常事件（benign trace 全部 / attack trace 非攻击位置）
+    → D4 清洗：提取正常事件（normal trace 全部 / attack trace 非攻击位置）
 
 输入：
   output_trace_real/audit.jsonl
@@ -79,7 +79,7 @@ def enrich_trace(events: list[dict]) -> tuple[str, str]:
     从 trace 第一条事件提取 (scenario_type, label)。
 
     scenario_type: 'PathBypass'/'AiTM'/... 或 'benign'
-    label: 'attack_success' 或 'benign'
+    label: 'attack_success' 或 'normal'
 
     兼容两种来源：
     - 骨架生成：metadata["skeleton_label"] = "attack_success" / "benign"
@@ -90,6 +90,8 @@ def enrich_trace(events: list[dict]) -> tuple[str, str]:
 
     # 优先读骨架 label
     label = first_meta.get("skeleton_label", "")
+    if label == "benign":
+        label = "normal"
 
     # 回退到 audit_decision.label（自由生成事件）
     if not label:
@@ -97,10 +99,10 @@ def enrich_trace(events: list[dict]) -> tuple[str, str]:
         if ad_label == "dangerous":
             label = "attack_success"
         elif ad_label == "normal":
-            label = "benign"
+            label = "normal"
 
     # benign 场景名统一为 "benign"
-    if label == "benign" and not scenario:
+    if label == "normal" and not scenario:
         scenario = "benign"
 
     return scenario, label
@@ -294,7 +296,7 @@ def run_cleaner(
 
     # 统计
     stats = {
-        "benign_traces": 0,
+        "normal_traces": 0,
         "attack_traces": 0,
         "d3_events": 0,
         "d4_events": 0,
@@ -307,9 +309,9 @@ def run_cleaner(
         # 提取 scenario 和 label
         scenario, label = enrich_trace(events)
 
-        if label == "benign":
+        if label == "normal":
             # D4：只取 User 消息
-            stats["benign_traces"] += 1
+            stats["normal_traces"] += 1
             user_event = next(
                 (e for e in events if e.get("sender") == "User" and e.get("event_type") == "message"),
                 None
@@ -374,7 +376,7 @@ def run_cleaner(
     print("✅ D3/D4 数据清洗完成")
     print(f"{'='*50}")
     print(f"  输入 traces: {len(traces)} 条")
-    print(f"  - benign traces: {stats['benign_traces']} 条")
+    print(f"  - normal traces: {stats['normal_traces']} 条")
     print(f"  - attack traces: {stats['attack_traces']} 条")
     print(f"  D3 事件: {stats['d3_events']} 条")
     print(f"  D4 事件: {stats['d4_events']} 条")
