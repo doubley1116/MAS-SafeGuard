@@ -675,9 +675,14 @@ def generate_trace_with_attacker(
                     skeleton, actual_content_tpl, history_context, values
                 )
             
-            # IPI 文档需要足够长才能嵌入恶意指令，使用更大的 token 限制
-            gen_kwargs = {"max_new_tokens": 1024} if scenario_type == "IPI" else {}
+            # IPI 文档需要足够长才能嵌入恶意指令；repetition_penalty 抑制重复循环
+            gen_kwargs = {"max_new_tokens": 1024, "repetition_penalty": 1.15} if scenario_type == "IPI" else {}
             filled_content = attacker_generate_fn(prompt, scenario_type, **gen_kwargs)
+
+            # IPI 后处理：截断免责声明和自我暴露尾注
+            if scenario_type == "IPI" and filled_content:
+                from free_form_generator import _strip_freeform_exposure
+                filled_content = _strip_freeform_exposure(filled_content.strip())
 
             # 长度兜底：IPI 文件不能太短
             if scenario_type == "IPI":
