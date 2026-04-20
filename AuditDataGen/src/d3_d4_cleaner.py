@@ -46,11 +46,13 @@ if _src_dir not in sys.path:
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCENARIO_TO_D3_FILE = {
+    "PathBypass": "type1_path_bypass.jsonl",
+    "CallerImpersonation": "type2_caller_impersonation.jsonl",
     "SemanticInjection": "type3_semantic_injection.jsonl",
     "RouterHijacking": "type4_route_hijack.jsonl",
     "IPI": "type5_ipi.jsonl",
+    "AiTM": "type6_aitm.jsonl",
     "PromptInfection": "type7_prompt_infection.jsonl",
-    # PathBypass / CallerImpersonation / AiTM 不属于 D3 的四种语义攻击，跳过
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -130,7 +132,27 @@ SCENE_INDICATORS = {
         "trade_execute_tool", "asset_query_tool",
         "Research_Agent", "Trade_Agent", "Asset_Agent", "Risk_Agent",
         "symbol", "amount", "client"
-    ]
+    ],
+    "legal": [
+        "sign_contract_tool", "archive_doc_tool", "read_file_tool",
+        "Counsel_Agent", "Review_Agent", "Sign_Agent", "Archive_Agent",
+        "contract_id", "party_id", "doc_category", "case"
+    ],
+    "logistics": [
+        "update_route_tool", "release_cargo_tool",
+        "Dispatch_Agent", "Route_Agent", "Warehouse_Agent", "Customs_Agent",
+        "cargo_id", "waybill_id", "warehouse_id", "destination"
+    ],
+    "enterprise_hr": [
+        "update_salary_tool", "grant_access_tool", "read_file_tool",
+        "HR_Agent", "Payroll_Agent", "Access_Agent", "Audit_Agent",
+        "emp_id", "salary_amount", "role_name"
+    ],
+    "energy": [
+        "send_command_tool", "update_threshold_tool", "read_file_tool",
+        "Monitor_Agent", "Control_Agent", "Threshold_Agent", "Safety_Agent",
+        "device_id", "node_id", "threshold_rule", "threshold_value", "grid_command"
+    ],
 }
 
 
@@ -162,6 +184,9 @@ def detect_scene(event: dict) -> str:
 
     # 默认 financial
     return "financial"
+
+
+ALL_D4_SCENES = ["financial", "healthcare", "ecommerce", "legal", "logistics", "enterprise_hr", "energy"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -251,7 +276,7 @@ def run_cleaner(
 
     # 初始化 buckets
     d3_buckets: dict[str, list] = {k: [] for k in SCENARIO_TO_D3_FILE}
-    d4_buckets: dict[str, list] = {"financial": [], "healthcare": [], "ecommerce": []}
+    d4_buckets: dict[str, list] = {scene: [] for scene in ALL_D4_SCENES}
 
     # 统计
     stats = {
@@ -322,7 +347,7 @@ def run_cleaner(
     # 写出 D4
     print(f"\n📤 写出 D4 数据...")
     Path(d4_out).mkdir(parents=True, exist_ok=True)
-    for scene in ("financial", "healthcare", "ecommerce"):
+    for scene in ALL_D4_SCENES:
         events = d4_buckets[scene]
         output_file = Path(d4_out) / f"{scene}.jsonl"
         with open(output_file, "w", encoding="utf-8") as f:

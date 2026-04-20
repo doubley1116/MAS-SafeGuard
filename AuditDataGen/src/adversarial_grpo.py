@@ -28,13 +28,13 @@ except ImportError:
 try:
     from free_form_generator import (
         ATTACK_CONFIGS, SYSTEM_TOPOLOGIES, FREE_FORM_DOMAINS, FREE_FORM_ATTACK_TYPES,
-        _build_attacker_prompt, _build_ipi_prompt, _build_aitm_prompt, _build_benign_prompt,
+        _build_attacker_prompt, _build_benign_prompt,
         _DOMAIN_ENTITY_HINT,
     )
 except ImportError:
     from src.free_form_generator import (
         ATTACK_CONFIGS, SYSTEM_TOPOLOGIES, FREE_FORM_DOMAINS, FREE_FORM_ATTACK_TYPES,
-        _build_attacker_prompt, _build_ipi_prompt, _build_aitm_prompt, _build_benign_prompt,
+        _build_attacker_prompt, _build_benign_prompt,
         _DOMAIN_ENTITY_HINT,
     )
 
@@ -651,11 +651,7 @@ class CurriculumScheduler:
         attack_type + domain + target + receiver → attacker prompt
         IPI/AiTM 使用专用 prompt builder，其余复用 few-shot + tactic 增强版。
         """
-        # IPI / AiTM 直接用专用 prompt（已含系统拓扑）
-        if attack_type == "IPI":
-            return _build_ipi_prompt(domain)
-        if attack_type == "AiTM":
-            return _build_aitm_prompt(domain)
+        # benign 直接用专用 prompt（已含系统拓扑）
         if attack_type == "benign":
             return _build_benign_prompt(domain, receiver)
 
