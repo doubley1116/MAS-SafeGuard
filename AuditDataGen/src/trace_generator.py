@@ -74,6 +74,14 @@ def sample_values(scenario_type: Optional[str] = None) -> dict:
         ipi_key = "ipi_file_content_healthcare"
     elif scenario_type in ("ecommerce", "EC-IPI"):
         ipi_key = "ipi_file_content_ecommerce"
+    elif scenario_type in ("legal",):
+        ipi_key = "ipi_file_content_legal"
+    elif scenario_type in ("logistics",):
+        ipi_key = "ipi_file_content_logistics"
+    elif scenario_type in ("enterprise_hr",):
+        ipi_key = "ipi_file_content_hr"
+    elif scenario_type in ("energy",):
+        ipi_key = "ipi_file_content_energy"
     else:
         ipi_key = "ipi_file_content_financial"
 
@@ -98,6 +106,21 @@ def sample_values(scenario_type: Optional[str] = None) -> dict:
         "order_id":    random.choice(FILLERS["order_id"]),
         "carrier":     random.choice(FILLERS["carrier"]),
         "tracking_no": random.choice(FILLERS["tracking_no"]),
+        "contract_id":   random.choice(FILLERS["contract_id"]),
+        "party_id":      random.choice(FILLERS["party_id"]),
+        "doc_category":  random.choice(FILLERS["doc_category"]),
+        "waybill_id":    random.choice(FILLERS["waybill_id"]),
+        "cargo_id":      random.choice(FILLERS["cargo_id"]),
+        "warehouse_id":  random.choice(FILLERS["warehouse_id"]),
+        "destination":   random.choice(FILLERS["destination"]),
+        "emp_id":        random.choice(FILLERS["emp_id"]),
+        "salary_amount": random.choice(FILLERS["salary_amount"]),
+        "role_name":     random.choice(FILLERS["role_name"]),
+        "device_id":     random.choice(FILLERS["device_id"]),
+        "node_id":       random.choice(FILLERS["node_id"]),
+        "threshold_rule":  random.choice(FILLERS["threshold_rule"]),
+        "threshold_value": random.choice(FILLERS["threshold_value"]),
+        "grid_command":    random.choice(FILLERS["grid_command"]),
     }
 
 
@@ -630,6 +653,14 @@ def generate_trace_with_attacker(
         ipi_scenario = "healthcare"
     elif skeleton_id.startswith("EC-"):
         ipi_scenario = "ecommerce"
+    elif skeleton_id.startswith("LGL-"):
+        ipi_scenario = "legal"
+    elif skeleton_id.startswith("LOG-"):
+        ipi_scenario = "logistics"
+    elif skeleton_id.startswith("HR-"):
+        ipi_scenario = "enterprise_hr"
+    elif skeleton_id.startswith("EN-"):
+        ipi_scenario = "energy"
     else:
         ipi_scenario = "financial"
 
@@ -990,6 +1021,14 @@ def generate_dataset(
                     ipi_scenario = "healthcare"
                 elif skeleton_id.startswith("EC-"):
                     ipi_scenario = "ecommerce"
+                elif skeleton_id.startswith("LGL-"):
+                    ipi_scenario = "legal"
+                elif skeleton_id.startswith("LOG-"):
+                    ipi_scenario = "logistics"
+                elif skeleton_id.startswith("HR-"):
+                    ipi_scenario = "enterprise_hr"
+                elif skeleton_id.startswith("EN-"):
+                    ipi_scenario = "energy"
                 else:
                     ipi_scenario = "financial"
                 values   = sample_values(scenario_type=ipi_scenario)

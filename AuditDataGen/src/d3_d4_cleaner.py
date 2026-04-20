@@ -96,7 +96,7 @@ def enrich_trace(events: list[dict]) -> tuple[str, str]:
     # 回退到 audit_decision.label（自由生成事件）
     if not label:
         ad_label = first_meta.get("audit_decision", {}).get("label", "")
-        if ad_label == "dangerous":
+        if ad_label in ("dangerous", "ambiguous"):
             label = "attack_success"
         elif ad_label == "normal":
             label = "normal"
@@ -208,34 +208,8 @@ def find_attack_event(events: list[dict], scenario: str) -> tuple[Optional[int],
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_d3_event(event: dict, scenario: str) -> dict:
-    """
-    构建 D3 攻击位置事件
-
-    IPI 特殊处理：
-    - sender 改为 "File_System"（攻击藏在文件内容里）
-    - event_type 改为 "tool_result"（表示文件系统返回的原始内容，补全任务）
-
-    AiTM：
-    - sender 改为 "AiTM_Interceptor"
-
-    其余场景 sender 保持 "User"
-    """
-    e = dict(event)
-
-    if scenario == "AiTM":
-        e["sender"] = "AiTM_Interceptor"
-        cp = list(e.get("call_path") or [])
-        if "AiTM_Interceptor" not in cp:
-            cp.append("AiTM_Interceptor")
-        e["call_path"] = cp
-
-    e.setdefault("metadata", {})
-    existing_reason = e["metadata"].get("audit_decision", {}).get("reason") or ""
-    e["metadata"]["audit_decision"] = {
-        "label": "dangerous",
-        "reason": existing_reason,
-    }
-    return e
+    """D3 攻击位置事件：直接透传，不修改任何字段。"""
+    return dict(event)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -243,16 +217,8 @@ def build_d3_event(event: dict, scenario: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_d4_event(event: dict) -> dict:
-    """
-    构建 D4 正常 User 消息事件（只保留 User 消息）
-    """
-    e = dict(event)
-    e.setdefault("metadata", {})
-    e["metadata"]["audit_decision"] = {
-        "label": "normal",
-        "reason": "正常操作",
-    }
-    return e
+    """D4 正常 User 消息事件：直接透传，不覆写 audit_decision。"""
+    return dict(event)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
