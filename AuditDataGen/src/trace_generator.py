@@ -200,20 +200,20 @@ def _make_api_client():
         return None, None
 
 
-def _generate_reason_with_api(
+def _audit_with_api(
     content: Optional[str],
     tool_args: Optional[dict],
     sender: str = "",
     receiver: str = "",
     event_type: str = "",
     domain: str = "financial",
-) -> str:
-    """API 盲审生成 reason（不告知攻击类型），使用与 free_form_generator 相同的 prompt。"""
+) -> tuple[str, str]:
+    """API 盲审生成 label + reason（不告知攻击类型），使用与 free_form_generator 相同的 prompt。"""
     from free_form_generator import _AUDITOR_PROMPT, SYSTEM_TOPOLOGIES
 
     client, model = _make_api_client()
     if client is None or model is None:
-        return "检测到潜在攻击行为"
+        return "", ""
 
     content_snippet = content[:300] if content else ""
     tool_args_str = json.dumps(tool_args, ensure_ascii=False) if tool_args else "无"
@@ -240,17 +240,18 @@ def _generate_reason_with_api(
             messages=[{"role": "user", "content": prompt}],
         )
         raw = (resp.choices[0].message.content or "").strip()
-        # 解析 JSON，提取 reason（label 由结构决定，此处忽略）
         if raw.startswith("```"):
             raw = raw.split("```")[1].lstrip("json").strip()
         try:
             parsed = json.loads(raw)
-            return parsed.get("reason", raw)
+            label = parsed.get("label", "dangerous").strip()
+            reason = parsed.get("reason", raw).strip()
+            return label, reason
         except json.JSONDecodeError:
-            return raw
+            return "dangerous", raw
     except Exception as e:
-        print(f"  [WARN] 原因生成 API 调用失败: {e}")
-        return "检测到潜在攻击行为"
+        print(f"  [WARN] 盲审 API 调用失败: {e}")
+        return "dangerous", "检测到潜在攻击行为"
 
 
 _TASK_SUMMARY_PROMPT = """你是一个任务意图提取助手。请从用户的原始消息中提取核心任务意图，用一句话概括（不超过80字符）。
@@ -835,20 +836,15 @@ def generate_trace_with_attacker(
         self_hash = compute_hash(hash_payload)
         
         # 7. 构建 metadata（包含新的 audit_decision）
-        label = _assign_label(skeleton, i, interception_idx)
-
-        # 生成 reason
-        if label == "normal":
-            reason = "正常操作"
-        else:
-            reason = _generate_reason_with_api(
-                content=display_content,
-                tool_args=tool_args,
-                sender=sender,
-                receiver=receiver,
-                event_type=event_type,
-                domain=ipi_scenario,
-            )
+        # 骨架生成走 API 盲审，不审核则不填
+        label, reason = _audit_with_api(
+            content=display_content,
+            tool_args=tool_args,
+            sender=sender,
+            receiver=receiver,
+            event_type=event_type,
+            domain=ipi_scenario,
+        )
 
         metadata = _make_metadata(skeleton, event_type, i)
         metadata["audit_decision"] = {
