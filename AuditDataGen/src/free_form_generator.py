@@ -887,8 +887,6 @@ def generate_freeform_events(
             content = content.strip()
             task_raw = _call_text(client, model, _build_task_prompt(content), temperature=0.1, max_tokens=100)
             task   = (task_raw.strip() if task_raw else "") or content[:77] + "..."
-            reason = "正常操作"
-            label  = "normal"
         else:
             attacker_prompt = _build_attacker_prompt(attack_type, domain)
             if attacker_fn:
@@ -901,11 +899,13 @@ def generate_freeform_events(
             content = _strip_freeform_exposure(content.strip())
             task_raw = _call_text(client, model, _build_task_prompt(content), temperature=0.1, max_tokens=100)
             task     = (task_raw.strip() if task_raw else "") or (content[:77] + "..." if len(content) > 80 else content)
-            auditor_prompt = _build_auditor_prompt(content, domain, receiver)
-            audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=256)
-            audit  = _parse_json(audit_raw) if audit_raw else None
-            reason = (audit.get("reason", "").strip() if audit else "") or "检测到潜在攻击行为"
-            label  = (audit.get("label",  "").strip() if audit else "") or "dangerous"
+
+        # 盲审：benign 与攻击类型统一走 API 审计
+        auditor_prompt = _build_auditor_prompt(content, domain, receiver)
+        audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=256)
+        audit  = _parse_json(audit_raw) if audit_raw else None
+        reason = (audit.get("reason", "").strip() if audit else "") or ""
+        label  = (audit.get("label",  "").strip() if audit else "") or ""
 
         events.append(_assemble_event(attack_type, domain, receiver, content, task, reason, label))
         success += 1
