@@ -693,24 +693,8 @@ def generate_trace_with_attacker(
     Returns:
         AuditEvent 列表（格式与 generator.py 完全兼容）
     """
-    skeleton_id = skeleton.get("id", "")
     scenario_type = skeleton.get("scenario_type", "")
-
-    # 根据骨架 ID 前缀确定实际场景（用于 IPI 文件内容采样）
-    if skeleton_id.startswith("HC-"):
-        ipi_scenario = "healthcare"
-    elif skeleton_id.startswith("EC-"):
-        ipi_scenario = "ecommerce"
-    elif skeleton_id.startswith("LGL-"):
-        ipi_scenario = "legal"
-    elif skeleton_id.startswith("LOG-"):
-        ipi_scenario = "logistics"
-    elif skeleton_id.startswith("HR-"):
-        ipi_scenario = "enterprise_hr"
-    elif skeleton_id.startswith("EN-"):
-        ipi_scenario = "energy"
-    else:
-        ipi_scenario = "financial"
+    ipi_scenario = skeleton.get("domain", "financial")
 
     if values is None:
         values = sample_values(scenario_type=ipi_scenario)
@@ -1057,21 +1041,7 @@ def generate_dataset(
         print(f"▶ 骨架生成：{len(skeletons)} 条骨架 × {n_per_skeleton} 次")
         for skeleton in skeletons:
             for idx in range(n_per_skeleton):
-                skeleton_id = skeleton.get("id", "")
-                if skeleton_id.startswith("HC-"):
-                    ipi_scenario = "healthcare"
-                elif skeleton_id.startswith("EC-"):
-                    ipi_scenario = "ecommerce"
-                elif skeleton_id.startswith("LGL-"):
-                    ipi_scenario = "legal"
-                elif skeleton_id.startswith("LOG-"):
-                    ipi_scenario = "logistics"
-                elif skeleton_id.startswith("HR-"):
-                    ipi_scenario = "enterprise_hr"
-                elif skeleton_id.startswith("EN-"):
-                    ipi_scenario = "energy"
-                else:
-                    ipi_scenario = "financial"
+                ipi_scenario = skeleton.get("domain", "financial")
                 values   = sample_values(scenario_type=ipi_scenario)
                 trace_id = str(uuid.uuid4())
 
