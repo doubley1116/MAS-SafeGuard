@@ -183,21 +183,22 @@ class HFAttackerModel(BaseAttackerModel):
 
     def generate(self, prompt: str, scenario_type: str, **kwargs) -> str:
         """生成攻击内容"""
+        self.model.eval()  # 确保推理模式（禁用 dropout 等随机层）
         max_new_tokens = kwargs.pop("max_new_tokens", self.max_new_tokens)
         text = self._build_prompt_text(prompt, add_generation_prompt=True)
         inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
 
-        # 生成输出张量
-        output = self.model.generate(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            top_p=self.top_p,
-            temperature=self.temperature,
-            pad_token_id=self.tokenizer.pad_token_id,
-            **kwargs
-        )
+        with torch.no_grad():  # 禁用梯度计算，节省显存和计算
+            output = self.model.generate(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
+                top_p=self.top_p,
+                temperature=self.temperature,
+                pad_token_id=self.tokenizer.pad_token_id,
+                **kwargs
+            )
 
         input_length = inputs["input_ids"].shape[1]
         generated_ids = output[0][input_length:]

@@ -2,413 +2,148 @@
 """
 d3_d4_cleaner.py
 ────────────────
-D3/D4 数据清洗器：从 D1 生成的 audit.jsonl 清洗出 D3（攻击样本）和 D4（正常样本）
+D3/D4 数据清洗器：从 D1 生成的 audit.jsonl 清洗出攻击样本（D3）和正常样本（D4）
 
-数据流：
-  D1 输出 output_trace_real/audit.jsonl（完整结构化 AuditEvent 数据流）
-    → D3 清洗：提取攻击位置事件（SemanticInjection/RouterHijacking/IPI/PromptInfection）
-    → D4 清洗：提取正常事件（normal trace 全部 / attack trace 非攻击位置）
+分类核心原则（按 metadata 硬编码字段，不依赖盲审 label）：
+  - 按 metadata.intent 区分攻击/正常："attack" → D3，"benign" → D4
+  - D3 细分按 metadata.scenario（PathBypass / IPI / AiTM / ...）
+  - D4 细分按 metadata.domain（financial / healthcare / ...）
+  - 不修改任何 event 字段，不硬编码场景/域名映射表
 
-输入：
-  output_trace_real/audit.jsonl
-
-输出：
-  data/
-    d3/
-      type3_semantic_injection.jsonl
-      type4_route_hijack.jsonl
-      type5_ipi.jsonl
-      type7_prompt_infection.jsonl
-    d4/
-      financial.jsonl
-      healthcare.jsonl
-      ecommerce.jsonl
+输出结构：
+  out_dir/
+    split/                    # 文件夹一：按类别分开
+      d3/
+        {scenario}.jsonl      # 每种攻击类型一个文件
+      d4/
+        {domain}.jsonl        # 每种场景域名一个文件
+    merged/                   # 文件夹二：不细分
+      d3.jsonl
+      d4.jsonl
+    all/                      # 文件夹三：全部混在一起
+      all.jsonl
 
 使用示例：
-  python src/d3_d4_cleaner.py --input output_trace_real/audit.jsonl
-  python src/d3_d4_cleaner.py --input output_trace_real/audit.jsonl --d3-out data/d3 --d4-out data/d4
+  python src/d3_d4_cleaner.py --input output_trace_real/audit.jsonl --out data
 """
 
-import os
-import sys
 import json
 import argparse
 from pathlib import Path
-from typing import Optional
-
-# 确保能导入同目录的 generator 模块
-_src_dir = os.path.dirname(os.path.abspath(__file__))
-if _src_dir not in sys.path:
-    sys.path.insert(0, _src_dir)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 全局配置
-# ─────────────────────────────────────────────────────────────────────────────
-
-SCENARIO_TO_D3_FILE = {
-    "PathBypass": "type1_path_bypass.jsonl",
-    "CallerImpersonation": "type2_caller_impersonation.jsonl",
-    "SemanticInjection": "type3_semantic_injection.jsonl",
-    "RouterHijacking": "type4_route_hijack.jsonl",
-    "IPI": "type5_ipi.jsonl",
-    "AiTM": "type6_aitm.jsonl",
-    "PromptInfection": "type7_prompt_infection.jsonl",
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 第一步：加载并按 trace_id 分组
-# ─────────────────────────────────────────────────────────────────────────────
-
-def load_traces(audit_path: str) -> dict[str, list[dict]]:
-    """
-    返回 {trace_id: [有序 event 列表]}
-    """
-    traces = {}
-    with open(audit_path, encoding="utf-8") as f:
-        for line in f:
-            e = json.loads(line)
-            tid = e["trace_id"]
-            traces.setdefault(tid, []).append(e)
-    return traces
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 第二步：从第一条事件继承 scenario_type 和 label
-# ─────────────────────────────────────────────────────────────────────────────
-
-def enrich_trace(events: list[dict]) -> tuple[str, str]:
-    """
-    从 trace 第一条事件提取 (scenario_type, label)。
-
-    scenario_type: 'PathBypass'/'AiTM'/... 或 'benign'
-    label: 'attack_success' 或 'normal'
-
-    兼容两种来源：
-    - 骨架生成：metadata["skeleton_label"] = "attack_success" / "benign"
-    - 自由生成：metadata["audit_decision"]["label"] = "dangerous" / "normal"
-    """
-    first_meta = events[0].get("metadata", {})
-    scenario = first_meta.get("scenario", "")
-
-    # 优先读骨架 label
-    label = first_meta.get("skeleton_label", "")
-    if label == "benign":
-        label = "normal"
-
-    # 回退到 audit_decision.label（自由生成事件）
-    if not label:
-        ad_label = first_meta.get("audit_decision", {}).get("label", "")
-        if ad_label in ("dangerous", "ambiguous"):
-            label = "attack_success"
-        elif ad_label == "normal":
-            label = "normal"
-
-    # benign 场景名统一为 "benign"
-    if label == "normal" and not scenario:
-        scenario = "benign"
-
-    return scenario, label
+def is_attack_event(event: dict) -> bool:
+    """根据 metadata.intent 判断是否为攻击事件。"""
+    intent = event.get("metadata", {}).get("intent")
+    if intent == "attack":
+        return True
+    if intent == "benign":
+        return False
+    # fallback：旧数据没有 intent 字段时，根据 scenario 推断
+    scenario = event.get("metadata", {}).get("scenario", "")
+    return scenario not in ("", "benign")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 场景检测（复用 d4_generator.py 的 detect_scene 函数逻辑）
-# ─────────────────────────────────────────────────────────────────────────────
-
-SCENE_INDICATORS = {
-    "healthcare": [
-        "prescription_tool", "triage_assess_tool", "diagnosis_tool",
-        "review_tool", "dispense_tool", "lab_query_tool", "read_file_tool",
-        "Triage_Agent", "Diagnosis_Agent", "Prescription_Agent",
-        "Review_Agent", "Pharmacy_Agent",
-        "patient_id", "drug_name", "diagnosis"
-    ],
-    "ecommerce": [
-        "config_update_tool", "stats_query_tool", "order_query_tool",
-        "logistics_add_tool", "token_fetch_tool",
-        "StatsAgent", "OrderAgent", "ConfigAgent", "LogisticsAgent",
-        "merchant_id", "order_id", "webhook_url", "carrier", "tracking_no"
-    ],
-    "financial": [
-        "trade_execute_tool", "asset_query_tool",
-        "Research_Agent", "Trade_Agent", "Asset_Agent", "Risk_Agent",
-        "symbol", "amount", "client"
-    ],
-    "legal": [
-        "sign_contract_tool", "archive_doc_tool", "read_file_tool",
-        "Counsel_Agent", "Review_Agent", "Sign_Agent", "Archive_Agent",
-        "contract_id", "party_id", "doc_category", "case"
-    ],
-    "logistics": [
-        "update_route_tool", "release_cargo_tool",
-        "Dispatch_Agent", "Route_Agent", "Warehouse_Agent", "Customs_Agent",
-        "cargo_id", "waybill_id", "warehouse_id", "destination"
-    ],
-    "enterprise_hr": [
-        "update_salary_tool", "grant_access_tool", "read_file_tool",
-        "HR_Agent", "Payroll_Agent", "Access_Agent", "Audit_Agent",
-        "emp_id", "salary_amount", "role_name"
-    ],
-    "energy": [
-        "send_command_tool", "update_threshold_tool", "read_file_tool",
-        "Monitor_Agent", "Control_Agent", "Threshold_Agent", "Safety_Agent",
-        "device_id", "node_id", "threshold_rule", "threshold_value", "grid_command"
-    ],
-}
+def get_d3_category(event: dict) -> str:
+    """返回 D3 细分类别名（metadata.scenario），为空则返回 unknown。"""
+    return event.get("metadata", {}).get("scenario") or "unknown"
 
 
-def detect_scene(event: dict) -> str:
-    """
-    根据事件内容检测所属场景（复用 d4_generator.py 逻辑）
+def get_d4_category(event: dict) -> str:
+    """返回 D4 细分类别名（metadata.domain），为空则返回 unknown。"""
+    return event.get("metadata", {}).get("domain") or "unknown"
 
-    Returns:
-        "healthcare" | "ecommerce" | "financial"
-    """
-    content = event.get("content", "") or ""
-    tool_name = event.get("tool_name", "") or ""
-    sender = event.get("sender", "") or ""
-    receiver = event.get("receiver", "") or ""
-
-    # 合并所有文本用于检测
-    text = f"{content} {tool_name} {sender} {receiver}".lower()
-
-    # 检查各场景关键词
-    scores = {}
-    for scene, indicators in SCENE_INDICATORS.items():
-        score = sum(1 for ind in indicators if ind.lower() in text)
-        scores[scene] = score
-
-    # 返回得分最高的场景
-    max_score = max(scores.values()) if scores else 0
-    if max_score > 0:
-        return max(scores, key=lambda k: scores[k])
-
-    # 默认 financial
-    return "financial"
-
-
-ALL_D4_SCENES = ["financial", "healthcare", "ecommerce", "legal", "logistics", "enterprise_hr", "energy"]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 第三步：定位攻击位置事件（D3 清洗核心）
-# ─────────────────────────────────────────────────────────────────────────────
-
-def find_attack_event(events: list[dict], scenario: str) -> tuple[Optional[int], Optional[dict]]:
-    """
-    返回 (idx, event) 对，即该 trace 中应被 Defender 拦截的那一条事件。
-    找不到返回 (None, None)。
-
-    攻击位置逻辑（与 adversarial_grpo.py 的 rollout() 和 _save_augmented_events() 保持一致）：
-    - PathBypass / CallerImpersonation / SemanticInjection / PromptInfection / RouterHijacking：
-      攻击者是 User，取第一条 User message
-    - IPI：tool_result
-    - AiTM：sender 为 AiTM_Interceptor 的 message
-    """
-    if scenario in ("PathBypass", "CallerImpersonation", "SemanticInjection",
-                    "PromptInfection", "RouterHijacking"):
-        # 攻击者是 User，取第一条 User message
-        for i, e in enumerate(events):
-            if e.get("sender") == "User" and e.get("event_type") == "message":
-                return i, e
-
-    elif scenario == "IPI":
-        # 攻击位置是 tool_call 之后的第一条 message（被污染文件内容经 Agent 转发）
-        for i in range(1, len(events)):
-            if (events[i].get("event_type") == "tool_result" and
-                    events[i - 1].get("event_type") == "tool_call"):
-                return i, events[i]
-
-    elif scenario == "AiTM":
-        # 中间人拦截，sender 为 AiTM_Interceptor
-        for i, e in enumerate(events):
-            if (e.get("sender") == "AiTM_Interceptor" and
-                    e.get("event_type") == "message"):
-                return i, e
-
-    return None, None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 第四步：D3 事件后处理
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_d3_event(event: dict, scenario: str) -> dict:
-    """D3 攻击位置事件：直接透传，不修改任何字段。"""
-    return dict(event)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 第五步：D4 事件后处理
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_d4_event(event: dict) -> dict:
-    """D4 正常 User 消息事件：直接透传，不覆写 audit_decision。"""
-    return dict(event)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 第六步：主流程
-# ─────────────────────────────────────────────────────────────────────────────
 
 def run_cleaner(
     input_path: str = "output_trace_real/audit.jsonl",
-    d3_out: str = "data/d3",
-    d4_out: str = "data/d4",
+    out_dir: str = "data",
 ):
-    """
-    执行 D3/D4 数据清洗
-
-    Args:
-        input_path: D1 生成的 audit.jsonl 路径
-        d3_out: D3 输出目录
-        d4_out: D4 输出目录
-    """
-    # 检查输入文件
     input_file = Path(input_path)
     if not input_file.exists():
         print(f"❌ 输入文件不存在: {input_path}")
         return
 
-    # 加载 traces
-    print(f"📂 加载 traces: {input_path}")
-    traces = load_traces(input_path)
-    print(f"   共 {len(traces)} 条 traces")
+    # 收集器
+    d3_split: dict[str, list[dict]] = {}
+    d4_split: dict[str, list[dict]] = {}
+    d3_merged: list[dict] = []
+    d4_merged: list[dict] = []
+    all_events: list[dict] = []
 
-    # 初始化 buckets
-    d3_buckets: dict[str, list] = {k: [] for k in SCENARIO_TO_D3_FILE}
-    d4_buckets: dict[str, list] = {scene: [] for scene in ALL_D4_SCENES}
+    stats = {"total": 0, "d3": 0, "d4": 0}
 
-    # 统计
-    stats = {
-        "normal_traces": 0,
-        "attack_traces": 0,
-        "d3_events": 0,
-        "d4_events": 0,
-        "skipped_traces": 0,
-    }
+    print(f"📂 读取: {input_path}")
+    with open(input_file, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            all_events.append(event)
+            stats["total"] += 1
 
-    # 处理每条 trace
-    print("\n🔄 处理 traces...")
-    for tid, events in traces.items():
-        # 提取 scenario 和 label
-        scenario, label = enrich_trace(events)
-
-        if label == "normal":
-            # D4：只取 User 消息
-            stats["normal_traces"] += 1
-            user_event = next(
-                (e for e in events if e.get("sender") == "User" and e.get("event_type") == "message"),
-                None
-            )
-            if user_event:
-                d4_buckets[detect_scene(user_event)].append(build_d4_event(user_event))
-
-        elif label == "attack_success":
-            stats["attack_traces"] += 1
-            atk_idx, atk_event = find_attack_event(events, scenario)
-
-            # D3：攻击位置事件
-            if atk_event and scenario in SCENARIO_TO_D3_FILE:
-                d3_buckets[scenario].append(build_d3_event(atk_event, scenario))
-                stats["d3_events"] += 1
-            elif atk_event:
-                print(f"  [WARN] trace={tid[:8]} scenario={scenario} 不属于 D3 类型，攻击事件丢弃")
+            if is_attack_event(event):
+                d3_merged.append(event)
+                cat = get_d3_category(event)
+                d3_split.setdefault(cat, []).append(event)
+                stats["d3"] += 1
             else:
-                print(f"  [WARN] trace={tid[:8]} scenario={scenario} 未找到攻击位置，攻击事件丢弃")
-                stats["skipped_traces"] += 1
+                d4_merged.append(event)
+                cat = get_d4_category(event)
+                d4_split.setdefault(cat, []).append(event)
+                stats["d4"] += 1
 
-            # D4：IPI/AiTM 的 User 消息（攻击不在 User，User 消息是正常的）
-            # PathBypass/CallerImpersonation/SemanticInjection/RouterHijacking/PromptInfection
-            # 的攻击就是 User 消息本身（atk_idx==0），不加入 D4
-            if atk_idx is not None and atk_idx != 0:
-                user_event = next(
-                    (e for e in events if e.get("sender") == "User" and e.get("event_type") == "message"),
-                    None
-                )
-                if user_event:
-                    d4_buckets[detect_scene(user_event)].append(build_d4_event(user_event))
+    out = Path(out_dir)
 
-        else:
-            print(f"  [WARN] trace={tid[:8]} 未知 label={label}")
-
-    stats["d4_events"] = sum(len(v) for v in d4_buckets.values())
-
-    # 写出 D3
-    print(f"\n📤 写出 D3 数据...")
-    Path(d3_out).mkdir(parents=True, exist_ok=True)
-    for scenario, fname in SCENARIO_TO_D3_FILE.items():
-        events = d3_buckets[scenario]
-        output_file = Path(d3_out) / fname
-        with open(output_file, "w", encoding="utf-8") as f:
+    # ── 文件夹一：split ──
+    (out / "split" / "d3").mkdir(parents=True, exist_ok=True)
+    for cat, events in d3_split.items():
+        fpath = out / "split" / "d3" / f"{cat}.jsonl"
+        with open(fpath, "w", encoding="utf-8") as f:
             for e in events:
                 f.write(json.dumps(e, ensure_ascii=False) + "\n")
-        print(f"   {scenario}: {len(events)} 条 → {output_file}")
+        print(f"   split/d3/{cat}.jsonl: {len(events)} 条")
 
-    # 写出 D4
-    print(f"\n📤 写出 D4 数据...")
-    Path(d4_out).mkdir(parents=True, exist_ok=True)
-    for scene in ALL_D4_SCENES:
-        events = d4_buckets[scene]
-        output_file = Path(d4_out) / f"{scene}.jsonl"
-        with open(output_file, "w", encoding="utf-8") as f:
+    (out / "split" / "d4").mkdir(parents=True, exist_ok=True)
+    for cat, events in d4_split.items():
+        fpath = out / "split" / "d4" / f"{cat}.jsonl"
+        with open(fpath, "w", encoding="utf-8") as f:
             for e in events:
                 f.write(json.dumps(e, ensure_ascii=False) + "\n")
-        print(f"   {scene}: {len(events)} 条 → {output_file}")
+        print(f"   split/d4/{cat}.jsonl: {len(events)} 条")
 
-    # 打印统计
+    # ── 文件夹二：merged ──
+    (out / "merged").mkdir(parents=True, exist_ok=True)
+    for name, events in (("d3", d3_merged), ("d4", d4_merged)):
+        fpath = out / "merged" / f"{name}.jsonl"
+        with open(fpath, "w", encoding="utf-8") as f:
+            for e in events:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        print(f"   merged/{name}.jsonl: {len(events)} 条")
+
+    # ── 文件夹三：all ──
+    (out / "all").mkdir(parents=True, exist_ok=True)
+    fpath = out / "all" / "all.jsonl"
+    with open(fpath, "w", encoding="utf-8") as f:
+        for e in all_events:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    print(f"   all/all.jsonl: {len(all_events)} 条")
+
     print(f"\n{'='*50}")
     print("✅ D3/D4 数据清洗完成")
     print(f"{'='*50}")
-    print(f"  输入 traces: {len(traces)} 条")
-    print(f"  - normal traces: {stats['normal_traces']} 条")
-    print(f"  - attack traces: {stats['attack_traces']} 条")
-    print(f"  D3 事件: {stats['d3_events']} 条")
-    print(f"  D4 事件: {stats['d4_events']} 条")
-    print(f"  跳过 traces: {stats['skipped_traces']} 条")
-    print(f"\n  输出目录:")
-    print(f"    D3: {d3_out}")
-    print(f"    D4: {d4_out}")
+    print(f"  总事件: {stats['total']} 条")
+    print(f"  D3（攻击）: {stats['d3']} 条")
+    print(f"  D4（正常）: {stats['d4']} 条")
+    print(f"\n  输出目录: {out_dir}")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CLI 入口
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="D3/D4 数据清洗器 —— 从 D1 audit.jsonl 提取 D3 攻击样本和 D4 正常样本",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用示例：
-  # 使用默认路径
-  python src/d3_d4_cleaner.py
-
-  # 指定输入输出路径
-  python src/d3_d4_cleaner.py --input output_trace_real/audit.jsonl
-
-  # 自定义输出目录
-  python src/d3_d4_cleaner.py --input output_trace_real/audit.jsonl --d3-out data/d3 --d4-out data/d4
-"""
+        description="D3/D4 数据清洗器 —— 按 metadata.intent/scenario/domain 分类，不修改数据",
     )
-
-    parser.add_argument(
-        "--input",
-        type=str,
-        default="output_trace_real/audit.jsonl",
-        help="D1 生成的 audit.jsonl 路径（默认: output_trace_real/audit.jsonl）"
-    )
-    parser.add_argument(
-        "--d3-out",
-        type=str,
-        default="data/d3",
-        help="D3 输出目录（默认: data/d3）"
-    )
-    parser.add_argument(
-        "--d4-out",
-        type=str,
-        default="data/d4",
-        help="D4 输出目录（默认: data/d4）"
-    )
-
+    parser.add_argument("--input", type=str, default="output_trace_real/audit.jsonl",
+                        help="输入 audit.jsonl 路径")
+    parser.add_argument("--out", type=str, default="data",
+                        help="输出根目录（默认: data）")
     args = parser.parse_args()
-    run_cleaner(args.input, args.d3_out, args.d4_out)
+    run_cleaner(args.input, args.out)

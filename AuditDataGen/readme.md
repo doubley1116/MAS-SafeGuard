@@ -72,16 +72,18 @@ MODEL=gpt-4o-mini                    # 可选，默认 gpt-4o-mini
 | `--api-model`  | `env MODEL`    | API 补全/自由生成使用的模型名，默认从 `.env` 的 `MODEL` 读取。 |
 | `--out`        | `output_trace` | 输出目录，最终生成 `audit.jsonl`。                           |
 | `--seed`       | `42`           | 随机种子。                                                   |
-| `--no-shuffle` | `False`        | 不打乱输出顺序。                                             |
+| `--gpus`       | `None`         | 逗号分隔的 GPU 编号，如 `0,1,2,3`。指定多于 1 张时自动启用多卡并行模式；仅指定 1 张时等同于单卡并指定设备；不传则交互询问。 |
 
 ### 使用示例
 
 **使用训练好的 Attacker 生成全部数据**
 
 ```bash
-python src/trace_generator.py  --model-dir output/final_model/attacker --n 3 --n-freeform 50 --out output_trace_real
+python src/trace_generator.py  --model-dir output/final_model/attacker --n 3 --n-freeform 50 --gpus 0 --out output_trace_real
 ```
-
+```bash
+python src/trace_generator.py  --model-dir output/final_model/attacker --n 16 --n-freeform 4200 --gpus 0,1,2,3 --out output_trace_real
+```
 > 同时生成：
 >
 > - 骨架场景（`IPI` / `AiTM` / `benign`）：19 条骨架 × 3 次
@@ -119,6 +121,60 @@ python src/trace_generator.py \
   --n 5 \
   --out output_trace_seed2024
 ```
+
+### 多卡并行生成
+
+通过 `--gpus` 指定多张 GPU，程序会为每张卡启动一个独立子进程，各自加载一份 Attacker 模型，并行完成骨架任务和自由生成任务，结果实时写入同一个 `audit.jsonl`。
+
+#### 架构说明
+
+```text
+Worker 0 (GPU 0) ─┐
+Worker 1 (GPU 1) ─┼── 文件锁 ──► audit.jsonl（边生成边写入）
+Worker 2 (GPU 2) ─┤
+Worker 3 (GPU 3) ─┘
+```
+
+- **骨架任务**按轮询（round-robin）分配给各 worker，保证负载均衡
+- **自由生成任务**按数量均分，余数补给前几个 worker
+- 每个 worker 使用不同的随机种子偏移，保证生成多样性
+- 采用 `multiprocessing.spawn` 启动，CUDA 上下文完全隔离，无冲突
+
+#### 多卡命令示例
+
+4 卡满载生成（推荐）：
+
+```bash
+python src/trace_generator.py \
+  --model-dir output/final_model/attacker \
+  --n 16 --n-freeform 4200 \
+  --gpus 0,1,2,3 \
+  --out output_trace_real
+```
+
+仅使用 2 张卡：
+
+```bash
+python src/trace_generator.py \
+  --model-dir output/final_model/attacker \
+  --n 8 --n-freeform 2000 \
+  --gpus 0,1 \
+  --out output_trace_real
+```
+
+指定单张卡（跳过交互询问）：
+
+```bash
+python src/trace_generator.py \
+  --model-dir output/final_model/attacker \
+  --n 16 --n-freeform 4200 \
+  --gpus 2 \
+  --out output_trace_real
+```
+
+> **注意**：多卡模式下不支持打乱输出顺序（incremental save 决定写入顺序）。如需打乱，在生成完成后对 `audit.jsonl` 做后处理。
+
+---
 
 ## 数据清洗
 
