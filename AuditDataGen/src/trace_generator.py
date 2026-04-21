@@ -347,16 +347,14 @@ def _parse_tool_call(content: str, values: dict) -> tuple[str, dict]:
         return name, {}
 
 
-def _make_metadata(skeleton: dict, event_type: str, step_idx: int) -> dict:
-    meta: dict = {}
+def _make_metadata(skeleton: dict, event_type: str, step_idx: int, domain: str) -> dict:
+    meta: dict = {
+        "scenario": skeleton.get("scenario_type", ""),
+        "domain":   domain,
+    }
     if event_type == "state_transition":
         meta["confidence"] = round(random.uniform(0.82, 0.98), 2)
         meta["reason"]     = f"意图分类结果，step={step_idx}"
-    if step_idx == 0:
-        meta["scenario"]   = skeleton["scenario_type"]
-        meta["skeleton_id"]= skeleton["id"]
-        meta["skeleton_risk_score"] = skeleton.get("risk_score", 0.0)
-        meta["skeleton_label"] = skeleton.get("label", "benign")
     return meta
 
 
@@ -846,7 +844,7 @@ def generate_trace_with_attacker(
             domain=ipi_scenario,
         )
 
-        metadata = _make_metadata(skeleton, event_type, i)
+        metadata = _make_metadata(skeleton, event_type, i, ipi_scenario)
         metadata["audit_decision"] = {
             "label":    label,
             "analysis": "",
