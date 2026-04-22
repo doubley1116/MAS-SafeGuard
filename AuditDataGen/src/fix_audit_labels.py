@@ -40,6 +40,15 @@ for p in (current_dir, project_root):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+# 自动加载 .env（如果存在）
+env_path = os.path.join(project_root, ".env")
+if os.path.exists(env_path):
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(env_path, override=False)
+    except ImportError:
+        pass
+
 from free_form_generator import SYSTEM_TOPOLOGIES, _AUDITOR_PROMPT
 
 
