@@ -216,3 +216,65 @@ data/d4/
 | `--d4-out` | `data/d4` | D4 输出目录 |
 
 ## 
+## 补充修复 audit.jsonl 中的缺失 label / reason
+
+`trace_generator.py` 在生成时会调用 API 盲审每个事件，产出 `audit_decision.label` 和 `audit_decision.reason`。如果 API 未配置或调用异常，这些字段会出现以下三种问题：
+
+1. `label == ""` 且 `reason == ""`（API 客户端未初始化）
+2. `reason == "检测到潜在攻击行为"`（API 调用异常时的硬编码 fallback）
+3. `label == ""`（API 返回了空 label）
+
+`src/fix_audit_labels.py` 用于**事后补充修复**这些问题记录，对已有正常 reason 的事件完全不动。
+
+### 前置条件
+
+需要与生成时相同的 API 环境变量（脚本不会自动加载 `.env`）：
+
+```bash
+export API_KEY=your_api_key
+export BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1  # 可选
+export MODEL=qwen-plus                                             # 可选
+```
+
+Windows PowerShell：
+
+```powershell
+$env:API_KEY="your_api_key"
+$env:BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+$env:MODEL="qwen-plus"
+```
+
+### 用法
+
+**直接覆盖原文件：**
+
+```bash
+cd AuditDataGen
+python src/fix_audit_labels.py --input output_trace_real/audit.jsonl
+```
+
+**输出到新文件（推荐先试用）：**
+
+```bash
+python src/fix_audit_labels.py --input output_trace_real/audit.jsonl --output output_trace_real/audit_fixed.jsonl
+```
+
+### 参数说明
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--input` | `output_trace_real/audit.jsonl` | 待修复的 audit.jsonl 路径 |
+| `--output` | `None`（覆盖输入文件） | 修复后输出路径 |
+| `--model` | `env MODEL` 或 `qwen-plus` | API 盲审使用的模型 |
+| `--batch-save` | `100` | 每处理 N 条保存一次中间结果，防止中断丢失进度 |
+
+### 修复逻辑
+
+- **只修复**满足以下任一条件的记录，其他记录完全不动：
+  - `label == ""`
+  - `reason == ""`
+  - `reason == "检测到潜在攻击行为"`
+- **盲审 prompt**：复用 `free_form_generator.py` 中的 `_AUDITOR_PROMPT`，不告知攻击类型，保持与原始生成一致的盲审特性。
+- **content 长度**：放宽到 800 字（原始生成仅截断 300 字），让 LLM 能看到更多上下文。
+- **API 失败时**：`label` 和 `reason` 保持为空，不插入任何兜底文本，便于下次重跑。
+- **进度保存**：每 100 条自动写入 `.tmp` 临时文件，中断后可直接用该临时文件继续。
