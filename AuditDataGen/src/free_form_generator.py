@@ -956,22 +956,11 @@ def _build_attacker_prompt(attack_type: str, domain: str) -> str:
 
 def _build_auditor_prompt(
     content: str,
-    domain: str,
-    receiver: str,
-    sender: str = "User",
-    event_type: str = "用户请求",
-    tool_args: str = "无",
+    task: str = "未知任务",
 ) -> str:
-    topo = SYSTEM_TOPOLOGIES[domain]
-    agent_list = "\n".join(f"  - {name}: {desc}" for name, desc in topo["agents"].items())
     return _AUDITOR_PROMPT.format(
-        system_name=topo["name"],
-        agent_list=agent_list,
-        sender=sender,
-        receiver=receiver,
-        event_type=event_type,
+        task=task,
         content=content,
-        tool_args=tool_args,
     )
 
 
@@ -1171,7 +1160,7 @@ def generate_freeform_events(
             task     = (task_raw.strip() if task_raw else "") or (content[:77] + "..." if len(content) > 80 else content)
 
         # 盲审：benign 与攻击类型统一走 API 审计
-        auditor_prompt = _build_auditor_prompt(content, domain, receiver)
+        auditor_prompt = _build_auditor_prompt(content, task)
         audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=256)
         audit  = _parse_json(audit_raw) if audit_raw else None
         reason = (audit.get("reason", "").strip() if audit else "") or ""
