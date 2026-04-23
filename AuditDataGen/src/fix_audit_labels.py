@@ -50,7 +50,7 @@ if os.path.exists(env_path):
     except ImportError:
         pass
 
-from free_form_generator import SYSTEM_TOPOLOGIES, _AUDITOR_PROMPT
+from free_form_generator import _AUDITOR_PROMPT
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -91,29 +91,14 @@ def needs_fix(event: dict) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_auditor_prompt_for_event(event: dict) -> str:
-    meta = event.get("metadata", {})
-    domain = meta.get("domain", "financial")
-    sender = event.get("sender", "")
-    receiver = event.get("receiver", "")
     event_type = event.get("event_type", "")
     content = event.get("content") or ""
-    tool_args = event.get("tool_args")
-
-    topo = SYSTEM_TOPOLOGIES.get(domain, SYSTEM_TOPOLOGIES["financial"])
-    agent_list = "\n".join(f"  - {name}: {desc}" for name, desc in topo["agents"].items())
 
     content_snippet = content[:800] if content else ""
-    tool_args_str = json.dumps(tool_args, ensure_ascii=False) if tool_args else "无"
 
     return _AUDITOR_PROMPT.format(
-        system_name=topo["name"],
-        agent_list=agent_list,
-        protected_ops=topo["protected_ops"],
-        sender=sender,
-        receiver=receiver,
-        event_type=event_type,
+        task=event_type,
         content=content_snippet,
-        tool_args=tool_args_str,
     )
 
 

@@ -159,34 +159,20 @@ def _make_api_client():
 
 def _audit_with_api(
     content: Optional[str],
-    tool_args: Optional[dict],
-    sender: str = "",
-    receiver: str = "",
-    event_type: str = "",
-    domain: str = "financial",
+    event_type: str,
 ) -> tuple[str, str]:
     """API 盲审生成 label + reason（不告知攻击类型），使用与 free_form_generator 相同的 prompt。"""
-    from free_form_generator import _AUDITOR_PROMPT, SYSTEM_TOPOLOGIES
+    from free_form_generator import _AUDITOR_PROMPT
 
     client, model = _make_api_client()
     if client is None or model is None:
         return "", ""
 
-    content_snippet = content[:300] if content else ""
-    tool_args_str = json.dumps(tool_args, ensure_ascii=False) if tool_args else "无"
-
-    topo = SYSTEM_TOPOLOGIES.get(domain, SYSTEM_TOPOLOGIES["financial"])
-    agent_list = "\n".join(f"  - {name}: {desc}" for name, desc in topo["agents"].items())
+    content_snippet = content[:800] if content else ""
 
     prompt = _AUDITOR_PROMPT.format(
-        system_name=topo["name"],
-        agent_list=agent_list,
-        protected_ops=topo["protected_ops"],
-        sender=sender,
-        receiver=receiver,
-        event_type=event_type,
+        task=event_type,
         content=content_snippet,
-        tool_args=tool_args_str,
     )
 
     try:
@@ -761,11 +747,7 @@ def generate_trace_with_attacker(
         # 骨架生成走 API 盲审，不审核则不填
         label, reason = _audit_with_api(
             content=display_content,
-            tool_args=tool_args,
-            sender=display_sender,
-            receiver=display_receiver,
             event_type=event_type,
-            domain=ipi_scenario,
         )
 
         metadata = _make_metadata(skeleton, event_type, i, ipi_scenario)
