@@ -622,11 +622,15 @@ def generate_trace_with_attacker(
             for _name in (_s, _r):
                 if _name and _name not in _excluded and not _name.endswith("_tool"):
                     _candidates.add(_name)
-        # 尽量排除截断点前一步的 sender，避免伪装名与上一步 sender 重复
-        if interception_idx > 0:
-            prev_sender = skeleton["flow"][interception_idx - 1][0]
-            if prev_sender in _candidates and len(_candidates) > 1:
-                _candidates.discard(prev_sender)
+        # 排除给 AiTM 发消息的 sender 和 AiTM 发消息给 receiver（拦截点自身的 sender 和 receiver）
+        if interception_idx < len(skeleton["flow"]):
+            aitm_step = skeleton["flow"][interception_idx]
+            aitm_sender = aitm_step[0]       # 给 AiTM 发消息的 sender
+            aitm_receiver = aitm_step[1]     # AiTM 发消息给的 receiver
+            if aitm_sender in _candidates and len(_candidates) > 1:
+                _candidates.discard(aitm_sender)
+            if aitm_receiver in _candidates and len(_candidates) > 1:
+                _candidates.discard(aitm_receiver)
         disguise_name = random.choice(list(_candidates)) if _candidates else ""
     
     for i, step in enumerate(skeleton["flow"]):
