@@ -194,7 +194,7 @@ def _audit_with_api(
             return "dangerous", raw
     except Exception as e:
         print(f"  [WARN] 盲审 API 调用失败: {e}")
-        return "dangerous", "检测到潜在攻击行为"
+        return "", ""
 
 
 def _summarize_task_with_api(user_message: str) -> str:
