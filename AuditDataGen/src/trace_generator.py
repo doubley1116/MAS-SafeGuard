@@ -168,7 +168,7 @@ def _audit_with_api(
     if client is None or model is None:
         return "", ""
 
-    content_snippet = content[:800] if content else ""
+    content_snippet = content[:3000] if content else ""
 
     prompt = _build_auditor_prompt(
         content=content_snippet,
@@ -179,7 +179,7 @@ def _audit_with_api(
         resp = client.chat.completions.create(
             model=model,
             temperature=0.6,
-            max_tokens=300,
+            max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = (resp.choices[0].message.content or "").strip()
@@ -877,7 +877,7 @@ def generate_trace_with_attacker(
         
         # 10. 更新 history_lines
         if event_type == "message" and display_content:
-            snippet = display_content[:300].replace("\n", " ")
+            snippet = display_content.replace("\n", " ")
             history_lines.append(f"[{display_sender}]: {snippet}")
         
         # 11. 新截断：达到拦截点后停止

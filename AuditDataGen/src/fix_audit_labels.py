@@ -94,7 +94,7 @@ def _build_auditor_prompt_for_event(event: dict) -> str:
     event_type = event.get("event_type", "")
     content = event.get("content") or ""
 
-    content_snippet = content[:800] if content else ""
+    content_snippet = content[:3000] if content else ""
 
     return _AUDITOR_PROMPT.format(
         task=event_type,
