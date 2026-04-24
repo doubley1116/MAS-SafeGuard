@@ -116,27 +116,11 @@ def compute_hash(payload: dict) -> str:
 
 
 def _find_interception_step_idx(skeleton: dict) -> int:
-    scenario_type = skeleton.get("scenario_type", "")
+    """找到骨架 flow 中第一个 intent 为 attack 的步骤索引。"""
     flow = skeleton.get("flow", [])
-    
-    if scenario_type not in ("IPI", "AiTM"):
-        return 0
-    
-    if scenario_type == "IPI":
-        # 截断在 tool_result（有害文件内容）本身，不包含被感染 Agent 的后续响应
-        for i, step in enumerate(flow):
-            _, _, _, event_type = step
-            if event_type == "tool_result":
-                return i
-        return len(flow) - 1
-    
-    if scenario_type == "AiTM":
-        for i, step in enumerate(flow):
-            sender = step[0]
-            if sender == "AiTM_Interceptor":
-                return i
-        return len(flow) - 1
-    
+    for i, step in enumerate(flow):
+        if is_attack_position(i, step, skeleton):
+            return i
     return 0
 
 
@@ -715,11 +699,17 @@ def generate_trace_with_attacker(
             for _name in (_s, _r):
                 if _name and _name not in _excluded and not _name.endswith("_tool"):
                     _candidates.add(_name)
-        # 排除给 AiTM 发消息的 sender 和 AiTM 发消息给 receiver（拦截点自身的 sender 和 receiver）
+        # 排除给 AiTM 发消息的 sender (取上一步) 和 AiTM 发消息给的 receiver (取当前步)
         if interception_idx < len(skeleton["flow"]):
             aitm_step = skeleton["flow"][interception_idx]
-            aitm_sender = aitm_step[0]       # 给 AiTM 发消息的 sender
             aitm_receiver = aitm_step[1]     # AiTM 发消息给的 receiver
+            
+            # 获取是谁发消息给 AiTM_Interceptor 的
+            aitm_sender = None
+            if interception_idx > 0:
+                prev_step = skeleton["flow"][interception_idx - 1]
+                aitm_sender = prev_step[0]   # 给 AiTM 发消息的真实 sender
+                
             if aitm_sender in _candidates and len(_candidates) > 1:
                 _candidates.discard(aitm_sender)
             if aitm_receiver in _candidates and len(_candidates) > 1:
@@ -730,6 +720,7 @@ def generate_trace_with_attacker(
         sender, receiver, content_tpl, event_type = step
         
         # 统一替换 AiTM_Interceptor 为伪装名（输出数据脱敏，骨架保留用于检测）
+        # sender 和 receiver 分别替换为 disguise_name，骨架保留 AiTM_Interceptor 用于检测
         display_sender = disguise_name if sender == "AiTM_Interceptor" else sender
         display_receiver = disguise_name if receiver == "AiTM_Interceptor" else receiver
 
@@ -758,6 +749,15 @@ def generate_trace_with_attacker(
                     domain=ipi_scenario,
                     attack_style=attack_style,
                 )
+                gen_kwargs = {"max_new_tokens": 2048, "repetition_penalty": 1.15}
+                filled_content = attacker_generate_fn(prompt, scenario_type, **gen_kwargs)
+                # IPI 后处理：截断免责声明和自我暴露尾注
+                if filled_content:
+                    from free_form_generator import _strip_freeform_exposure
+                    filled_content = _strip_freeform_exposure(filled_content.strip())
+                # 长度兜底：IPI 文件不能太短
+                if not filled_content or len(filled_content.strip()) < 100:
+                    filled_content = actual_content_tpl
             else:
                 # AiTM：随机选意图，伪装名已在循环外统一确定
                 aitm_intent = random.choice(_AITM_INTENTS)
@@ -767,21 +767,7 @@ def generate_trace_with_attacker(
                     aitm_intent=aitm_intent,
                     disguise_name=disguise_name,
                 )
-            
-            # IPI 文档需要足够长才能嵌入恶意指令；repetition_penalty 抑制重复循环
-            gen_kwargs = {"max_new_tokens": 2048, "repetition_penalty": 1.15} if scenario_type == "IPI" else {}
-            filled_content = attacker_generate_fn(prompt, scenario_type, **gen_kwargs)
-
-            # IPI 后处理：截断免责声明和自我暴露尾注
-            if scenario_type == "IPI" and filled_content:
-                from free_form_generator import _strip_freeform_exposure
-                filled_content = _strip_freeform_exposure(filled_content.strip())
-
-            # 长度兜底：IPI 文件不能太短
-            if scenario_type == "IPI":
-                if not filled_content or len(filled_content.strip()) < 100:
-                    filled_content = actual_content_tpl
-            else:
+                filled_content = attacker_generate_fn(prompt, scenario_type)
                 if not filled_content or len(filled_content.strip()) < 5:
                     filled_content = actual_content_tpl  # 兜底
         else:

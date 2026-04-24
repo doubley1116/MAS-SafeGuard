@@ -89,12 +89,12 @@ python src/trace_generator.py  --model-dir output/final_model/attacker --n 16 --
 > - 骨架场景（`IPI` / `AiTM` / `benign`）：19 条骨架 × 3 次
 > - 自由生成场景：50 条单条攻击事件
 
-**只生成骨架中的 IPI 和 AiTM**
+**只生成骨架中的 IPI **
 
 ```bash
 python src/trace_generator.py \
   --model-dir output/final_model/attacker \
-  --scenario IPI,AiTM \
+  --scenario IPI \
   --n 5 \
   --n-freeform 0 \
   --out output_trace_skeleton
