@@ -1007,7 +1007,6 @@ def generate_dataset(
     random.seed(seed)
     os.makedirs(output_dir, exist_ok=True)
     audit_path = os.path.join(output_dir, "audit.jsonl")
-    open(audit_path, "w", encoding="utf-8").close()
 
     supported = {"IPI", "AiTM"}
     types = supported & set(scenario_filter) if scenario_filter else supported
@@ -1130,12 +1129,10 @@ def _worker_generate_freeform(
 
     audit_path = os.path.join(output_dir, "audit.jsonl")
 
-    def _append(lines: list[str]) -> None:
-        if not lines:
-            return
+    def _append_single(event: dict) -> None:
         with write_lock:
             with open(audit_path, "a", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     device = f"cuda:{gpu_id}"
     attacker = load_attacker_model(model_dir, device=device)
@@ -1165,10 +1162,9 @@ def _worker_generate_freeform(
         n=n,
         seed=seed + worker_id * 997,
         attacker_fn=attacker.generate,
+        on_event=_append_single,  # 2. 传入单条加锁回调
     )
 
-    lines = [json.dumps(e, ensure_ascii=False) for e in events]
-    _append(lines)
     print(f"  [GPU{gpu_id}] 自由生成完成: {len(events)} 条")
 
 
@@ -1193,7 +1189,6 @@ def generate_dataset_parallel(
 
     os.makedirs(output_dir, exist_ok=True)
     audit_path = os.path.join(output_dir, "audit.jsonl")
-    open(audit_path, "w", encoding="utf-8").close()
 
     api_key  = os.getenv("API_KEY")
     base_url = os.getenv("BASE_URL")
@@ -1401,16 +1396,21 @@ if __name__ == "__main__":
                     except Exception as e:
                         print(f"⚠ API 客户端创建失败: {e}")
 
+                    # 1. 定义单条写入的回调函数
+                    def _write_single_event(e):
+                        with open(audit_path, "a", encoding="utf-8") as f:
+                            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+
                     ff_events = generate_freeform_events(
                         client=ff_client,
                         model=api_model,
                         n=args.n_freeform,
                         seed=args.seed + 999,
                         attacker_fn=attacker.generate,
+                        on_event=_write_single_event,  # 2. 传入回调，实现边生成边写
                     )
-                    with open(audit_path, "a", encoding="utf-8") as f:
-                        for e in ff_events:
-                            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+                    
+                    # 3. 删除原来的批量写入代码，直接累加数量
                     audit_count += len(ff_events)
                     print(f"✅ 自由生成完成: {len(ff_events)} 条 → 追加到 {audit_path}")
             except Exception as e:
