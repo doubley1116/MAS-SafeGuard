@@ -999,6 +999,7 @@ def generate_dataset(
     api_client,
     n_per_skeleton: int = 3,
     scenario_filter: Optional[list] = None,
+    skeleton_id_filter: Optional[list] = None,
     output_dir: str = "output_trace",
     api_model: str = "gpt-4o-mini",
     seed: int = 42,
@@ -1011,6 +1012,9 @@ def generate_dataset(
     supported = {"IPI", "AiTM"}
     types = supported & set(scenario_filter) if scenario_filter else supported
     skeletons = [sk for sk in SKELETONS if sk.get("scenario_type") in types]
+    if skeleton_id_filter:
+        skeletons = [sk for sk in skeletons if sk.get("id") in skeleton_id_filter]
+        print(f"🦴 骨架 ID 过滤: {skeleton_id_filter}")
 
     total_events = 0
     print(f"▶ 骨架生成：{len(skeletons)} 条骨架 × {n_per_skeleton} 次")
@@ -1171,6 +1175,7 @@ def _worker_generate_freeform(
 def generate_dataset_parallel(
     n_per_skeleton: int = 3,
     scenario_filter: Optional[list] = None,
+    skeleton_id_filter: Optional[list] = None,
     output_dir: str = "output_trace",
     api_model: str = "gpt-4o-mini",
     seed: int = 42,
@@ -1196,6 +1201,9 @@ def generate_dataset_parallel(
     supported = {"IPI", "AiTM"}
     types = supported & set(scenario_filter) if scenario_filter else supported
     skeletons = [sk for sk in SKELETONS if sk.get("scenario_type") in types]
+    if skeleton_id_filter:
+        skeletons = [sk for sk in skeletons if sk.get("id") in skeleton_id_filter]
+        print(f"🦴 骨架 ID 过滤: {skeleton_id_filter}")
 
     all_tasks = [(sk, idx) for sk in skeletons for idx in range(n_per_skeleton)]
     n_gpus = len(gpus)
@@ -1269,6 +1277,8 @@ if __name__ == "__main__":
                         help="逗号分隔的 GPU 编号，如 0,1,2,3（多卡并行；不指定则交互选卡）")
     parser.add_argument("--n-freeform", type=int, default=0, dest="n_freeform",
                         help="自由生成条数（调用 free_form_generator，默认 0 不生成）")
+    parser.add_argument("--skeleton-id", type=str, default=None, dest="skeleton_id",
+                        help="逗号分隔的骨架 ID，如 IPI-001,AITM-002,HC-IPI-001（默认全部）")
 
     args = parser.parse_args()
 
@@ -1291,6 +1301,11 @@ if __name__ == "__main__":
         scenario_filter = [s.strip() for s in args.scenario.split(",")]
         print(f"🎯 场景过滤: {scenario_filter}")
 
+    skeleton_id_filter = None
+    if args.skeleton_id and args.skeleton_id.strip().lower() != "all":
+        skeleton_id_filter = [s.strip() for s in args.skeleton_id.split(",")]
+        print(f"🦴 骨架 ID 过滤: {skeleton_id_filter}")
+
     # 3. 解析 GPU 列表
     gpus = None
     if args.gpus:
@@ -1304,6 +1319,7 @@ if __name__ == "__main__":
         audit_count = generate_dataset_parallel(
             n_per_skeleton=args.n,
             scenario_filter=scenario_filter,
+            skeleton_id_filter=skeleton_id_filter,
             output_dir=args.out,
             api_model=api_model,
             seed=args.seed,
@@ -1335,6 +1351,7 @@ if __name__ == "__main__":
             api_client=api_client,
             n_per_skeleton=args.n,
             scenario_filter=scenario_filter,
+            skeleton_id_filter=skeleton_id_filter,
             output_dir=args.out,
             api_model=api_model,
             seed=args.seed,

@@ -82,7 +82,7 @@ MODEL=gpt-4o-mini                    # 可选，默认 gpt-4o-mini
 python src/trace_generator.py  --model-dir output/final_model/attacker --n 3 --n-freeform 50 --gpus 0 --out output_trace_real
 ```
 ```bash
-python src/trace_generator.py  --model-dir output/final_model/attacker --n 24 --n-freeform 3000 --gpus 0,1,2,3 --out output_trace_real
+python src/trace_generator.py  --model-dir output/final_model/attacker --n 12 --n-freeform 1500 --gpus 0,1,2,3 --out output_trace_real
 ```
 > 同时生成：
 >
