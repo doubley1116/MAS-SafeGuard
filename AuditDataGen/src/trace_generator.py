@@ -1126,6 +1126,8 @@ def _worker_generate_freeform(
     seed: int,
     output_dir: str,
     write_lock,
+    attack_type_filter: Optional[list] = None,
+    domain_filter: Optional[list] = None,
 ) -> None:
     """在单个 GPU 上运行自由生成 worker。"""
     import random as _random
@@ -1164,6 +1166,8 @@ def _worker_generate_freeform(
         client=api_client,
         model=api_model,
         n=n,
+        attack_type_filter=attack_type_filter,
+        domain_filter=domain_filter,
         seed=seed + worker_id * 997,
         attacker_fn=attacker.generate,
         on_event=_append_single,  # 2. 传入单条加锁回调
@@ -1279,6 +1283,10 @@ if __name__ == "__main__":
                         help="自由生成条数（调用 free_form_generator，默认 0 不生成）")
     parser.add_argument("--skeleton-id", type=str, default=None, dest="skeleton_id",
                         help="逗号分隔的骨架 ID，如 IPI-001,AITM-002,HC-IPI-001（默认全部）")
+    parser.add_argument("--freeform-scenario", type=str, default=None, dest="freeform_scenario",
+                        help="自由生成场景过滤：PathBypass,CallerImpersonation,SemanticInjection,RouterHijacking,PromptInfection,benign（默认全部）")
+    parser.add_argument("--domain", type=str, default=None, dest="domain",
+                        help="逗号分隔的领域过滤，如 financial,healthcare,ecommerce（仅对自由生生效）")
 
     args = parser.parse_args()
 
@@ -1305,6 +1313,16 @@ if __name__ == "__main__":
     if args.skeleton_id and args.skeleton_id.strip().lower() != "all":
         skeleton_id_filter = [s.strip() for s in args.skeleton_id.split(",")]
         print(f"🦴 骨架 ID 过滤: {skeleton_id_filter}")
+
+    freeform_scenario_filter = None
+    if args.freeform_scenario and args.freeform_scenario.strip().lower() != "all":
+        freeform_scenario_filter = [s.strip() for s in args.freeform_scenario.split(",")]
+        print(f"🎯 自由生成场景过滤: {freeform_scenario_filter}")
+
+    domain_filter = None
+    if args.domain and args.domain.strip().lower() != "all":
+        domain_filter = [s.strip() for s in args.domain.split(",")]
+        print(f"🌍 领域过滤: {domain_filter}")
 
     # 3. 解析 GPU 列表
     gpus = None
@@ -1389,7 +1407,8 @@ if __name__ == "__main__":
                         p = mp.Process(
                             target=_worker_generate_freeform,
                             args=(i, gpu_id, chunks[i], args.model_dir, api_key, base_url,
-                                  api_model, args.seed, args.out, write_lock),
+                                  api_model, args.seed, args.out, write_lock,
+                                  freeform_scenario_filter, domain_filter),
                         )
                         processes.append(p)
                         p.start()
@@ -1422,6 +1441,8 @@ if __name__ == "__main__":
                         client=ff_client,
                         model=api_model,
                         n=args.n_freeform,
+                        attack_type_filter=freeform_scenario_filter,
+                        domain_filter=domain_filter,
                         seed=args.seed + 999,
                         attacker_fn=attacker.generate,
                         on_event=_write_single_event,  # 2. 传入回调，实现边生成边写
