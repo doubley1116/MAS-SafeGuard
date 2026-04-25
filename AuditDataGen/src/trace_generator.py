@@ -990,8 +990,12 @@ def load_attacker_model(model_dir: Optional[str] = None, device: Optional[str] =
     else:
         print("💡 未指定模型目录且默认路径不存在，使用 MockAttackerModel")
 
-    from mock_models import MockAttackerModel
-    return MockAttackerModel()
+    raise RuntimeError(
+        f"Attacker 模型加载失败。请检查:\n"
+        f"  1. --model-dir 路径是否正确: {model_dir}\n"
+        f"  2. 默认路径是否存在: {default_model_dir}\n"
+        f"  3. HFAttackerModel 依赖是否安装"
+    )
 
 
 def generate_dataset(

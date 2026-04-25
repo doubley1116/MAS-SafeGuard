@@ -24,6 +24,7 @@ import random
 import datetime
 import argparse
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ── 路径设置 ──────────────────────────────────────────────────────────────────
 
@@ -1086,6 +1087,52 @@ def _assemble_event(
     }
 
 
+def _generate_one_event(
+    api_key: str,
+    base_url: str | None,
+    model: str,
+    attack_type: str,
+    domain: str,
+    receiver: str,
+    prompt: str,
+    is_benign: bool,
+    attacker_fn=None,
+) -> dict | None:
+    """独立线程生成单条事件（每个调用创建独立 OpenAI client）。"""
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return None
+
+    client = OpenAI(api_key=api_key, base_url=base_url if base_url else None)
+
+    if is_benign:
+        content = _call_text(client, model, prompt, temperature=0.7, max_tokens=800)
+        if not content or len(content.strip()) < 30:
+            return None
+        content = content.strip()
+        task_raw = _call_text(client, model, _build_task_prompt(content), temperature=0.1, max_tokens=100)
+        task = (task_raw.strip() if task_raw else "") or content[:77] + "..."
+    else:
+        if attacker_fn is None:
+            print(f"[ERROR] 攻击场景 '{attack_type}' 需要本地 attacker 模型，当前未加载")
+            sys.exit(1)
+        content = attacker_fn(prompt, attack_type)
+        if not content or len(content.strip()) < 50:
+            return None
+        content = _strip_freeform_exposure(content.strip())
+        task_raw = _call_text(client, model, _build_task_prompt(content), temperature=0.1, max_tokens=100)
+        task = (task_raw.strip() if task_raw else "") or (content[:77] + "..." if len(content) > 80 else content)
+
+    auditor_prompt = _build_auditor_prompt(content, task)
+    audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=256)
+    audit = _parse_json(audit_raw) if audit_raw else None
+    reason = (audit.get("reason", "").strip() if audit else "") or ""
+    label = (audit.get("label", "").strip() if audit else "") or ""
+
+    return _assemble_event(attack_type, domain, receiver, content, task, reason, label)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # § 6  批量生成
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1099,19 +1146,26 @@ def generate_freeform_events(
     seed: int = 42,
     attacker_fn=None,
     on_event=None,
+    max_workers: int = 1,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> list[dict]:
     """
     批量生成无骨架攻击记录，返回事件字典列表（不写文件）。
 
     Args:
-        client:              OpenAI 兼容客户端（用于 auditor step 及 benign）
+        client:              OpenAI 兼容客户端（单线程或含 attacker_fn 时使用）
         model:               模型名称
         n:                   总生成条数
         attack_type_filter:  只生成指定攻击类型，None = 全部
         domain_filter:       只生成指定领域，None = 全部
         seed:                随机种子
         attacker_fn:         若提供，用于生成攻击 content（签名同 HFAttacker.generate）；
-                             否则退回 API 模型
+                             此时强制单线程，因为本地模型非线程安全
+        on_event:            每生成一条记录后的回调函数
+        max_workers:         并发线程数（默认 1）；>1 时仅在纯 API 模式（无 attacker_fn）下生效
+        api_key:             API 密钥（多线程模式下每个线程独立创建 client）
+        base_url:            API 基础 URL（多线程模式下使用）
 
     Returns:
         事件字典列表
@@ -1130,62 +1184,139 @@ def generate_freeform_events(
         print("[ERROR] 没有合法的领域")
         return []
 
-    events   = []
-    success  = 0
-    attempt  = 0
+    # 攻击场景必须有本地 attacker 模型
+    non_benign_types = [at for at in attack_types if at != "benign"]
+    if non_benign_types and attacker_fn is None:
+        print(f"[ERROR] 攻击场景 {non_benign_types} 需要本地 attacker 模型，当前未加载")
+        sys.exit(1)
+
+    # 多线程仅限纯 benign 且不使用本地模型的场景
+    use_multithread = (
+        max_workers > 1
+        and attacker_fn is None
+        and len(attack_types) == 1
+        and attack_types[0] == "benign"
+    )
+
+    # ── 单线程路径（含本地模型、显式单线程、或包含攻击类型）─────────────────────────
+    if not use_multithread:
+        events   = []
+        success  = 0
+        attempt  = 0
+        max_attempts = n * 3
+
+        print(f"▶ 自由生成，目标 {n} 条 | 攻击类型: {attack_types} | 领域: {domains}")
+
+        while success < n and attempt < max_attempts:
+            attempt += 1
+
+            attack_type = random.choice(attack_types)
+            domain      = random.choice(domains)
+            cfg         = ATTACK_CONFIGS[attack_type]
+            receiver    = random.choice(cfg["receivers"][domain])
+
+            if attack_type == "benign":
+                prompt  = _build_benign_prompt(domain, receiver)
+                content = _call_text(client, model, prompt, temperature=0.7, max_tokens=800)
+                if not content or len(content.strip()) < 30:
+                    print(f"  [attempt {attempt}] content 过短或为空，跳过")
+                    continue
+                content = content.strip()
+                task_raw = _call_text(client, model, _build_task_prompt(content), temperature=0.1, max_tokens=100)
+                task   = (task_raw.strip() if task_raw else "") or content[:77] + "..."
+            else:
+                if attacker_fn is None:
+                    print(f"[ERROR] 攻击场景 '{attack_type}' 需要本地 attacker 模型，当前未加载")
+                    sys.exit(1)
+                attacker_prompt = _build_attacker_prompt(attack_type, domain)
+                content = attacker_fn(attacker_prompt, attack_type)
+                if not content or len(content.strip()) < 50:
+                    print(f"  [attempt {attempt}] content 过短或为空，跳过")
+                    continue
+                content = _strip_freeform_exposure(content.strip())
+                task_raw = _call_text(client, model, _build_task_prompt(content), temperature=0.1, max_tokens=100)
+                task     = (task_raw.strip() if task_raw else "") or (content[:77] + "..." if len(content) > 80 else content)
+
+            # 盲审：benign 与攻击类型统一走 API 审计
+            auditor_prompt = _build_auditor_prompt(content, task)
+            audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=256)
+            audit  = _parse_json(audit_raw) if audit_raw else None
+            reason = (audit.get("reason", "").strip() if audit else "") or ""
+            label  = (audit.get("label",  "").strip() if audit else "") or ""
+
+            event = _assemble_event(attack_type, domain, receiver, content, task, reason, label)
+            events.append(event)
+            if on_event is not None:
+                on_event(event)
+            success += 1
+
+            print(f"  [{success:>3}/{n}] {attack_type}/{domain} → {receiver}")
+
+        if success < n:
+            print(f"  [WARN] 目标 {n} 条，实际成功 {success} 条，共尝试 {attempt} 次")
+
+        return events
+
+    # ── 多线程路径（仅纯 API 调用，无本地模型）─────────────────────────────────
+    if not api_key:
+        print("[ERROR] 多线程模式需要提供 api_key")
+        return []
+
+    events = []
+    success = 0
+    total_attempts = 0
     max_attempts = n * 3
 
-    print(f"▶ 自由生成，目标 {n} 条 | 攻击类型: {attack_types} | 领域: {domains}")
+    print(f"▶ 自由生成（多线程 {max_workers} workers），目标 {n} 条 | 攻击类型: {attack_types} | 领域: {domains}")
 
-    while success < n and attempt < max_attempts:
-        attempt += 1
-
-        attack_type = random.choice(attack_types)
-        domain      = random.choice(domains)
-        cfg         = ATTACK_CONFIGS[attack_type]
-        receiver    = random.choice(cfg["receivers"][domain])
-
-        if attack_type == "benign":
-            prompt  = _build_benign_prompt(domain, receiver)
-            content = _call_text(client, model, prompt, temperature=0.7, max_tokens=800)
-            if not content or len(content.strip()) < 30:
-                print(f"  [attempt {attempt}] content 过短或为空，跳过")
-                continue
-            content = content.strip()
-            task_raw = _call_text(client, model, _build_task_prompt(content), temperature=0.1, max_tokens=100)
-            task   = (task_raw.strip() if task_raw else "") or content[:77] + "..."
-        else:
-            attacker_prompt = _build_attacker_prompt(attack_type, domain)
-            if attacker_fn:
-                content = attacker_fn(attacker_prompt, attack_type)
+    while success < n and total_attempts < max_attempts:
+        # 准备一批任务（预留少量冗余）
+        batch_size = min(n - success + 50, max_attempts - total_attempts)
+        batch = []
+        for _ in range(batch_size):
+            total_attempts += 1
+            attack_type = random.choice(attack_types)
+            domain = random.choice(domains)
+            cfg = ATTACK_CONFIGS[attack_type]
+            receiver = random.choice(cfg["receivers"][domain])
+            if attack_type == "benign":
+                prompt = _build_benign_prompt(domain, receiver)
             else:
-                content = _call_text(client, model, attacker_prompt, temperature=1.0, max_tokens=1024)
-            if not content or len(content.strip()) < 50:
-                print(f"  [attempt {attempt}] content 过短或为空，跳过")
-                continue
-            content = _strip_freeform_exposure(content.strip())
-            task_raw = _call_text(client, model, _build_task_prompt(content), temperature=0.1, max_tokens=100)
-            task     = (task_raw.strip() if task_raw else "") or (content[:77] + "..." if len(content) > 80 else content)
+                prompt = _build_attacker_prompt(attack_type, domain)
+            batch.append((attack_type, domain, receiver, prompt, attack_type == "benign"))
 
-        # 盲审：benign 与攻击类型统一走 API 审计
-        auditor_prompt = _build_auditor_prompt(content, task)
-        audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=256)
-        audit  = _parse_json(audit_raw) if audit_raw else None
-        reason = (audit.get("reason", "").strip() if audit else "") or ""
-        label  = (audit.get("label",  "").strip() if audit else "") or ""
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            for attack_type, domain, receiver, prompt, is_benign in batch:
+                future = executor.submit(
+                    _generate_one_event,
+                    api_key, base_url, model,
+                    attack_type, domain, receiver, prompt, is_benign,
+                )
+                futures.append((future, attack_type, domain, receiver))
 
-        event = _assemble_event(attack_type, domain, receiver, content, task, reason, label)
-        events.append(event)
-        if on_event is not None:
-            on_event(event)
-        success += 1
+            for future, attack_type, domain, receiver in futures:
+                if success >= n:
+                    break
+                try:
+                    event = future.result()
+                except Exception as e:
+                    print(f"  [WARN] 任务异常: {e}")
+                    continue
 
-        print(f"  [{success:>3}/{n}] {attack_type}/{domain} → {receiver}")
+                if event is None:
+                    continue
+
+                events.append(event)
+                if on_event is not None:
+                    on_event(event)
+                success += 1
+                print(f"  [{success:>3}/{n}] {attack_type}/{domain} → {receiver}")
 
     if success < n:
-        print(f"  [WARN] 目标 {n} 条，实际成功 {success} 条，共尝试 {attempt} 次")
+        print(f"  [WARN] 目标 {n} 条，实际成功 {success} 条，共尝试 {total_attempts} 次")
 
-    return events
+    return events[:n]
 
 
 def generate_freeform_dataset(
@@ -1196,15 +1327,35 @@ def generate_freeform_dataset(
     domain_filter: list[str] | None = None,
     output_dir: str = "output_freeform",
     seed: int = 42,
+    max_workers: int = 1,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> int:
     """批量生成并写入文件，返回实际生成条数。供独立运行时使用。"""
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, "audit_freeform.jsonl")
 
-    events = generate_freeform_events(client, model, n, attack_type_filter, domain_filter, seed)
+    # 边生成边写入的回调
+    def _write_event(event: dict) -> None:
+        with open(out_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
+    # 清空文件，准备边写边生成
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(json.dumps(e, ensure_ascii=False) for e in events))
+        pass
+
+    events = generate_freeform_events(
+        client=client,
+        model=model,
+        n=n,
+        attack_type_filter=attack_type_filter,
+        domain_filter=domain_filter,
+        seed=seed,
+        max_workers=max_workers,
+        api_key=api_key,
+        base_url=base_url,
+        on_event=_write_event,
+    )
 
     print(f"✅ 完成: {len(events)} 条 → {out_path}")
     return len(events)
@@ -1242,6 +1393,8 @@ if __name__ == "__main__":
                         help="随机种子（默认 42）")
     parser.add_argument("--api-model",  type=str, default=None,
                         help="API 模型名称（默认从 .env 的 MODEL 读取）")
+    parser.add_argument("--max-workers", type=int, default=1,
+                        help="并发线程数（默认 1，仅纯 API 模式有效）")
 
     args = parser.parse_args()
 
@@ -1284,4 +1437,7 @@ if __name__ == "__main__":
         domain_filter=domain_filter,
         output_dir=args.out,
         seed=args.seed,
+        max_workers=args.max_workers,
+        api_key=api_key,
+        base_url=base_url,
     )

@@ -46,7 +46,7 @@ output/
 | 生成策略           | 覆盖场景                                                     | 说明                                                         |
 | ------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | **骨架多步生成**   | `IPI`、`AiTM`                                                | 基于 `skeletons.py` 中预定义的 80 条骨架，逐 step 生成完整 trace。攻击位置由 Attacker 模型生成，其余位置由 API 补全或模板填充。 |
-| **无骨架自由生成** | `PathBypass`、`CallerImpersonation`、`SemanticInjection`、`RouterHijacking`、`PromptInfection` | 不依赖骨架，直接调用 LLM API 从攻击意图生成单条 User 消息。  |
+| **无骨架自由生成** | `PathBypass`、`CallerImpersonation`、`SemanticInjection`、`RouterHijacking`、`PromptInfection`、`benign` | 攻击类型由本地 Attacker 模型生成单条 User 消息；`benign` 由 API 直接生成。 |
 
 ### 前置环境
 
@@ -64,7 +64,7 @@ MODEL=gpt-4o-mini                    # 可选，默认 gpt-4o-mini
 
 | 参数           | 默认值         | 说明                                                         |
 | -------------- | -------------- | ------------------------------------------------------------ |
-| `--model-dir`  | `None`         | 训练好的 Attacker 模型目录。仅骨架生成（`IPI` / `AiTM`）会使用该模型生成攻击内容；`None` 时回退到 MockAttacker。 |
+| `--model-dir`  | `None`         | 训练好的 Attacker 模型目录。攻击场景（`IPI` / `AiTM` / 自由生成攻击类型）必须使用本地模型生成攻击内容；加载失败时报错终止，不再回退到 Mock。 |
 | `--n`          | `3`            | 每条骨架生成的 trace 数。仅影响 `IPI`、`AiTM`、`benign`。    |
 | `--n-freeform` | `50`           | 自由生成的总条数。仅影响 `PathBypass` 等无骨架攻击类型。     |
 | `--scenario`   | `None`         | 逗号分隔的场景过滤，如 `IPI,AiTM` 或 `PathBypass,benign`。不传则生成全部类型。 |
@@ -278,3 +278,75 @@ python src/fix_audit_labels.py --input output_trace_real/audit.jsonl --output ou
 - **content 长度**：放宽到 800 字（原始生成仅截断 300 字），让 LLM 能看到更多上下文。
 - **API 失败时**：`label` 和 `reason` 保持为空，不插入任何兜底文本，便于下次重跑。
 - **进度保存**：每 100 条自动写入 `.tmp` 临时文件，中断后可直接用该临时文件继续。
+
+---
+
+## 修复 task 字段冗余
+
+`trace_generator.py` 生成的数据中，`User` 事件的 `task` 字段可能出现以下问题：
+
+1. `task` 与 `content` 完全相同（未做概括）
+2. `task` 以 `...` 结尾（被截断）
+3. `task` 为空
+
+`src/fix_audit_task.py` 用于**事后修复**这些冗余的 `task` 字段，调用 LLM API 将长 content 概括为一句话（不超过 80 字），仅描述用户声称要做什么。
+
+### 前置条件
+
+需要配置 API 环境变量（脚本会自动加载 `.env`）：
+
+```bash
+export API_KEY=your_api_key
+export BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1  # 可选
+export MODEL=qwen-plus                                             # 可选
+```
+
+Windows PowerShell：
+
+```powershell
+$env:API_KEY="your_api_key"
+$env:BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+$env:MODEL="qwen-plus"
+```
+
+### 用法
+
+**直接覆盖原文件：**
+
+```bash
+cd AuditDataGen
+python src/fix_audit_task.py --input output_trace_real/audit.jsonl
+```
+
+**输出到新文件（推荐先试用）：**
+
+```bash
+python src/fix_audit_task.py --input output_trace_real/audit.jsonl --output output_trace_real/audit_fixed_task.jsonl
+```
+
+**调整并发数和保存间隔：**
+
+```bash
+python src/fix_audit_task.py --input output_trace_real/audit.jsonl --max-workers 20 --batch-save 50
+```
+
+### 参数说明
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--input` | 必填 | 待修复的 JSONL 路径 |
+| `--output` | `None`（覆盖输入文件） | 修复后输出路径 |
+| `--model` | `env MODEL` 或 `qwen-plus` | API 调用使用的模型 |
+| `--max-workers` | `10` | 并发线程数 |
+| `--batch-save` | `100` | 每修复多少条 Trace 保存一次中间进度 |
+
+### 修复逻辑
+
+- **只修复**满足以下任一条件的 Trace，其他记录完全不动：
+  - `task == ""`
+  - `task` 以 `...` 结尾
+  - `task == content`
+- **概括 prompt**：要求 LLM 用一句话概括消息的核心操作意图，只描述用户声称要做什么，不解释。
+- **多线程并发**：使用 `ThreadPoolExecutor` 并行调用 API，默认 10 线程。
+- **API 失败时**：`task` 保持原样，不插入任何兜底文本，便于下次重跑。
+- **进度保存**：每 `--batch-save` 条自动写入 `.jsonl.tmp` 临时文件，中断后可直接用该临时文件继续。
