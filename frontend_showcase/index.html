@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zero Trust Frontend Showcase</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-theme="apple-nasa-hybrid">
+  <div class="starfield"></div>
+  <div class="cosmic-haze"></div>
+  <div class="nebula nebula-a"></div>
+  <div class="nebula nebula-b"></div>
+  <div class="nebula nebula-c"></div>
+  <div class="galaxy-flow galaxy-flow-a"></div>
+  <div class="galaxy-flow galaxy-flow-b"></div>
+  <div class="dust-stream dust-stream-a"></div>
+  <div class="dust-stream dust-stream-b"></div>
+
+  <div class="page-shell">
+    <header class="site-header reveal">
+      <div class="brand-lockup">
+        <div class="brand-mark">ZT</div>
+        <div>
+          <p class="eyebrow">Zero Trust Mission Console</p>
+          <strong>Local Frontend Showcase</strong>
+        </div>
+      </div>
+
+      <div class="site-header-actions">
+        <span class="status-pill allowed">Local Demo Ready</span>
+        <span class="meta-pill">Apple x NASA Visual Direction</span>
+      </div>
+    </header>
+
+    <header class="hero hero-shell reveal">
+      <div class="hero-copy">
+        <p class="eyebrow">SecurityCore / Workflow Audit / Policy Composer</p>
+        <h1>零信任多智能体前端展示台</h1>
+        <p class="hero-text">
+          用更像产品发布页和任务控制台的方式，把 workflow 拦截、history、策略配置、模型入口和审计日志放进同一个本地可演示界面。
+        </p>
+
+        <div class="hero-actions">
+          <button class="button primary" id="focusBlockedBtn" type="button">定位 Blocked Workflow</button>
+          <button class="button secondary" id="downloadYamlBtnTop" type="button">导出 YAML</button>
+        </div>
+
+        <div class="hero-tags">
+          <span class="tag soft">Workflow Block Labels</span>
+          <span class="tag soft">History Viewer</span>
+          <span class="tag soft">Security Core Switch</span>
+          <span class="tag soft">Local / API Model Entry</span>
+          <span class="tag soft">Audit Logs</span>
+        </div>
+
+        <div class="telemetry-strip">
+          <article class="telemetry-card">
+            <span class="telemetry-label">Mission Focus</span>
+            <strong>Policy + Runtime + Evidence</strong>
+            <p>把配置、运行入口和审计结果放进统一演示链路。</p>
+          </article>
+          <article class="telemetry-card">
+            <span class="telemetry-label">Design Language</span>
+            <strong>Calm Glass + Space Ops</strong>
+            <p>Apple 的克制排版，叠加 NASA 式任务控制台氛围。</p>
+          </article>
+          <article class="telemetry-card">
+            <span class="telemetry-label">Next Hook</span>
+            <strong>Prompt Layer Pending</strong>
+            <p>模型提示词入口先预留，后续直接接入真实推理链路。</p>
+          </article>
+        </div>
+      </div>
+
+      <div class="hero-visual">
+        <div class="hero-orbit">
+          <div class="orbit-ring orbit-ring-a"></div>
+          <div class="orbit-ring orbit-ring-b"></div>
+          <div class="orbit-ring orbit-ring-c"></div>
+          <div class="orbit-core">
+            <span class="orbit-core-kicker">Zero Trust</span>
+            <strong>Mission Control</strong>
+            <p>Observe, verify, route, explain.</p>
+          </div>
+        </div>
+
+        <div class="hero-panel-stack">
+          <article class="hero-panel">
+            <p class="panel-kicker">Stage 01</p>
+            <h3>Input Orchestration</h3>
+            <p>Agent entry, task routing and call path capture.</p>
+          </article>
+          <article class="hero-panel">
+            <p class="panel-kicker">Stage 02</p>
+            <h3>Policy Gate</h3>
+            <p>Rules, semantic review and route hijack checks.</p>
+          </article>
+          <article class="hero-panel accent">
+            <p class="panel-kicker">Stage 03</p>
+            <h3>Evidence Surface</h3>
+            <p>Workflow JSON, history window, YAML and logs for demo.</p>
+          </article>
+        </div>
+      </div>
+    </header>
+
+    <section class="metrics-grid reveal" id="metricsGrid"></section>
+
+    <section class="panel runtime-panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="panel-kicker">Data Source</p>
+          <h2>真实文件系统接入</h2>
+        </div>
+      </div>
+      <div id="sourceRuntimePanel"></div>
+    </section>
+
+    <section class="workspace reveal">
+      <aside class="panel workspace-list">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Workflow Library</p>
+            <h2>审计工作流</h2>
+          </div>
+        </div>
+
+        <div class="toolbar compact">
+          <label class="field">
+            <span>框架</span>
+            <select id="workflowFrameworkFilter">
+              <option value="all">全部</option>
+              <option value="AutoGen">AutoGen</option>
+              <option value="LangGraph">LangGraph</option>
+              <option value="MAS">MAS</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>状态</span>
+            <select id="workflowStatusFilter">
+              <option value="all">全部</option>
+              <option value="blocked">Blocked</option>
+              <option value="review">Review</option>
+              <option value="allowed">Passed</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="workflow-list" id="workflowList"></div>
+      </aside>
+
+      <main class="panel workspace-detail">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Evidence View</p>
+            <h2>Workflow Detail</h2>
+          </div>
+        </div>
+        <div id="workflowDetail"></div>
+      </main>
+
+      <aside class="panel workspace-side">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Security Core</p>
+            <h2>模型入口与运行配置</h2>
+          </div>
+        </div>
+        <div id="securityControl"></div>
+      </aside>
+    </section>
+
+    <section class="builder-grid reveal">
+      <div class="panel builder-panel">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Policy Composer</p>
+            <h2>前端配置转 YAML</h2>
+          </div>
+          <div class="panel-actions">
+            <button class="button tertiary" id="resetConfigBtn" type="button">恢复预设</button>
+            <button class="button tertiary" id="addAgentBtn" type="button">新增 Agent</button>
+            <button class="button tertiary" id="addToolBtn" type="button">新增 Tool</button>
+            <button class="button tertiary" id="addPathBtn" type="button">新增 Path</button>
+          </div>
+        </div>
+
+        <div class="builder-stack">
+          <section class="subpanel">
+            <div class="subpanel-head">
+              <h3>基础开关</h3>
+            </div>
+            <div class="form-grid two-col" id="baseConfigEditor"></div>
+          </section>
+
+          <section class="subpanel">
+            <div class="subpanel-head">
+              <h3>Agent 权限</h3>
+            </div>
+            <div class="entity-grid" id="agentEditor"></div>
+          </section>
+
+          <section class="subpanel">
+            <div class="subpanel-head">
+              <h3>Tool 规则</h3>
+            </div>
+            <div class="entity-grid" id="toolEditor"></div>
+          </section>
+
+          <section class="subpanel">
+            <div class="subpanel-head">
+              <h3>Path 路径</h3>
+            </div>
+            <div class="entity-grid" id="pathEditor"></div>
+          </section>
+        </div>
+      </div>
+
+      <div class="panel yaml-panel">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Generated Output</p>
+            <h2>YAML Preview</h2>
+          </div>
+          <div class="panel-actions">
+            <button class="button tertiary" id="copyYamlBtn" type="button">复制 YAML</button>
+            <button class="button tertiary" id="downloadYamlBtn" type="button">下载文件</button>
+          </div>
+        </div>
+        <p class="yaml-note" id="yamlStatus">
+          输出保留 `agents / tools / paths / thresholds` 兼容字段，并扩展 `security_core / ui / frameworks` 以支持本地展示和后续真实接入。
+        </p>
+        <pre class="yaml-preview" id="yamlPreview"></pre>
+      </div>
+    </section>
+
+    <section class="panel logs-panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="panel-kicker">Audit Stream</p>
+          <h2>审计日志</h2>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <label class="field">
+          <span>Level</span>
+          <select id="logLevelFilter">
+            <option value="all">全部</option>
+            <option value="info">Info</option>
+            <option value="warn">Warn</option>
+            <option value="error">Error</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>框架</span>
+          <select id="logFrameworkFilter">
+            <option value="all">全部</option>
+            <option value="AutoGen">AutoGen</option>
+            <option value="LangGraph">LangGraph</option>
+            <option value="MAS">MAS</option>
+          </select>
+        </label>
+        <label class="field grow">
+          <span>搜索</span>
+          <input id="logSearchInput" type="text" placeholder="输入 trace / tool / risk type">
+        </label>
+      </div>
+
+      <div class="log-stream" id="logStream"></div>
+    </section>
+
+    <section class="panel source-panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="panel-kicker">Repository Mapping</p>
+          <h2>页面设计对应仓库能力</h2>
+        </div>
+      </div>
+
+      <div class="source-grid">
+        <article class="source-card">
+          <h3>SecurityCore</h3>
+          <p>对齐规则拦截、语义审核、模型入口切换和 policy gate 的展示逻辑。</p>
+        </article>
+        <article class="source-card">
+          <h3>AuditEvent / AuditDecision</h3>
+          <p>映射事件时间线、reason、risk score、blocked labels 和 suggested alternative。</p>
+        </article>
+        <article class="source-card">
+          <h3>Workflow JSON</h3>
+          <p>支持读取真实 `audit_logs/workflows/*.json` 并自动监听新日志刷新。</p>
+        </article>
+        <article class="source-card">
+          <h3>Policy YAML</h3>
+          <p>前端配置器继续输出兼容 YAML，并预留 API model prompt 的后续接入位置。</p>
+        </article>
+      </div>
+    </section>
+  </div>
+
+  <dialog class="history-dialog" id="historyDialog">
+    <div class="dialog-head">
+      <div>
+        <p class="panel-kicker">History Viewer</p>
+        <h2 id="historyDialogTitle">History 详情</h2>
+      </div>
+      <form method="dialog">
+        <button class="button tertiary" type="submit">关闭</button>
+      </form>
+    </div>
+    <div class="dialog-body" id="historyDialogBody"></div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
