@@ -158,7 +158,7 @@ def main() -> int:
     parser.add_argument("--output", default=None, help="输出路径（默认覆盖输入文件）")
     parser.add_argument("--model", default=os.getenv("MODEL", "qwen-plus"))
     parser.add_argument("--batch-save", type=int, default=100)
-    parser.add_argument("--max-workers", type=int, default=10, help="并发线程数")
+    parser.add_argument("--max-workers", type=int, default=20, help="并发线程数")
     args = parser.parse_args()
 
     client, env_model = _make_api_client()
