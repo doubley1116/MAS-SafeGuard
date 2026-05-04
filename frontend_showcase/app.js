@@ -70,6 +70,15 @@ function createDefaultState() {
       watchWorkflowCount: 0,
       watchExists: false,
     },
+    demoConsole: {
+      scenarios: [],
+      selectedScenarioId: "autogen_path_bypass",
+      activeJobId: "",
+      job: null,
+      loading: false,
+      error: "",
+      lastMessage: "等待选择演示场景。",
+    },
     activeWorkflowId: "wf-autogen-blocked",
     config: {
       version: "2.1",
@@ -459,11 +468,13 @@ function createDefaultState() {
 let state = hydrateState(loadState());
 let workflowWatchTimer = null;
 let workflowWatchPending = false;
+let demoJobTimer = null;
 normalizeState();
 
 window.addEventListener("DOMContentLoaded", init);
 window.addEventListener("beforeunload", () => {
   clearWorkflowWatcher();
+  clearDemoJobPolling();
 });
 
 async function init() {
@@ -475,6 +486,9 @@ async function init() {
   document.addEventListener("change", handleInput);
   revealSections();
   await bootstrapServerDiscovery();
+  if (state.source.serverAvailable) {
+    await loadDemoScenarios({ silent: true });
+  }
   if (state.source.mode === "filesystem" && state.source.serverAvailable) {
     await loadFilesystemData({ silent: true });
   }
@@ -511,6 +525,15 @@ async function handleClick(event) {
       break;
     case "loadFilesystemBtn":
       await loadFilesystemData();
+      break;
+    case "runDemoBtn":
+      await runSelectedDemo();
+      break;
+    case "refreshDemoBtn":
+      await loadDemoScenarios();
+      break;
+    case "loadDemoWorkflowBtn":
+      await loadFilesystemData({ preserveActiveWorkflowId: true });
       break;
     case "focusBlockedBtn":
       focusFirstBlockedWorkflow();
@@ -549,6 +572,11 @@ async function handleClick(event) {
         removeAt(state.config.paths, Number(target.dataset.removePath));
       } else if (target.dataset.openHistory) {
         openHistoryDialog(target.dataset.openHistory, target.dataset.eventId || "");
+        return;
+      } else if (target.dataset.demoScenario) {
+        state.demoConsole.selectedScenarioId = target.dataset.demoScenario;
+        renderAll();
+        persistState();
         return;
       } else {
         return;
@@ -605,6 +633,8 @@ async function handleInput(event) {
     state.source.autoRefreshIntervalMs = Number(target.value) || 3000;
     await configureWorkflowWatcher({ immediate: state.source.mode === "filesystem" && state.source.autoRefreshEnabled });
     return;
+  } else if (target.id === "demoScenarioSelect") {
+    state.demoConsole.selectedScenarioId = target.value;
   } else if (target.dataset.bind) {
     applyBinding(target);
   } else {
@@ -637,6 +667,7 @@ function renderAll() {
   applyVisualTheme();
   renderMetrics();
   renderSourcePanel();
+  renderDemoConsole();
   renderWorkflowList();
   renderWorkflowDetail();
   renderSecurityControl();
@@ -652,7 +683,6 @@ function applyVisualTheme() {
 
 function setupGlassPointerEffects() {
   document.addEventListener("pointermove", handleGlassPointerMove, { passive: true });
-  document.addEventListener("pointerdown", handleGlassPointerMove, { passive: true });
   document.addEventListener("pointerleave", clearActiveGlassEffect);
 }
 
@@ -666,6 +696,11 @@ function handleGlassPointerMove(event) {
   const pointerY = (event.clientY / Math.max(window.innerHeight, 1)) * 100;
   document.body.style.setProperty("--scene-pointer-x", `${pointerX.toFixed(2)}%`);
   document.body.style.setProperty("--scene-pointer-y", `${pointerY.toFixed(2)}%`);
+
+  if (event.target.closest("button, input, select, textarea, label, a, form")) {
+    clearActiveGlassEffect();
+    return;
+  }
 
   const target = event.target.closest(GLASS_REACTIVE_SELECTOR);
   if (!target) {
@@ -682,14 +717,12 @@ function handleGlassPointerMove(event) {
   const rect = target.getBoundingClientRect();
   const relativeX = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
   const relativeY = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
-  const tiltX = ((relativeY / Math.max(rect.height, 1)) - 0.5) * -5;
-  const tiltY = ((relativeX / Math.max(rect.width, 1)) - 0.5) * 6;
 
   target.style.setProperty("--glass-x", `${relativeX.toFixed(1)}px`);
   target.style.setProperty("--glass-y", `${relativeY.toFixed(1)}px`);
   target.style.setProperty("--glass-opacity", "1");
-  target.style.setProperty("--glass-tilt-x", `${tiltX.toFixed(2)}deg`);
-  target.style.setProperty("--glass-tilt-y", `${tiltY.toFixed(2)}deg`);
+  target.style.setProperty("--glass-tilt-x", "0deg");
+  target.style.setProperty("--glass-tilt-y", "0deg");
   target.classList.add("is-glass-active");
 }
 
@@ -815,6 +848,98 @@ function renderSourcePanel() {
           <p class="detail-paragraph"><strong>Workflow Dir：</strong>${escapeHtml(source.selectedWorkflowDir || "未发现目录")}</p>
         </div>
       </div>
+    </div>
+  `;
+}
+
+function renderDemoConsole() {
+  const container = document.getElementById("demoConsole");
+  if (!container) {
+    return;
+  }
+
+  const demo = state.demoConsole;
+  const scenarios = Array.isArray(demo.scenarios) ? demo.scenarios : [];
+  const selectedScenario = scenarios.find((item) => item.id === demo.selectedScenarioId) || scenarios[0] || null;
+  const job = demo.job;
+  const isRunning = job && job.status === "running";
+  const terminalLines = job && Array.isArray(job.lines) ? job.lines : [];
+  const canRun = state.source.serverAvailable && selectedScenario && !demo.loading && !isRunning;
+
+  container.innerHTML = `
+    <div class="demo-console-grid">
+      <div class="runtime-stack">
+        <div class="status-line">
+          <span class="status-pill ${isRunning ? "review" : job && job.status === "succeeded" ? "allowed" : "review"}">
+            ${escapeHtml(isRunning ? "Running" : job && job.status === "succeeded" ? "Ready" : "Idle")}
+          </span>
+          <span class="meta-pill">${escapeHtml(state.source.serverAvailable ? "Local runner connected" : "Runner offline")}</span>
+          ${job ? `<span class="meta-pill">Job: ${escapeHtml(job.id)}</span>` : ""}
+        </div>
+
+        <div class="toolbar">
+          <label class="field grow">
+            <span>演示场景</span>
+            <select id="demoScenarioSelect" ${!scenarios.length || isRunning ? "disabled" : ""}>
+              ${scenarios.length
+                ? scenarios.map((scenario) => `<option value="${escapeAttribute(scenario.id)}" ${scenario.id === demo.selectedScenarioId ? "selected" : ""}>${escapeHtml(scenario.title)}</option>`).join("")
+                : `<option value="">等待本地服务</option>`}
+            </select>
+          </label>
+        </div>
+
+        <div class="demo-scenario-list">
+          ${scenarios.length
+            ? scenarios.map((scenario) => `
+                <button class="demo-scenario-card ${scenario.id === demo.selectedScenarioId ? "is-active" : ""}" type="button" data-demo-scenario="${escapeAttribute(scenario.id)}" ${isRunning ? "disabled" : ""}>
+                  <span class="status-pill ${escapeAttribute(scenario.tone || "review")}">${escapeHtml(scenario.framework || "Demo")}</span>
+                  <strong>${escapeHtml(scenario.title)}</strong>
+                  <p>${escapeHtml(scenario.summary || "")}</p>
+                </button>
+              `).join("")
+            : `<div class="empty-state">本地服务启动后会显示可运行的演示场景。</div>`}
+        </div>
+
+        <div class="panel-actions">
+          <button class="button primary" id="runDemoBtn" type="button" ${canRun ? "" : "disabled"}>${isRunning ? "运行中..." : "运行演示"}</button>
+          <button class="button tertiary" id="refreshDemoBtn" type="button" ${demo.loading ? "disabled" : ""}>刷新场景</button>
+          <button class="button tertiary" id="loadDemoWorkflowBtn" type="button" ${job && job.workflowPath ? "" : "disabled"}>载入生成结果</button>
+        </div>
+
+        <p class="runtime-note">${escapeHtml(demo.error || demo.lastMessage || "等待选择演示场景。")}</p>
+      </div>
+
+      <div class="terminal-shell">
+        <div class="terminal-meta">
+          <div class="detail-meta">
+            <span class="meta-pill">${escapeHtml(selectedScenario ? selectedScenario.commandLabel : "zero-trust demo runner")}</span>
+            ${job && job.startedAt ? `<span class="meta-pill">Started: ${escapeHtml(job.startedAt)}</span>` : ""}
+            ${job && job.finishedAt ? `<span class="meta-pill">Finished: ${escapeHtml(job.finishedAt)}</span>` : ""}
+            ${job && job.workflowPath ? `<span class="meta-pill">Workflow JSON generated</span>` : ""}
+          </div>
+        </div>
+        <div class="terminal-output" id="demoTerminalOutput">
+          ${terminalLines.length
+            ? terminalLines.map(renderTerminalLine).join("")
+            : `<div class="terminal-placeholder">zero-trust@local:~$ 选择场景后点击“运行演示”，这里会显示项目运行输出。</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+
+  const terminal = document.getElementById("demoTerminalOutput");
+  if (terminal) {
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+}
+
+function renderTerminalLine(line) {
+  const stream = line.stream || "stdout";
+  return `
+    <div class="terminal-line ${stream === "stderr" ? "is-stderr" : ""}">
+      <span class="terminal-time">${escapeHtml(line.time || "--:--:--")}</span>
+      <span class="terminal-stream">${escapeHtml(stream)}</span>
+      <span>${escapeHtml(line.text || "")}</span>
     </div>
   `;
 }
@@ -1571,6 +1696,140 @@ async function bootstrapServerDiscovery() {
   }
 }
 
+async function loadDemoScenarios(options = {}) {
+  const { silent = false } = options;
+  state.demoConsole.loading = true;
+  renderAll();
+
+  try {
+    const payload = await fetchJson(`${getApiBase()}/api/demo/scenarios`);
+    const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : [];
+    state.demoConsole.scenarios = scenarios;
+    if (!scenarios.find((scenario) => scenario.id === state.demoConsole.selectedScenarioId)) {
+      state.demoConsole.selectedScenarioId = scenarios[0] ? scenarios[0].id : "";
+    }
+    state.demoConsole.error = "";
+    state.demoConsole.lastMessage = scenarios.length
+      ? "演示运行器已就绪。"
+      : "本地服务未返回演示场景。";
+  } catch (error) {
+    state.demoConsole.scenarios = [];
+    state.demoConsole.error = silent ? "" : `演示运行器不可用：${error.message}`;
+    state.demoConsole.lastMessage = "当前服务尚未提供页面运行接口。";
+  } finally {
+    state.demoConsole.loading = false;
+    normalizeState();
+    renderAll();
+    persistState();
+  }
+}
+
+async function runSelectedDemo() {
+  if (!state.source.serverAvailable) {
+    await bootstrapServerDiscovery();
+  }
+
+  if (!state.demoConsole.scenarios.length) {
+    await loadDemoScenarios();
+  }
+
+  const selectedScenarioId = state.demoConsole.selectedScenarioId;
+  if (!selectedScenarioId) {
+    state.demoConsole.error = "请先选择一个演示场景。";
+    renderAll();
+    persistState();
+    return;
+  }
+
+  state.demoConsole.loading = true;
+  state.demoConsole.error = "";
+  renderAll();
+
+  try {
+    const payload = await fetchJson(`${getApiBase()}/api/demo/run`, {
+      method: "POST",
+      body: JSON.stringify({ scenarioId: selectedScenarioId }),
+    });
+    state.demoConsole.job = payload.job || null;
+    state.demoConsole.activeJobId = state.demoConsole.job ? state.demoConsole.job.id : "";
+    state.demoConsole.lastMessage = "演示正在运行，终端输出会自动刷新。";
+    startDemoJobPolling();
+  } catch (error) {
+    state.demoConsole.error = `运行失败：${error.message}`;
+  } finally {
+    state.demoConsole.loading = false;
+    renderAll();
+    persistState();
+  }
+}
+
+function startDemoJobPolling() {
+  clearDemoJobPolling();
+  if (!state.demoConsole.activeJobId) {
+    return;
+  }
+
+  demoJobTimer = window.setInterval(() => {
+    void pollDemoJob();
+  }, 700);
+  void pollDemoJob();
+}
+
+function clearDemoJobPolling() {
+  if (demoJobTimer !== null) {
+    window.clearInterval(demoJobTimer);
+    demoJobTimer = null;
+  }
+}
+
+async function pollDemoJob() {
+  const jobId = state.demoConsole.activeJobId;
+  if (!jobId) {
+    clearDemoJobPolling();
+    return;
+  }
+
+  try {
+    const payload = await fetchJson(`${getApiBase()}/api/demo/jobs/${encodeURIComponent(jobId)}`);
+    const job = payload.job || null;
+    state.demoConsole.job = job;
+
+    if (!job || job.status === "running") {
+      renderAll();
+      persistState();
+      return;
+    }
+
+    clearDemoJobPolling();
+    state.demoConsole.lastMessage = job.status === "succeeded"
+      ? "演示完成，已生成 workflow JSON 并刷新证据视图。"
+      : "演示运行结束，请查看终端输出。";
+
+    if (job.workflowDir) {
+      state.source.mode = "filesystem";
+      state.source.selectedWorkflowDir = job.workflowDir;
+      if (!state.source.workflowDirs.includes(job.workflowDir)) {
+        state.source.workflowDirs.push(job.workflowDir);
+      }
+      await loadFilesystemData({ silent: true, preserveActiveWorkflowId: false });
+      if (job.workflowPath) {
+        const generated = state.workflows.find((workflow) => normalizePathForCompare(workflow.sourcePath) === normalizePathForCompare(job.workflowPath));
+        if (generated) {
+          state.activeWorkflowId = generated.id;
+        }
+      }
+    }
+
+    renderAll();
+    persistState();
+  } catch (error) {
+    clearDemoJobPolling();
+    state.demoConsole.error = `读取运行状态失败：${error.message}`;
+    renderAll();
+    persistState();
+  }
+}
+
 async function loadFilesystemData(options = {}) {
   const { silent = false, preserveActiveWorkflowId = false } = options;
   if (!state.source.serverAvailable) {
@@ -1981,6 +2240,7 @@ function syncFilterControls() {
     workflowDirSelect: state.source.selectedWorkflowDir,
     autoRefreshToggle: state.source.autoRefreshEnabled,
     autoRefreshIntervalSelect: String(state.source.autoRefreshIntervalMs),
+    demoScenarioSelect: state.demoConsole.selectedScenarioId,
   };
 
   Object.entries(mappings).forEach(([id, value]) => {
@@ -2089,6 +2349,27 @@ function removeAt(list, index) {
 }
 
 function normalizeState() {
+  if (!state.demoConsole || typeof state.demoConsole !== "object") {
+    state.demoConsole = createDefaultState().demoConsole;
+  }
+  state.demoConsole.scenarios = Array.isArray(state.demoConsole.scenarios)
+    ? state.demoConsole.scenarios.filter((item) => item && typeof item === "object")
+    : [];
+  state.demoConsole.selectedScenarioId = typeof state.demoConsole.selectedScenarioId === "string"
+    ? state.demoConsole.selectedScenarioId
+    : "";
+  state.demoConsole.activeJobId = typeof state.demoConsole.activeJobId === "string"
+    ? state.demoConsole.activeJobId
+    : "";
+  state.demoConsole.loading = Boolean(state.demoConsole.loading);
+  state.demoConsole.error = typeof state.demoConsole.error === "string" ? state.demoConsole.error : "";
+  state.demoConsole.lastMessage = typeof state.demoConsole.lastMessage === "string"
+    ? state.demoConsole.lastMessage
+    : "等待选择演示场景。";
+  state.demoConsole.job = state.demoConsole.job && typeof state.demoConsole.job === "object"
+    ? state.demoConsole.job
+    : null;
+
   state.source.policyFiles = Array.isArray(state.source.policyFiles)
     ? state.source.policyFiles.filter((item) => typeof item === "string")
     : [];
@@ -2158,16 +2439,24 @@ function getApiBase() {
   return "";
 }
 
-async function fetchJson(url) {
+async function fetchJson(url, options = {}) {
   const response = await fetch(url, {
+    method: options.method || "GET",
     headers: {
       Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
     },
+    body: options.body,
   });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
   return response.json();
+}
+
+function normalizePathForCompare(value) {
+  return String(value || "").replace(/\\/g, "/").toLowerCase();
 }
 
 function buildConfigFromPolicy(policyObject, policyText) {

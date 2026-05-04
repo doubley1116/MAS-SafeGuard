@@ -20,6 +20,11 @@
   --warning-soft: rgba(255, 194, 92, 0.16);
   --success: #8de8b7;
   --success-soft: rgba(141, 232, 183, 0.16);
+  --select-bg: #07101f;
+  --select-bg-hover: #10243b;
+  --select-bg-selected: #164c7a;
+  --select-text: #f5f7fb;
+  --select-muted: #8fa0b8;
   --shadow-lg: 0 28px 120px rgba(0, 0, 0, 0.42);
   --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.28);
   --glass-shadow: 0 24px 60px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.1);
@@ -74,6 +79,33 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+select {
+  color-scheme: dark;
+}
+
+select option,
+select optgroup {
+  background-color: var(--select-bg);
+  color: var(--select-text);
+}
+
+select option:hover,
+select option:focus {
+  background-color: var(--select-bg-hover);
+  color: var(--select-text);
+}
+
+select option:checked {
+  background:
+    linear-gradient(180deg, rgba(125, 201, 255, 0.22), rgba(125, 201, 255, 0.12)),
+    var(--select-bg-selected);
+  color: #ffffff;
+}
+
+select option:disabled {
+  color: var(--select-muted);
 }
 
 .starfield,
@@ -334,11 +366,7 @@ textarea {
     0 28px 74px rgba(2, 8, 20, 0.42),
     0 0 0 1px rgba(190, 229, 255, 0.16),
     inset 0 1px 0 rgba(255, 255, 255, 0.16);
-  transform:
-    perspective(1400px)
-    rotateX(var(--glass-tilt-x))
-    rotateY(var(--glass-tilt-y))
-    translateY(-3px);
+  transform: translateY(-1px);
 }
 
 .site-header,
@@ -350,6 +378,7 @@ textarea {
 .yaml-panel,
 .logs-panel,
 .source-panel,
+.demo-console-panel,
 .runtime-panel {
   border-radius: var(--radius-xl);
 }
@@ -722,6 +751,7 @@ textarea {
 .builder-panel,
 .yaml-panel,
 .logs-panel,
+.demo-console-panel,
 .source-panel {
   padding: 24px;
 }
@@ -757,6 +787,95 @@ textarea {
   grid-template-columns: minmax(0, 1.22fr) minmax(300px, 0.78fr);
   gap: 18px;
   margin-top: 18px;
+}
+
+.demo-console-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.34fr) minmax(0, 0.66fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.demo-scenario-list,
+.terminal-shell,
+.terminal-output,
+.terminal-meta {
+  display: grid;
+  gap: 12px;
+}
+
+.demo-scenario-card {
+  width: 100%;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.demo-scenario-card.is-active {
+  border-color: rgba(125, 201, 255, 0.34);
+  background: rgba(125, 201, 255, 0.09);
+}
+
+.demo-scenario-card strong,
+.terminal-line strong {
+  display: block;
+}
+
+.demo-scenario-card p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.terminal-shell {
+  min-height: 440px;
+}
+
+.terminal-output {
+  align-content: start;
+  min-height: 300px;
+  max-height: 460px;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid rgba(125, 201, 255, 0.16);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(180deg, rgba(1, 8, 18, 0.86), rgba(1, 5, 12, 0.92)),
+    rgba(0, 0, 0, 0.64);
+  font-family: "SF Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.terminal-line {
+  display: grid;
+  grid-template-columns: 86px 68px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  color: #dcecff;
+  overflow-wrap: anywhere;
+}
+
+.terminal-line .terminal-time {
+  color: #82a4c7;
+}
+
+.terminal-line .terminal-stream {
+  color: var(--success);
+  text-transform: uppercase;
+}
+
+.terminal-line.is-stderr .terminal-stream {
+  color: var(--danger);
+}
+
+.terminal-placeholder {
+  color: var(--muted);
 }
 
 .workflow-card,
@@ -829,7 +948,7 @@ textarea {
 .field textarea {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.05);
+  background-color: rgba(255, 255, 255, 0.05);
   border-radius: 16px;
   padding: 12px 14px;
   color: var(--text);
@@ -837,12 +956,30 @@ textarea {
   transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
 }
 
+.field select {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03)),
+    var(--select-bg);
+}
+
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
   border-color: rgba(125, 201, 255, 0.34);
   box-shadow: 0 0 0 4px rgba(125, 201, 255, 0.12);
-  background: rgba(255, 255, 255, 0.08);
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.field select:focus {
+  background:
+    linear-gradient(180deg, rgba(125, 201, 255, 0.13), rgba(255, 255, 255, 0.04)),
+    var(--select-bg);
+}
+
+.field select:disabled {
+  color: var(--select-muted);
+  cursor: not-allowed;
+  opacity: 0.68;
 }
 
 .field textarea {
@@ -1124,6 +1261,7 @@ textarea {
   }
 
   .runtime-grid,
+  .demo-console-grid,
   .source-grid,
   .telemetry-strip,
   .security-grid {
@@ -1140,6 +1278,7 @@ textarea {
   .site-header,
   .hero,
   .runtime-panel,
+  .demo-console-panel,
   .workspace-list,
   .workspace-detail,
   .workspace-side,
@@ -1153,6 +1292,7 @@ textarea {
   .metrics-grid,
   .telemetry-strip,
   .runtime-grid,
+  .demo-console-grid,
   .form-grid.two-col,
   .security-grid,
   .source-grid {

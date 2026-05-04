@@ -11,9 +11,11 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 ```
 
 脚本会：
-1. 启动本地 PowerShell 服务
+1. 优先启动 Node 本地服务，找不到 Node 时回退到 PowerShell 服务
 2. 尝试自动打开浏览器
 3. 访问 `http://127.0.0.1:48317`
+
+页面内的 `Demo Console` 需要 Node 服务提供 `/api/demo/*` 接口；推荐使用启动脚本，不要只打开静态 HTML。
 
 如果你只想看静态页面，也可以直接打开：
 
@@ -28,6 +30,8 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 - 本地模型 / API 模型 双入口
 - 前端配置编辑并实时生成 YAML
 - 审计日志流展示
+- 页面内 Demo Console，可直接运行演示场景并查看终端输出
+- 演示运行后自动生成真实 `audit_logs/workflows/*.json`
 - 自动扫描仓库中的 `policy.yaml`
 - 自动读取真实 `audit_logs/workflows/*.json`
 - 自动监听新生成的 `workflow.json` 并实时刷新前端
@@ -89,6 +93,9 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 - `/api/discover`
 - `/api/filesystem`
 - `/api/workflow-watch`
+- `/api/demo/scenarios`
+- `/api/demo/run`
+- `/api/demo/jobs/:jobId`
 
 其中 `/api/workflow-watch` 返回：
 
@@ -100,22 +107,34 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 
 前端通过目录指纹变化判断是否有新的 `workflow.json`，检测到变化后会自动重新载入 workflow 列表、详情和日志视图。
 
+## 动态演示控制台
+
+`Demo Console` 提供三个稳定演示场景：
+
+- AutoGen 路径绕过拦截
+- LangGraph 路由劫持复核
+- MAS Prompt Infection 阻断
+
+点击 `运行演示` 后，页面会像终端一样显示运行输出。本地服务会写入一个真实 workflow JSON 到 `frontend_showcase/audit_logs/workflows/`，前端随后切到真实文件模式并刷新证据视图。
+
 ## 主要文件
 
 - `frontend_showcase/index.html`：页面结构
 - `frontend_showcase/styles.css`：视觉样式
 - `frontend_showcase/app.js`：前端交互、真实文件读取、自动刷新、YAML 生成
-- `frontend_showcase/showcase_server.ps1`：PowerShell 本地静态服务与文件系统 API
+- `frontend_showcase/server.js`：Node 本地服务、文件系统 API、Demo Console 运行器
+- `frontend_showcase/showcase_server.ps1`：PowerShell 回退服务
 - `frontend_showcase/start_showcase.ps1`：一键启动脚本
-- `frontend_showcase/server.js`：Node 版备用服务实现
 
 ## 兼容性与验证
 
 - 已兼容 Windows PowerShell 5
 - 已修复真实 workflow 解析问题
 - 已通过 `app.js` 语法检查
+- 已通过 `server.js` 语法检查
 - 已通过 `showcase_server.ps1` 语法检查
 - 已验证 `/api/workflow-watch` 正常返回
+- 已验证 `/api/demo/scenarios`、`/api/demo/run`、`/api/demo/jobs/:jobId` 可运行并生成 workflow
 - 已通过浏览器自动化验证：
   - 新版 Hero 渲染成功
   - API 模型字段会在 `api_gateway` 模式下出现

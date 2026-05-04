@@ -340,10 +340,17 @@ try {
         Write-Response -Client $client -StatusCode $payload.StatusCode -ContentType $payload.ContentType -BodyBytes $payload.BodyBytes -Headers $payload.Headers
       }
     } catch {
-      $bodyBytes = $encoding.GetBytes($_.Exception.Message)
-      Write-Response -Client $client -StatusCode 500 -ContentType "text/plain; charset=utf-8" -BodyBytes $bodyBytes -Headers @{}
+      try {
+        $bodyBytes = $encoding.GetBytes($_.Exception.Message)
+        Write-Response -Client $client -StatusCode 500 -ContentType "text/plain; charset=utf-8" -BodyBytes $bodyBytes -Headers @{}
+      } catch {
+        # Some browsers cancel speculative requests; keep the local demo server alive.
+      }
     } finally {
-      $client.Close()
+      try {
+        $client.Close()
+      } catch {
+      }
     }
   }
 } finally {
