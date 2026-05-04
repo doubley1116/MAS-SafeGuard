@@ -22,23 +22,24 @@ class DiversityReward:
         except Exception:
             pass
 
-        # 2) HuggingFace 自动下载
-        print(f"[DiversityReward] 本地缓存未命中，尝试 HuggingFace 下载: {model_name}")
+        # 2) ModelScope 下载
+        ms_model = f"sentence-transformers/{model_name}" if "/" not in model_name else model_name
+        print(f"[DiversityReward] 本地缓存未命中，尝试 ModelScope 下载: {ms_model}")
         try:
-            cls._shared_model = SentenceTransformer(model_name, device=device, local_files_only=False)
+            from modelscope import snapshot_download
+            local_path = snapshot_download(ms_model)
+            cls._shared_model = SentenceTransformer(local_path, device=device, local_files_only=True)
             cls._shared_model_name = model_name
-            print(f"[DiversityReward] HuggingFace 下载并加载成功: {model_name}")
+            print(f"[DiversityReward] ModelScope 下载并加载成功: {local_path}")
             return
         except Exception:
             pass
 
-        # 3) ModelScope 兜底
-        ms_model = f"sentence-transformers/{model_name}" if "/" not in model_name else model_name
-        from modelscope import snapshot_download
-        local_path = snapshot_download(ms_model)
-        cls._shared_model = SentenceTransformer(local_path, device=device, local_files_only=True)
+        # 3) HuggingFace 兜底
+        print(f"[DiversityReward] ModelScope 下载失败，尝试 HuggingFace 下载: {model_name}")
+        cls._shared_model = SentenceTransformer(model_name, device=device, local_files_only=False)
         cls._shared_model_name = model_name
-        print(f"[DiversityReward] ModelScope 下载并加载成功: {local_path}")
+        print(f"[DiversityReward] HuggingFace 下载并加载成功: {model_name}")
 
     def __init__(self, model_name="paraphrase-MiniLM-L6-v2"):
         device = "cuda" if torch.cuda.is_available() else "cpu"
