@@ -28,7 +28,7 @@ models:
   defender:
     type: "hf"                # 防御者模型类型: hf (HuggingFace通用加载)
     name: "Qwen/Qwen2.5-3B-Instruct"  # 改为本地训练好的模型路径
-    device: "cuda:0"          # RTX 4090 (24GB)
+    device: "cuda:1"          # RTX 4090 (24GB)
     dtype: "bfloat16"         # 推理/训练精度: bfloat16, float16, float32
     attn_impl: "sdpa"         # 注意力实现: sdpa, flash_attention_2, eager
     max_length: 1024          # 分类器最大输入长度

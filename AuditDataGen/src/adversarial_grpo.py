@@ -1181,6 +1181,10 @@ class AdversarialGRPOTrainer:
                     actions=[ds.action for ds in defender_batch],
                 )
 
+            # 跨迭代清理 GPU 缓存碎片，防止渐进式 OOM
+            import torch
+            torch.cuda.empty_cache()
+
             if i % checkpoint_interval == 0 and i > 0:
                 checkpoint_dir = os.path.join(output_dir, f"checkpoint_{str(i).zfill(4)}")
                 os.makedirs(f"{checkpoint_dir}/attacker", exist_ok=True)
