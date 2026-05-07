@@ -1708,11 +1708,8 @@ def _generate_one_event(
         task_raw = _call_text(client, model, _build_task_prompt(content), temperature=0.1, max_tokens=100)
         task = (task_raw.strip() if task_raw else "") or (content[:77] + "..." if len(content) > 80 else content)
 
-    auditor_prompt = _build_auditor_prompt(content, task)
-    audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=256)
-    audit = _parse_json(audit_raw) if audit_raw else None
-    reason = (audit.get("reason", "").strip() if audit else "") or ""
-    label = (audit.get("label", "").strip() if audit else "") or ""
+    reason = ""
+    label = ""
 
     return _assemble_event(attack_type, domain, receiver, content, task, reason, label)
 
@@ -1821,12 +1818,8 @@ def generate_freeform_events(
                 task_raw = _call_text(client, model, _build_task_prompt(content), temperature=0.1, max_tokens=100)
                 task     = (task_raw.strip() if task_raw else "") or (content[:77] + "..." if len(content) > 80 else content)
 
-            # 盲审：benign 与攻击类型统一走 API 审计
-            auditor_prompt = _build_auditor_prompt(content, task)
-            audit_raw = _call_text(client, model, auditor_prompt, temperature=0.3, max_tokens=256)
-            audit  = _parse_json(audit_raw) if audit_raw else None
-            reason = (audit.get("reason", "").strip() if audit else "") or ""
-            label  = (audit.get("label",  "").strip() if audit else "") or ""
+            reason = ""
+            label  = ""
 
             event = _assemble_event(attack_type, domain, receiver, content, task, reason, label)
             events.append(event)

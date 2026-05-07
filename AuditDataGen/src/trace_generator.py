@@ -921,19 +921,13 @@ def generate_trace_with_attacker(
         }
         self_hash = compute_hash(hash_payload)
         
-        # 7. 构建 metadata（包含新的 audit_decision）
-        # 骨架生成走 API 盲审，不审核则不填
-        label, reason = _audit_with_api(
-            content=display_content,
-            task=task,
-        )
-
+        # 7. 构建 metadata（audit_decision 字段置空）
         metadata = _make_metadata(skeleton, event_type, i, ipi_scenario)
         metadata["intent"] = "attack" if is_attack_step else "benign"
         metadata["audit_decision"] = {
-            "label":    label,
+            "label":    "",
             "analysis": "",
-            "reason":   reason,
+            "reason":   "",
         }
         
         # 9. 组装事件
