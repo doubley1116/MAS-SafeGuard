@@ -1265,7 +1265,7 @@ ATTACK_CONFIGS: dict[str, dict] = {
     },
 }
 
-FREE_FORM_ATTACK_TYPES = list(ATTACK_CONFIGS.keys())
+FREE_FORM_ATTACK_TYPES = [k for k in ATTACK_CONFIGS if k not in ("IPI", "AiTM")]
 FREE_FORM_DOMAINS      = list(SYSTEM_TOPOLOGIES.keys())
 
 # 领域专属的业务实体提示——要求模型输出具体名称而非模糊表述
@@ -1761,6 +1761,14 @@ def generate_freeform_events(
 
     attack_types = [at for at in (attack_type_filter or FREE_FORM_ATTACK_TYPES)
                     if at in ATTACK_CONFIGS]
+    # 安全网：IPI / AiTM 必须走骨架生成，自由生成不支持
+    _forbidden = {"IPI", "AiTM"}
+    if any(at in _forbidden for at in attack_types):
+        filtered = [at for at in attack_types if at not in _forbidden]
+        removed = set(attack_types) - set(filtered)
+        if removed:
+            print(f"[WARN] 自由生成不支持 {removed}（仅骨架生成支持），已自动排除")
+        attack_types = filtered
     domains      = [d  for d  in (domain_filter      or FREE_FORM_DOMAINS)
                     if d  in SYSTEM_TOPOLOGIES]
 

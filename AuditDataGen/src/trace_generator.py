@@ -815,10 +815,10 @@ def generate_trace_with_attacker(
     for i, step in enumerate(skeleton["flow"]):
         sender, receiver, content_tpl, event_type = step
         
-        # 统一替换 AiTM_Interceptor 为伪装名（输出数据脱敏，骨架保留用于检测）
-        # sender 和 receiver 分别替换为 disguise_name，骨架保留 AiTM_Interceptor 用于检测
-        display_sender = disguise_name if sender == "AiTM_Interceptor" else sender
-        display_receiver = disguise_name if receiver == "AiTM_Interceptor" else receiver
+        # 统一替换 AiTM_Interceptor 显示名（sender 用伪装名保持攻击逼真度）
+        # call_path 中保留真实 AiTM_Interceptor，不作替换
+        display_sender = disguise_name if (sender == "AiTM_Interceptor" and disguise_name) else sender
+        display_receiver = disguise_name if (receiver == "AiTM_Interceptor" and disguise_name) else receiver
 
         # IPI 特殊处理：保留原有模板替换，仅作为 attacker 生成失败时的兜底
         actual_content_tpl = content_tpl
@@ -891,11 +891,13 @@ def generate_trace_with_attacker(
             tool_name, tool_args = _parse_tool_call(filled_content, values)
             display_content = None
         
-        # 3. call_path 更新（排除路由节点和工具节点）
-        if display_sender not in ROUTER_NODES and display_sender not in TOOL_SENDERS and display_sender not in call_path:
-            call_path.append(display_sender)
-        if display_receiver and display_receiver not in ROUTER_NODES and display_receiver not in TOOL_SENDERS and display_receiver not in call_path:
-            call_path.append(display_receiver)
+        # 3. call_path 更新（用显示名，排除路由节点和工具节点）
+        # tool_call / tool_result 不扩展 call_path
+        if event_type not in ("tool_call", "tool_result"):
+            if display_sender not in ROUTER_NODES and display_sender not in TOOL_SENDERS and display_sender not in call_path:
+                call_path.append(display_sender)
+            if display_receiver and display_receiver not in ROUTER_NODES and display_receiver not in TOOL_SENDERS:
+                call_path.append(display_receiver)
         
         # 4. history_summary 快照
         history_summary = "\n---\n".join(history_lines)
