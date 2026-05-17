@@ -30,7 +30,9 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 - 本地模型 / API 模型 双入口
 - 前端配置编辑并实时生成 YAML
 - 审计日志流展示
-- 页面内 Demo Console，可直接运行演示场景并查看终端输出
+- 页面内 Demo Console，可选择框架、领域场景、攻击类型并运行演示
+- Replay 稳定演示 / Live 真实 MAS 运行双模式
+- 运行实例看板、依赖/API 预检、Agent 证据链、拦截原因矩阵
 - 演示运行后自动生成真实 `audit_logs/workflows/*.json`
 - 自动扫描仓库中的 `policy.yaml`
 - 自动读取真实 `audit_logs/workflows/*.json`
@@ -62,21 +64,22 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 
 ## 设计方向
 
-这版界面不再只是普通后台面板，而是调整成：
+这版界面不再只是普通后台面板，而是调整成更适合组会和客户演示的产品页：
 
-- Apple 风格的克制大标题、简洁按钮、玻璃感卡片
-- NASA 风格的深色太空背景、mission console 氛围、轨道视觉和任务叙事
-- 支持 `Apple x NASA / Apple Glass / Mission Control` 三种主题标签切换
+- Apple 风格的浅色、克制、大字号、清晰层级
+- 玻璃感卡片、柔和阴影和更易读的表单控件
+- 单页面分导航索引，避免长滚动页面让客户迷路
+- Demo Console 以“选择 -> 预检 -> 运行 -> 证据链 -> 审计 JSON”的叙事组织
 
 参考页面：
 
 - [Apple](https://www.apple.com/)
 - [NASA](https://www.nasa.gov/)
 
-这两站当前首页给我们的设计启发主要是：
+这两站给我们的设计启发主要是：
 
 - Apple：大标题、少量高强度 CTA、留白和聚焦式产品陈列
-- NASA：深色沉浸背景、任务式信息分层、专题模块和 mission 状态感
+- NASA：任务式信息分层、状态面板、证据链和 mission 状态感
 
 ## 自动监听说明
 
@@ -109,13 +112,38 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 
 ## 动态演示控制台
 
-`Demo Console` 提供三个稳定演示场景：
+`Demo Console` 会从 `MAS/` 自动扫描 3 个框架和 3 个业务领域：
 
-- AutoGen 路径绕过拦截
-- LangGraph 路由劫持复核
-- MAS Prompt Infection 阻断
+- 框架：`AutoGen`、`CrewAI`、`LangGraph`
+- 领域：电商、医疗、金融交易
+- 攻击类型：路径绕过、调用者伪装、语义注入、路由劫持、间接提示注入、Agent-in-the-Middle、感染式传播、正常防御链路
 
-点击 `运行演示` 后，页面会像终端一样显示运行输出。本地服务会写入一个真实 workflow JSON 到 `frontend_showcase/audit_logs/workflows/`，前端随后切到真实文件模式并刷新证据视图。
+演示模式：
+
+- `Replay 稳定演示`：推荐组会和客户展示使用，不依赖外部模型 API 是否可用，会稳定生成 workflow JSON 和证据链。
+- `Live 真实运行 MAS`：真实执行对应 MAS 脚本，需要 Python 依赖和 `API_KEY / BASE_URL / MODEL` 等环境变量完整可用。
+
+点击 `运行演示` 后，页面会显示：
+
+- 预检卡片：脚本入口、运行模式、Security Core 入口、攻击画像
+- 运行实例看板：任务状态、环境诊断、SecurityCore 决策、审计证据
+- Agent 证据链：User / Router / Agent / Tool / SecurityCore / AuditLogger
+- 决策矩阵：RuleEngine、LLMReviewer、History Window、Workflow JSON 为什么拦截
+- 终端输出：保留 stdout/stderr，方便排查依赖或 API 环境问题
+
+本地服务会写入一个真实 workflow JSON 到 `frontend_showcase/audit_logs/workflows/`，前端随后切到真实文件模式并刷新证据视图。
+
+## 推荐组会演示步骤
+
+1. 运行 `start_showcase.ps1`，打开 `http://127.0.0.1:48317`。
+2. 点击顶部导航 `动态演示`。
+3. 选择一个框架，例如 `CrewAI`。
+4. 选择一个领域，例如 `医疗`。
+5. 选择一个攻击类型，例如 `间接提示注入`。
+6. 演示模式先选 `Replay 稳定演示`。
+7. 点击 `运行演示`，讲解预检、Agent 证据链、拦截原因矩阵和终端输出。
+8. 点击 `载入生成结果` 或切到 `工作流审计`，展示生成的 workflow JSON 时间线和 history 窗口。
+9. 如果现场环境变量和依赖都配置好了，再切 `Live 真实运行 MAS` 做真实脚本演示。
 
 ## 主要文件
 
@@ -135,7 +163,9 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 - 已通过 `showcase_server.ps1` 语法检查
 - 已验证 `/api/workflow-watch` 正常返回
 - 已验证 `/api/demo/scenarios`、`/api/demo/run`、`/api/demo/jobs/:jobId` 可运行并生成 workflow
+- 已验证可扫描 9 个 MAS 场景，并返回每个场景支持的攻击类型
+- 已验证 `Replay` 模式可生成带 `attack_id / attack_label / audit_layer` 元数据的 workflow JSON
 - 已通过浏览器自动化验证：
   - 新版 Hero 渲染成功
-  - API 模型字段会在 `api_gateway` 模式下出现
+  - API 模型字段会在 API 入口模式下出现
   - 主题切换会更新页面主题状态

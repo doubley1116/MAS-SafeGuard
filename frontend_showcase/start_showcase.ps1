@@ -8,13 +8,18 @@ $powershellExe = (Get-Process -Id $PID).Path
 $serverUrl = "http://127.0.0.1:{0}" -f $port
 
 $nodeCandidates = @()
+$bundledNode = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
+if (Test-Path -LiteralPath $bundledNode) {
+  $nodeCandidates += $bundledNode
+}
 $pathNode = Get-Command node.exe -ErrorAction SilentlyContinue
 if ($pathNode) {
   $nodeCandidates += $pathNode.Source
 }
-$bundledNode = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
-if (Test-Path -LiteralPath $bundledNode) {
-  $nodeCandidates += $bundledNode
+
+$bundledPython = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+if (Test-Path -LiteralPath $bundledPython) {
+  $env:ZERO_TRUST_PYTHON = $bundledPython
 }
 
 $nodeExe = $nodeCandidates | Select-Object -First 1

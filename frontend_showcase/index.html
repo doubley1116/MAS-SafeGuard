@@ -32,7 +32,38 @@
       </div>
     </header>
 
-    <header class="hero hero-shell reveal">
+    <nav class="section-nav reveal is-visible" aria-label="展示模块导航">
+      <button class="section-nav-button is-active" type="button" data-view-target="overview">
+        <span>总览</span>
+        <small>Overview</small>
+      </button>
+      <button class="section-nav-button" type="button" data-view-target="runtime">
+        <span>数据接入</span>
+        <small>Runtime</small>
+      </button>
+      <button class="section-nav-button" type="button" data-view-target="demo">
+        <span>动态演示</span>
+        <small>Demo</small>
+      </button>
+      <button class="section-nav-button" type="button" data-view-target="audit">
+        <span>工作流审计</span>
+        <small>Audit</small>
+      </button>
+      <button class="section-nav-button" type="button" data-view-target="policy">
+        <span>策略配置</span>
+        <small>YAML</small>
+      </button>
+      <button class="section-nav-button" type="button" data-view-target="logs">
+        <span>日志</span>
+        <small>Logs</small>
+      </button>
+      <button class="section-nav-button" type="button" data-view-target="mapping">
+        <span>仓库映射</span>
+        <small>Mapping</small>
+      </button>
+    </nav>
+
+    <header class="hero hero-shell reveal" data-view-panel="overview">
       <div class="hero-copy">
         <p class="eyebrow">SecurityCore / Workflow Audit / Policy Composer</p>
         <h1>零信任多智能体前端展示台</h1>
@@ -61,8 +92,8 @@
           </article>
           <article class="telemetry-card">
             <span class="telemetry-label">Design Language</span>
-            <strong>Calm Glass + Space Ops</strong>
-            <p>Apple 的克制排版，叠加 NASA 式任务控制台氛围。</p>
+            <strong>Light Console + Clear Reading</strong>
+            <p>参考 Apple 的浅色界面、清晰层级和更易阅读的大字号排版。</p>
           </article>
           <article class="telemetry-card">
             <span class="telemetry-label">Next Hook</span>
@@ -104,9 +135,9 @@
       </div>
     </header>
 
-    <section class="metrics-grid reveal" id="metricsGrid"></section>
+    <section class="metrics-grid reveal" id="metricsGrid" data-view-panel="overview"></section>
 
-    <section class="panel runtime-panel reveal">
+    <section class="panel runtime-panel reveal" data-view-panel="runtime" hidden>
       <div class="panel-head">
         <div>
           <p class="panel-kicker">Data Source</p>
@@ -116,7 +147,7 @@
       <div id="sourceRuntimePanel"></div>
     </section>
 
-    <section class="panel demo-console-panel reveal">
+    <section class="panel demo-console-panel reveal" data-view-panel="demo" hidden>
       <div class="panel-head">
         <div>
           <p class="panel-kicker">Demo Console</p>
@@ -126,7 +157,7 @@
       <div id="demoConsole"></div>
     </section>
 
-    <section class="workspace reveal">
+    <section class="workspace reveal" data-view-panel="audit" hidden>
       <aside class="panel workspace-list">
         <div class="panel-head">
           <div>
@@ -180,7 +211,7 @@
       </aside>
     </section>
 
-    <section class="builder-grid reveal">
+    <section class="builder-grid reveal" data-view-panel="policy" hidden>
       <div class="panel builder-panel">
         <div class="panel-head">
           <div>
@@ -244,7 +275,7 @@
       </div>
     </section>
 
-    <section class="panel logs-panel reveal">
+    <section class="panel logs-panel reveal" data-view-panel="logs" hidden>
       <div class="panel-head">
         <div>
           <p class="panel-kicker">Audit Stream</p>
@@ -280,7 +311,7 @@
       <div class="log-stream" id="logStream"></div>
     </section>
 
-    <section class="panel source-panel reveal">
+    <section class="panel source-panel reveal" data-view-panel="mapping" hidden>
       <div class="panel-head">
         <div>
           <p class="panel-kicker">Repository Mapping</p>

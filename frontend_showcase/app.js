@@ -8,6 +8,14 @@ const RISK_LABELS = {
   path_rule_violation: "路径规则冲突",
   strict_path_violation: "严格路径违规",
   arg_constraint_violation: "参数越界",
+  fake_authorization: "伪造授权",
+  semantic_injection: "语义注入",
+  ipi_payload: "间接提示注入",
+  prompt_injection: "提示注入",
+  aitm_mismatch: "中转篡改",
+  prompt_infection_spread: "感染传播",
+  history_contamination: "历史污染",
+  normal_defense: "正常防御",
 };
 
 const STATUS_META = {
@@ -18,6 +26,7 @@ const STATUS_META = {
 
 const GLASS_REACTIVE_SELECTOR = [
   ".site-header",
+  ".section-nav",
   ".hero",
   ".panel",
   ".subpanel",
@@ -32,11 +41,17 @@ const GLASS_REACTIVE_SELECTOR = [
   ".hero-panel",
   ".security-summary-card",
   ".history-dialog",
+  ".preflight-card",
+  ".agent-flow-card",
+  ".decision-matrix-card",
 ].join(", ");
 
 const DEFAULT_SERVER_ORIGIN = "http://127.0.0.1:48317";
 const STORAGE_KEY = "zero-trust-frontend-showcase-state";
+const VIEW_STORAGE_KEY = "zero-trust-frontend-showcase-active-view";
+const DEFAULT_VIEW = "overview";
 let activeGlassElement = null;
+let activeView = loadActiveView();
 
 function createDefaultState() {
   return {
@@ -71,8 +86,12 @@ function createDefaultState() {
       watchExists: false,
     },
     demoConsole: {
+      frameworks: [],
       scenarios: [],
-      selectedScenarioId: "autogen_path_bypass",
+      selectedFrameworkId: "AutoGen",
+      selectedScenarioId: "mas-autogen-ecommerce",
+      selectedAttackId: "path_bypass",
+      demoMode: "replay",
       activeJobId: "",
       job: null,
       loading: false,
@@ -506,6 +525,11 @@ async function handleClick(event) {
     return;
   }
 
+  if (target.dataset.viewTarget) {
+    setActiveView(target.dataset.viewTarget);
+    return;
+  }
+
   if (target.classList.contains("workflow-card")) {
     state.activeWorkflowId = target.dataset.workflowId;
     renderAll();
@@ -574,7 +598,12 @@ async function handleClick(event) {
         openHistoryDialog(target.dataset.openHistory, target.dataset.eventId || "");
         return;
       } else if (target.dataset.demoScenario) {
+        const scenario = state.demoConsole.scenarios.find((item) => item.id === target.dataset.demoScenario);
+        if (scenario) {
+          state.demoConsole.selectedFrameworkId = getDemoScenarioFrameworkId(scenario);
+        }
         state.demoConsole.selectedScenarioId = target.dataset.demoScenario;
+        syncSelectedAttackWithScenario();
         renderAll();
         persistState();
         return;
@@ -633,8 +662,21 @@ async function handleInput(event) {
     state.source.autoRefreshIntervalMs = Number(target.value) || 3000;
     await configureWorkflowWatcher({ immediate: state.source.mode === "filesystem" && state.source.autoRefreshEnabled });
     return;
+  } else if (target.id === "demoFrameworkSelect") {
+    state.demoConsole.selectedFrameworkId = target.value;
+    state.demoConsole.selectedScenarioId = getFirstScenarioIdForFramework(target.value);
+    syncSelectedAttackWithScenario();
   } else if (target.id === "demoScenarioSelect") {
     state.demoConsole.selectedScenarioId = target.value;
+    const scenario = state.demoConsole.scenarios.find((item) => item.id === target.value);
+    if (scenario) {
+      state.demoConsole.selectedFrameworkId = getDemoScenarioFrameworkId(scenario);
+    }
+    syncSelectedAttackWithScenario();
+  } else if (target.id === "demoAttackSelect") {
+    state.demoConsole.selectedAttackId = target.value;
+  } else if (target.id === "demoModeSelect") {
+    state.demoConsole.demoMode = target.value === "live" ? "live" : "replay";
   } else if (target.dataset.bind) {
     applyBinding(target);
   } else {
@@ -675,10 +717,66 @@ function renderAll() {
   renderYamlPreview();
   renderLogs();
   syncFilterControls();
+  syncViewNavigation();
 }
 
 function applyVisualTheme() {
   document.body.dataset.theme = state.config.ui.aesthetic || "apple-nasa-hybrid";
+}
+
+function loadActiveView() {
+  try {
+    return window.sessionStorage.getItem(VIEW_STORAGE_KEY) || DEFAULT_VIEW;
+  } catch (_error) {
+    return DEFAULT_VIEW;
+  }
+}
+
+function saveActiveView() {
+  try {
+    window.sessionStorage.setItem(VIEW_STORAGE_KEY, activeView);
+  } catch (_error) {
+  }
+}
+
+function setActiveView(viewId, options = {}) {
+  const { keepScroll = false } = options;
+  const panels = Array.from(document.querySelectorAll("[data-view-panel]"));
+  const nextView = panels.some((panel) => panel.dataset.viewPanel === viewId)
+    ? viewId
+    : DEFAULT_VIEW;
+
+  activeView = nextView;
+  saveActiveView();
+  syncViewNavigation();
+
+  if (!keepScroll) {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+}
+
+function syncViewNavigation() {
+  const panels = Array.from(document.querySelectorAll("[data-view-panel]"));
+  const hasActivePanel = panels.some((panel) => panel.dataset.viewPanel === activeView);
+  if (!hasActivePanel) {
+    activeView = DEFAULT_VIEW;
+    saveActiveView();
+  }
+
+  panels.forEach((panel) => {
+    const isActive = panel.dataset.viewPanel === activeView;
+    panel.hidden = !isActive;
+    panel.classList.toggle("is-active-view", isActive);
+    if (isActive) {
+      panel.classList.add("is-visible");
+    }
+  });
+
+  document.querySelectorAll("[data-view-target]").forEach((button) => {
+    const isActive = button.dataset.viewTarget === activeView;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-current", isActive ? "page" : "false");
+  });
 }
 
 function setupGlassPointerEffects() {
@@ -852,6 +950,85 @@ function renderSourcePanel() {
   `;
 }
 
+function getDemoFrameworkOptions(demo, scenarios) {
+  if (Array.isArray(demo.frameworks) && demo.frameworks.length) {
+    return demo.frameworks
+      .filter((framework) => framework && typeof framework === "object")
+      .map((framework) => ({
+        id: String(framework.id || framework.label || ""),
+        label: String(framework.label || framework.id || "Framework"),
+        count: Number(framework.count) || scenarios.filter((scenario) => getDemoScenarioFrameworkId(scenario) === String(framework.id || framework.label || "")).length,
+      }))
+      .filter((framework) => framework.id);
+  }
+
+  const frameworkMap = new Map();
+  scenarios.forEach((scenario) => {
+    const id = getDemoScenarioFrameworkId(scenario);
+    const current = frameworkMap.get(id) || {
+      id,
+      label: scenario.framework || id,
+      count: 0,
+    };
+    current.count += 1;
+    frameworkMap.set(id, current);
+  });
+  return Array.from(frameworkMap.values());
+}
+
+function getDemoScenarioFrameworkId(scenario) {
+  return String((scenario && (scenario.frameworkKey || scenario.framework)) || "Demo");
+}
+
+function getFirstScenarioIdForFramework(frameworkId) {
+  const scenarios = Array.isArray(state.demoConsole.scenarios) ? state.demoConsole.scenarios : [];
+  const target = scenarios.find((scenario) => getDemoScenarioFrameworkId(scenario) === frameworkId);
+  return target ? target.id : scenarios[0] ? scenarios[0].id : "";
+}
+
+function getScenarioAttackOptions(scenario) {
+  if (!scenario || !Array.isArray(scenario.attacks) || !scenario.attacks.length) {
+    return [
+      {
+        id: scenario && scenario.attackId ? scenario.attackId : "path_bypass",
+        label: scenario && scenario.attackLabel ? scenario.attackLabel : "路径绕过",
+        shortLabel: scenario && scenario.attackLabel ? scenario.attackLabel : "路径绕过",
+        category: "A",
+        summary: scenario && scenario.summary ? scenario.summary : "选择场景后查看攻击类型。",
+        riskTypes: scenario && Array.isArray(scenario.riskTypes) ? scenario.riskTypes : [],
+        riskScore: scenario && Number.isFinite(Number(scenario.riskScore)) ? Number(scenario.riskScore) : 0,
+        tone: scenario && scenario.tone ? scenario.tone : "review",
+        auditLayer: scenario && scenario.auditLayer ? scenario.auditLayer : "SecurityCore",
+        interceptionStage: scenario && scenario.interceptionStage ? scenario.interceptionStage : "Policy review",
+      },
+    ];
+  }
+  return scenario.attacks.filter((attack) => attack && attack.id);
+}
+
+function getSelectedScenario() {
+  const scenarios = Array.isArray(state.demoConsole.scenarios) ? state.demoConsole.scenarios : [];
+  return scenarios.find((scenario) => scenario.id === state.demoConsole.selectedScenarioId) || scenarios[0] || null;
+}
+
+function getSelectedAttackForScenario(scenario) {
+  const attacks = getScenarioAttackOptions(scenario);
+  return attacks.find((attack) => attack.id === state.demoConsole.selectedAttackId)
+    || attacks.find((attack) => attack.id === scenario?.defaultAttackId)
+    || attacks[0]
+    || null;
+}
+
+function syncSelectedAttackWithScenario() {
+  const scenario = getSelectedScenario();
+  const attacks = getScenarioAttackOptions(scenario);
+  if (!attacks.find((attack) => attack.id === state.demoConsole.selectedAttackId)) {
+    state.demoConsole.selectedAttackId = scenario && scenario.defaultAttackId
+      ? scenario.defaultAttackId
+      : attacks[0] ? attacks[0].id : "";
+  }
+}
+
 function renderDemoConsole() {
   const container = document.getElementById("demoConsole");
   if (!container) {
@@ -860,18 +1037,41 @@ function renderDemoConsole() {
 
   const demo = state.demoConsole;
   const scenarios = Array.isArray(demo.scenarios) ? demo.scenarios : [];
-  const selectedScenario = scenarios.find((item) => item.id === demo.selectedScenarioId) || scenarios[0] || null;
+  const frameworks = getDemoFrameworkOptions(demo, scenarios);
+  const selectedFrameworkId = frameworks.find((item) => item.id === demo.selectedFrameworkId)
+    ? demo.selectedFrameworkId
+    : frameworks[0] ? frameworks[0].id : "";
+  const visibleScenarios = selectedFrameworkId
+    ? scenarios.filter((scenario) => getDemoScenarioFrameworkId(scenario) === selectedFrameworkId)
+    : scenarios;
+  const selectedScenario = visibleScenarios.find((item) => item.id === demo.selectedScenarioId)
+    || visibleScenarios[0]
+    || scenarios.find((item) => item.id === demo.selectedScenarioId)
+    || scenarios[0]
+    || null;
+  const attackOptions = getScenarioAttackOptions(selectedScenario);
+  const selectedAttack = getSelectedAttackForScenario(selectedScenario);
+  const demoMode = demo.demoMode === "live" ? "live" : "replay";
   const job = demo.job;
   const isRunning = job && job.status === "running";
   const terminalLines = job && Array.isArray(job.lines) ? job.lines : [];
   const canRun = state.source.serverAvailable && selectedScenario && !demo.loading && !isRunning;
+  const jobStatusLabel = isRunning
+    ? "Running"
+    : job && job.status === "succeeded"
+      ? "Ready"
+      : job
+        ? "Finished"
+        : "Idle";
+  const jobStatusTone = isRunning ? "review" : job && job.status === "succeeded" ? "allowed" : job ? "blocked" : "review";
+  const runInsight = getDemoRunInsight(job, selectedScenario, selectedAttack, terminalLines, demoMode);
 
   container.innerHTML = `
     <div class="demo-console-grid">
       <div class="runtime-stack">
         <div class="status-line">
-          <span class="status-pill ${isRunning ? "review" : job && job.status === "succeeded" ? "allowed" : "review"}">
-            ${escapeHtml(isRunning ? "Running" : job && job.status === "succeeded" ? "Ready" : "Idle")}
+          <span class="status-pill ${jobStatusTone}">
+            ${escapeHtml(jobStatusLabel)}
           </span>
           <span class="meta-pill">${escapeHtml(state.source.serverAvailable ? "Local runner connected" : "Runner offline")}</span>
           ${job ? `<span class="meta-pill">Job: ${escapeHtml(job.id)}</span>` : ""}
@@ -879,25 +1079,59 @@ function renderDemoConsole() {
 
         <div class="toolbar">
           <label class="field grow">
-            <span>演示场景</span>
-            <select id="demoScenarioSelect" ${!scenarios.length || isRunning ? "disabled" : ""}>
-              ${scenarios.length
-                ? scenarios.map((scenario) => `<option value="${escapeAttribute(scenario.id)}" ${scenario.id === demo.selectedScenarioId ? "selected" : ""}>${escapeHtml(scenario.title)}</option>`).join("")
-                : `<option value="">等待本地服务</option>`}
+            <span>选择框架</span>
+            <select id="demoFrameworkSelect" ${!frameworks.length || isRunning ? "disabled" : ""}>
+              ${frameworks.length
+                ? frameworks.map((framework) => `<option value="${escapeAttribute(framework.id)}" ${framework.id === selectedFrameworkId ? "selected" : ""}>${escapeHtml(framework.label)}（${framework.count}）</option>`).join("")
+                : `<option value="">等待 MAS 扫描</option>`}
+            </select>
+          </label>
+          <label class="field grow">
+            <span>选择场景</span>
+            <select id="demoScenarioSelect" ${!visibleScenarios.length || isRunning ? "disabled" : ""}>
+              ${visibleScenarios.length
+                ? visibleScenarios.map((scenario) => `<option value="${escapeAttribute(scenario.id)}" ${scenario.id === selectedScenario.id ? "selected" : ""}>${escapeHtml(scenario.domainLabel || "场景")} · ${escapeHtml(scenario.framework || "Framework")}</option>`).join("")
+                : `<option value="">该框架下暂无场景</option>`}
             </select>
           </label>
         </div>
 
+        <div class="toolbar">
+          <label class="field grow">
+            <span>选择攻击类型</span>
+            <select id="demoAttackSelect" ${!attackOptions.length || isRunning ? "disabled" : ""}>
+              ${attackOptions.length
+                ? attackOptions.map((attack) => `<option value="${escapeAttribute(attack.id)}" ${selectedAttack && attack.id === selectedAttack.id ? "selected" : ""}>${escapeHtml(attack.label || attack.shortLabel || attack.id)}</option>`).join("")
+                : `<option value="">该场景暂无攻击类型</option>`}
+            </select>
+          </label>
+          <label class="field grow">
+            <span>演示模式</span>
+            <select id="demoModeSelect" ${isRunning ? "disabled" : ""}>
+              <option value="replay" ${demoMode === "replay" ? "selected" : ""}>Replay 稳定演示</option>
+              <option value="live" ${demoMode === "live" ? "selected" : ""}>Live 真实运行 MAS</option>
+            </select>
+          </label>
+        </div>
+
+        ${renderDemoPreflightPanel(selectedScenario, selectedAttack, runInsight, demoMode)}
+
         <div class="demo-scenario-list">
-          ${scenarios.length
-            ? scenarios.map((scenario) => `
-                <button class="demo-scenario-card ${scenario.id === demo.selectedScenarioId ? "is-active" : ""}" type="button" data-demo-scenario="${escapeAttribute(scenario.id)}" ${isRunning ? "disabled" : ""}>
-                  <span class="status-pill ${escapeAttribute(scenario.tone || "review")}">${escapeHtml(scenario.framework || "Demo")}</span>
-                  <strong>${escapeHtml(scenario.title)}</strong>
+          ${visibleScenarios.length
+            ? visibleScenarios.map((scenario) => `
+                <button class="demo-scenario-card ${scenario.id === selectedScenario.id ? "is-active" : ""}" type="button" data-demo-scenario="${escapeAttribute(scenario.id)}" ${isRunning ? "disabled" : ""}>
+                  <span class="status-pill ${escapeAttribute(scenario.tone || "review")}">${escapeHtml(scenario.domainLabel || scenario.framework || "Demo")}</span>
+                  <strong>${escapeHtml(`${scenario.framework || "MAS"} · ${scenario.domainLabel || "场景"}`)}</strong>
                   <p>${escapeHtml(scenario.summary || "")}</p>
+                  <div class="demo-attack-chips">
+                    ${getScenarioAttackOptions(scenario).slice(0, 4).map((attack) => `<span>${escapeHtml(attack.shortLabel || attack.label || attack.id)}</span>`).join("")}
+                    ${getScenarioAttackOptions(scenario).length > 4 ? `<span>+${getScenarioAttackOptions(scenario).length - 4}</span>` : ""}
+                  </div>
+                  <span class="demo-scenario-path">${escapeHtml(scenario.sourcePath || scenario.commandLabel || "")}</span>
+                  ${scenario.requirementsLabel ? `<span class="demo-scenario-path">deps: ${escapeHtml(scenario.requirementsLabel)}</span>` : ""}
                 </button>
               `).join("")
-            : `<div class="empty-state">本地服务启动后会显示可运行的演示场景。</div>`}
+            : `<div class="empty-state">本地服务启动后会扫描 MAS 框架与场景。</div>`}
         </div>
 
         <div class="panel-actions">
@@ -910,9 +1144,13 @@ function renderDemoConsole() {
       </div>
 
       <div class="terminal-shell">
+        ${renderRunVisualPanel(runInsight)}
+        ${renderAgentEvidenceFlow(runInsight)}
+        ${renderDecisionMatrix(runInsight)}
         <div class="terminal-meta">
           <div class="detail-meta">
             <span class="meta-pill">${escapeHtml(selectedScenario ? selectedScenario.commandLabel : "zero-trust demo runner")}</span>
+            ${selectedScenario ? `<span class="meta-pill">${escapeHtml(selectedScenario.framework || "Framework")} / ${escapeHtml(selectedScenario.domainLabel || "Scenario")}</span>` : ""}
             ${job && job.startedAt ? `<span class="meta-pill">Started: ${escapeHtml(job.startedAt)}</span>` : ""}
             ${job && job.finishedAt ? `<span class="meta-pill">Finished: ${escapeHtml(job.finishedAt)}</span>` : ""}
             ${job && job.workflowPath ? `<span class="meta-pill">Workflow JSON generated</span>` : ""}
@@ -931,6 +1169,345 @@ function renderDemoConsole() {
   if (terminal) {
     terminal.scrollTop = terminal.scrollHeight;
   }
+}
+
+function renderDemoPreflightPanel(scenario, attack, insight, demoMode) {
+  const entryMode = state.config.security_core.entry_mode === "api_url" ? "API + URL" : "本地模型";
+  const apiEndpoint = state.config.security_core.entry_mode === "api_url"
+    ? state.config.security_core.endpoint || "待配置 endpoint"
+    : state.config.security_core.local_model_path || "本地模型路径待配置";
+  const cards = [
+    {
+      tone: scenario && scenario.runnable ? "allowed" : "review",
+      label: "脚本入口",
+      value: scenario && scenario.runnable ? "已发现" : "待扫描",
+      detail: scenario ? scenario.commandLabel || scenario.sourcePath || "等待本地服务返回入口。" : "等待选择场景。",
+    },
+    {
+      tone: demoMode === "replay" ? "allowed" : insight.environmentTone,
+      label: "运行模式",
+      value: demoMode === "replay" ? "Replay 稳定演示" : "Live 真实运行",
+      detail: demoMode === "replay"
+        ? "适合组会和客户演示，稳定生成证据链，不依赖外部模型可用性。"
+        : "会真实调用 MAS 脚本；如果缺 API_KEY/BASE_URL/MODEL 或依赖，会在面板里诊断。",
+    },
+    {
+      tone: state.config.security_core.enabled ? "allowed" : "blocked",
+      label: "Security Core",
+      value: state.config.security_core.enabled ? entryMode : "已关闭",
+      detail: state.config.security_core.enabled ? apiEndpoint : "关闭后仅展示审计记录，不执行阻断策略。",
+    },
+    {
+      tone: attack ? attack.tone || "review" : "review",
+      label: "攻击画像",
+      value: attack ? attack.shortLabel || attack.label || attack.id : "未选择",
+      detail: attack ? attack.summary || "前端将展示此攻击对应的风险标签和证据路径。" : "请选择攻击类型。",
+    },
+  ];
+
+  return `
+    <div class="preflight-grid">
+      ${cards.map((card) => `
+        <article class="preflight-card ${escapeAttribute(card.tone)}">
+          <span>${escapeHtml(card.label)}</span>
+          <strong>${escapeHtml(card.value)}</strong>
+          <p>${escapeHtml(card.detail)}</p>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function getDemoRunInsight(job, scenario, attack, lines, demoMode) {
+  const allText = lines.map((line) => line.text || "").join("\n");
+  const missingModuleMatch = allText.match(/ModuleNotFoundError:\s+No module named ['"]([^'"]+)['"]/i);
+  const installLine = lines.find((line) => (line.text || "").startsWith("If this is a dependency issue"));
+  const securityDecisionLine = lines.find((line) => (line.text || "").includes("SecurityCore decision:"));
+  const workflowGenerated = Boolean(job && job.workflowPath) || allText.includes("workflow saved:");
+  const processStarted = Boolean(job) && allText.includes("Python entrypoint:");
+  const requirementsLabel = scenario && scenario.requirementsLabel ? scenario.requirementsLabel : "";
+  const moduleName = missingModuleMatch ? missingModuleMatch[1] : "";
+  const packageName = getPythonPackageName(moduleName);
+  const status = job
+    ? job.status === "running"
+      ? "running"
+      : job.exitCode === 0
+        ? "success"
+        : "failed"
+    : "idle";
+  const decisionText = securityDecisionLine
+    ? securityDecisionLine.text.replace("SecurityCore decision:", "").trim()
+    : workflowGenerated
+      ? "EVIDENCE_READY"
+      : "WAITING";
+  const decisionTone = decisionText.includes("BLOCKED")
+    ? "blocked"
+    : decisionText.includes("ALLOWED")
+      ? "allowed"
+      : "review";
+  const environmentTone = missingModuleMatch ? "blocked" : processStarted ? "allowed" : "review";
+  const environmentValue = missingModuleMatch
+    ? `缺少 ${packageName}`
+    : processStarted
+      ? "运行器已启动"
+      : "等待运行";
+  const environmentDetail = missingModuleMatch
+    ? `Python 环境未安装 ${packageName}，脚本在 import ${moduleName} 时停止。`
+    : requirementsLabel
+      ? `将按 ${requirementsLabel} 校验运行依赖。`
+      : "选择场景后会显示依赖诊断。";
+  const attackRiskTypes = attack && Array.isArray(attack.riskTypes) && attack.riskTypes.length
+    ? attack.riskTypes
+    : scenario && Array.isArray(scenario.riskTypes)
+      ? scenario.riskTypes
+      : [];
+  const riskScore = Number(attack?.riskScore ?? scenario?.riskScore ?? 0);
+  const attackTone = attack?.tone || scenario?.tone || "review";
+  const auditLayer = attack?.auditLayer || scenario?.auditLayer || "SecurityCore";
+
+  return {
+    status,
+    scenario,
+    attack,
+    demoMode,
+    missingModule: moduleName,
+    packageName,
+    installCommand: installLine ? installLine.text.replace("If this is a dependency issue, install:", "").trim() : "",
+    environmentTone,
+    decisionText,
+    decisionTone,
+    workflowGenerated,
+    riskScore,
+    riskTypes: attackRiskTypes,
+    auditLayer,
+    interceptionStage: attack?.interceptionStage || scenario?.interceptionStage || "Policy review",
+    historyFocus: attack?.historyFocus || scenario?.historyFocus || "运行后从 workflow JSON 展示 history 证据。",
+    cards: [
+      {
+        tone: status === "success" ? "allowed" : status === "failed" ? "blocked" : "review",
+        label: "运行实例",
+        value: job ? status === "running" ? "执行中" : status === "success" ? "完成" : "已停止" : "待启动",
+        detail: job ? `Job ${job.id || ""}${Number.isInteger(job.exitCode) ? ` · exit ${job.exitCode}` : ""}` : "点击运行后生成实例。",
+      },
+      {
+        tone: environmentTone,
+        label: "环境诊断",
+        value: environmentValue,
+        detail: environmentDetail,
+      },
+      {
+        tone: attackTone,
+        label: "攻击画像",
+        value: attack ? attack.shortLabel || attack.label || attack.id : "待选择",
+        detail: attack ? `风险分 ${riskScore.toFixed(2)} · ${attackRiskTypes.map(getRiskLabel).join(" / ") || "暂无标签"}` : "选择攻击类型后展示风险标签。",
+      },
+      {
+        tone: decisionTone,
+        label: "SecurityCore",
+        value: decisionText,
+        detail: workflowGenerated ? `经 ${auditLayer} 处理，安全决策已写入 workflow JSON。` : `预计由 ${auditLayer} 处理。`,
+      },
+      {
+        tone: workflowGenerated ? "allowed" : "review",
+        label: "审计证据",
+        value: workflowGenerated ? "JSON 已生成" : "未生成",
+        detail: job && job.workflowPath ? job.workflowPath : "运行后会自动刷新工作流证据。",
+      },
+    ],
+    flow: [
+      { label: "框架", value: scenario ? scenario.framework || "MAS" : "MAS", tone: scenario ? "allowed" : "review" },
+      { label: "场景", value: scenario ? scenario.domainLabel || "Scenario" : "未选择", tone: scenario ? "allowed" : "review" },
+      { label: "攻击", value: attack ? attack.shortLabel || attack.label || attack.id : "未选择", tone: attackTone },
+      { label: demoMode === "replay" ? "Replay" : "Python", value: demoMode === "replay" ? "稳定证据" : processStarted ? "脚本已启动" : "待启动", tone: missingModuleMatch ? "blocked" : processStarted || demoMode === "replay" ? "allowed" : "review" },
+      { label: "审计", value: decisionText, tone: decisionTone },
+      { label: "证据", value: workflowGenerated ? "Workflow JSON" : "等待生成", tone: workflowGenerated ? "allowed" : "review" },
+    ],
+  };
+}
+
+function getPythonPackageName(moduleName) {
+  const mapping = {
+    yaml: "PyYAML",
+    dotenv: "python-dotenv",
+    crewai: "crewai",
+    autogen: "pyautogen",
+    langchain_openai: "langchain-openai",
+    langgraph: "langgraph",
+  };
+  return mapping[moduleName] || moduleName || "依赖包";
+}
+
+function renderRunVisualPanel(insight) {
+  return `
+    <div class="run-visual-panel">
+      <div class="run-visual-head">
+        <div>
+          <p class="panel-kicker">Run Insight</p>
+          <h3>运行实例看板</h3>
+        </div>
+        <span class="status-pill ${escapeAttribute(insight.status === "success" ? "allowed" : insight.status === "failed" ? "blocked" : "review")}">
+          ${escapeHtml(insight.status === "running" ? "实时运行" : insight.status === "success" ? "运行完成" : insight.status === "failed" ? "需要处理" : "等待运行")}
+        </span>
+      </div>
+      <div class="run-insight-grid">
+        ${insight.cards.map(renderRunInsightCard).join("")}
+      </div>
+      <div class="run-flow">
+        ${insight.flow.map((item, index) => `
+          <div class="run-flow-node ${escapeAttribute(item.tone)}">
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${escapeHtml(item.value)}</strong>
+          </div>
+          ${index < insight.flow.length - 1 ? `<div class="run-flow-arrow">→</div>` : ""}
+        `).join("")}
+      </div>
+      ${insight.missingModule
+        ? `<div class="dependency-callout">
+            <strong>依赖缺失：${escapeHtml(insight.packageName)}</strong>
+            <span>当前 Python 运行器缺少模块 <code>${escapeHtml(insight.missingModule)}</code>。安装场景依赖后，脚本才能继续进入 CrewAI/MAS 真实执行阶段。</span>
+            ${insight.installCommand ? `<code>${escapeHtml(insight.installCommand)}</code>` : ""}
+          </div>`
+        : ""}
+    </div>
+  `;
+}
+
+function renderAgentEvidenceFlow(insight) {
+  const scenario = insight.scenario || {};
+  const attack = insight.attack || {};
+  const domain = scenario.domain || "";
+  const actors = getVisualActorsForScenario(domain);
+  const activeStage = getActiveEvidenceStage(attack.id || scenario.attackId || "");
+  const nodes = [
+    { key: "user", label: actors.user, detail: "原始任务", tone: "allowed" },
+    { key: "router", label: actors.router, detail: "路由与意图", tone: activeStage === "router" ? "review" : "allowed" },
+    { key: "agent", label: actors.agent, detail: "Agent 执行", tone: activeStage === "agent" ? "review" : "allowed" },
+    { key: "tool", label: actors.tool, detail: "敏感工具", tone: activeStage === "tool" ? "blocked" : "review" },
+    { key: "security", label: "SecurityCore", detail: insight.auditLayer || "策略审核", tone: insight.decisionTone || "review" },
+    { key: "evidence", label: "AuditLogger", detail: insight.workflowGenerated ? "证据已落盘" : "等待 JSON", tone: insight.workflowGenerated ? "allowed" : "review" },
+  ];
+
+  return `
+    <section class="agent-flow-card">
+      <div class="run-visual-head">
+        <div>
+          <p class="panel-kicker">Evidence Flow</p>
+          <h3>Agent 证据链</h3>
+        </div>
+        <span class="meta-pill">${escapeHtml(insight.interceptionStage || "Policy review")}</span>
+      </div>
+      <div class="agent-flow-line">
+        ${nodes.map((node, index) => `
+          <article class="agent-flow-node ${escapeAttribute(node.tone)} ${node.key === activeStage ? "is-hot" : ""}">
+            <span>${escapeHtml(node.detail)}</span>
+            <strong>${escapeHtml(node.label)}</strong>
+          </article>
+          ${index < nodes.length - 1 ? `<div class="agent-flow-arrow">→</div>` : ""}
+        `).join("")}
+      </div>
+      <p class="runtime-note">${escapeHtml(insight.historyFocus || "运行后会把关键 history、call_path 和风险标签写入 workflow JSON。")}</p>
+    </section>
+  `;
+}
+
+function renderDecisionMatrix(insight) {
+  const rows = [
+    {
+      label: "RuleEngine",
+      value: insight.riskTypes.some((tag) => ["missing_required_path_node", "path_rule_violation", "unauthorized_tool_caller", "blocked_tool"].includes(tag))
+        ? "命中结构性规则"
+        : "未命中硬规则",
+      detail: insight.riskTypes.map(getRiskLabel).join(" / ") || "等待运行结果",
+      tone: insight.riskTypes.length ? "blocked" : "review",
+    },
+    {
+      label: "LLMReviewer",
+      value: insight.auditLayer && insight.auditLayer.includes("LLM") ? "需要语义复核" : "按策略路由",
+      detail: insight.interceptionStage || "Policy review",
+      tone: insight.auditLayer && insight.auditLayer.includes("LLM") ? "review" : "allowed",
+    },
+    {
+      label: "History Window",
+      value: insight.historyFocus ? "保留上下文证据" : "等待上下文",
+      detail: insight.historyFocus || "运行后展示 message history。",
+      tone: insight.attack && ["ipi", "prompt_infection", "aitm"].includes(insight.attack.id) ? "blocked" : "review",
+    },
+    {
+      label: "Workflow JSON",
+      value: insight.workflowGenerated ? "已生成" : "未生成",
+      detail: insight.workflowGenerated ? "可切到“工作流审计”查看事件时间线和 history 窗口。" : "运行后自动生成并刷新。",
+      tone: insight.workflowGenerated ? "allowed" : "review",
+    },
+  ];
+
+  return `
+    <section class="decision-matrix-card">
+      <div class="run-visual-head">
+        <div>
+          <p class="panel-kicker">Decision Matrix</p>
+          <h3>为什么拦截</h3>
+        </div>
+        <span class="status-pill ${escapeAttribute(insight.decisionTone || "review")}">${escapeHtml(insight.decisionText || "WAITING")}</span>
+      </div>
+      <div class="decision-matrix-grid">
+        ${rows.map((row) => `
+          <article class="decision-matrix-row ${escapeAttribute(row.tone)}">
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(row.value)}</strong>
+            <p>${escapeHtml(row.detail)}</p>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function getVisualActorsForScenario(domain) {
+  if (domain === "healthcare") {
+    return {
+      user: "PatientProxy",
+      router: "Triage_Agent",
+      agent: "Records_Agent",
+      tool: "Patient Tool",
+    };
+  }
+  if (domain === "trading") {
+    return {
+      user: "Operator",
+      router: "Research_Agent",
+      agent: "Risk_Agent",
+      tool: "Trade Tool",
+    };
+  }
+  return {
+    user: "MerchantUser",
+    router: "Stats_Agent",
+    agent: "Config_Agent",
+    tool: "Shop Tool",
+  };
+}
+
+function getActiveEvidenceStage(attackId) {
+  if (["path_bypass", "caller_impersonation"].includes(attackId)) {
+    return "tool";
+  }
+  if (["semantic_injection", "route_hijack"].includes(attackId)) {
+    return "router";
+  }
+  if (["ipi", "aitm", "prompt_infection"].includes(attackId)) {
+    return "agent";
+  }
+  return "security";
+}
+
+function renderRunInsightCard(card) {
+  return `
+    <article class="run-insight-card ${escapeAttribute(card.tone)}">
+      <span>${escapeHtml(card.label)}</span>
+      <strong>${escapeHtml(card.value)}</strong>
+      <p>${escapeHtml(card.detail)}</p>
+    </article>
+  `;
 }
 
 function renderTerminalLine(line) {
@@ -1637,6 +2214,8 @@ function focusFirstBlockedWorkflow() {
   state.filters.workflowFramework = "all";
   state.filters.workflowStatus = "all";
   state.activeWorkflowId = blocked.id;
+  activeView = "audit";
+  saveActiveView();
   renderAll();
   persistState();
   const detail = document.getElementById("workflowDetail");
@@ -1704,15 +2283,27 @@ async function loadDemoScenarios(options = {}) {
   try {
     const payload = await fetchJson(`${getApiBase()}/api/demo/scenarios`);
     const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : [];
+    const frameworks = Array.isArray(payload.frameworks) ? payload.frameworks : [];
+    state.demoConsole.frameworks = frameworks;
     state.demoConsole.scenarios = scenarios;
-    if (!scenarios.find((scenario) => scenario.id === state.demoConsole.selectedScenarioId)) {
-      state.demoConsole.selectedScenarioId = scenarios[0] ? scenarios[0].id : "";
+    const frameworkOptions = getDemoFrameworkOptions(state.demoConsole, scenarios);
+    if (!frameworkOptions.find((framework) => framework.id === state.demoConsole.selectedFrameworkId)) {
+      state.demoConsole.selectedFrameworkId = frameworkOptions[0] ? frameworkOptions[0].id : "";
     }
+    if (!scenarios.find((scenario) => scenario.id === state.demoConsole.selectedScenarioId)) {
+      state.demoConsole.selectedScenarioId = getFirstScenarioIdForFramework(state.demoConsole.selectedFrameworkId);
+    }
+    const selectedScenario = scenarios.find((scenario) => scenario.id === state.demoConsole.selectedScenarioId);
+    if (selectedScenario && getDemoScenarioFrameworkId(selectedScenario) !== state.demoConsole.selectedFrameworkId) {
+      state.demoConsole.selectedScenarioId = getFirstScenarioIdForFramework(state.demoConsole.selectedFrameworkId);
+    }
+    syncSelectedAttackWithScenario();
     state.demoConsole.error = "";
     state.demoConsole.lastMessage = scenarios.length
-      ? "演示运行器已就绪。"
+      ? "MAS 演示运行器已就绪。"
       : "本地服务未返回演示场景。";
   } catch (error) {
+    state.demoConsole.frameworks = [];
     state.demoConsole.scenarios = [];
     state.demoConsole.error = silent ? "" : `演示运行器不可用：${error.message}`;
     state.demoConsole.lastMessage = "当前服务尚未提供页面运行接口。";
@@ -1733,13 +2324,15 @@ async function runSelectedDemo() {
     await loadDemoScenarios();
   }
 
-  const selectedScenarioId = state.demoConsole.selectedScenarioId;
+  const selectedScenarioId = state.demoConsole.selectedScenarioId
+    || getFirstScenarioIdForFramework(state.demoConsole.selectedFrameworkId);
   if (!selectedScenarioId) {
     state.demoConsole.error = "请先选择一个演示场景。";
     renderAll();
     persistState();
     return;
   }
+  state.demoConsole.selectedScenarioId = selectedScenarioId;
 
   state.demoConsole.loading = true;
   state.demoConsole.error = "";
@@ -1748,7 +2341,11 @@ async function runSelectedDemo() {
   try {
     const payload = await fetchJson(`${getApiBase()}/api/demo/run`, {
       method: "POST",
-      body: JSON.stringify({ scenarioId: selectedScenarioId }),
+      body: JSON.stringify({
+        scenarioId: selectedScenarioId,
+        attackId: state.demoConsole.selectedAttackId,
+        demoMode: state.demoConsole.demoMode === "live" ? "live" : "replay",
+      }),
     });
     state.demoConsole.job = payload.job || null;
     state.demoConsole.activeJobId = state.demoConsole.job ? state.demoConsole.job.id : "";
@@ -1803,7 +2400,7 @@ async function pollDemoJob() {
     clearDemoJobPolling();
     state.demoConsole.lastMessage = job.status === "succeeded"
       ? "演示完成，已生成 workflow JSON 并刷新证据视图。"
-      : "演示运行结束，请查看终端输出。";
+      : "真实脚本已结束，终端输出和 workflow 审计证据已生成。";
 
     if (job.workflowDir) {
       state.source.mode = "filesystem";
@@ -2240,7 +2837,10 @@ function syncFilterControls() {
     workflowDirSelect: state.source.selectedWorkflowDir,
     autoRefreshToggle: state.source.autoRefreshEnabled,
     autoRefreshIntervalSelect: String(state.source.autoRefreshIntervalMs),
+    demoFrameworkSelect: state.demoConsole.selectedFrameworkId,
     demoScenarioSelect: state.demoConsole.selectedScenarioId,
+    demoAttackSelect: state.demoConsole.selectedAttackId,
+    demoModeSelect: state.demoConsole.demoMode,
   };
 
   Object.entries(mappings).forEach(([id, value]) => {
@@ -2352,12 +2952,33 @@ function normalizeState() {
   if (!state.demoConsole || typeof state.demoConsole !== "object") {
     state.demoConsole = createDefaultState().demoConsole;
   }
+  state.demoConsole.frameworks = Array.isArray(state.demoConsole.frameworks)
+    ? state.demoConsole.frameworks.filter((item) => item && typeof item === "object")
+    : [];
   state.demoConsole.scenarios = Array.isArray(state.demoConsole.scenarios)
     ? state.demoConsole.scenarios.filter((item) => item && typeof item === "object")
     : [];
+  state.demoConsole.selectedFrameworkId = typeof state.demoConsole.selectedFrameworkId === "string"
+    ? state.demoConsole.selectedFrameworkId
+    : "";
   state.demoConsole.selectedScenarioId = typeof state.demoConsole.selectedScenarioId === "string"
     ? state.demoConsole.selectedScenarioId
     : "";
+  state.demoConsole.selectedAttackId = typeof state.demoConsole.selectedAttackId === "string"
+    ? state.demoConsole.selectedAttackId
+    : "path_bypass";
+  state.demoConsole.demoMode = state.demoConsole.demoMode === "live" ? "live" : "replay";
+  const frameworkOptions = getDemoFrameworkOptions(state.demoConsole, state.demoConsole.scenarios);
+  if (frameworkOptions.length && !frameworkOptions.find((framework) => framework.id === state.demoConsole.selectedFrameworkId)) {
+    state.demoConsole.selectedFrameworkId = frameworkOptions[0].id;
+  }
+  if (state.demoConsole.selectedFrameworkId && state.demoConsole.scenarios.length) {
+    const selectedScenario = state.demoConsole.scenarios.find((scenario) => scenario.id === state.demoConsole.selectedScenarioId);
+    if (!selectedScenario || getDemoScenarioFrameworkId(selectedScenario) !== state.demoConsole.selectedFrameworkId) {
+      state.demoConsole.selectedScenarioId = getFirstScenarioIdForFramework(state.demoConsole.selectedFrameworkId);
+    }
+  }
+  syncSelectedAttackWithScenario();
   state.demoConsole.activeJobId = typeof state.demoConsole.activeJobId === "string"
     ? state.demoConsole.activeJobId
     : "";
