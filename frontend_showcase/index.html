@@ -32,35 +32,41 @@
       </div>
     </header>
 
-    <nav class="section-nav reveal is-visible" aria-label="展示模块导航">
-      <button class="section-nav-button is-active" type="button" data-view-target="overview">
-        <span>总览</span>
-        <small>Overview</small>
-      </button>
-      <button class="section-nav-button" type="button" data-view-target="runtime">
-        <span>数据接入</span>
-        <small>Runtime</small>
-      </button>
-      <button class="section-nav-button" type="button" data-view-target="demo">
-        <span>动态演示</span>
-        <small>Demo</small>
-      </button>
-      <button class="section-nav-button" type="button" data-view-target="audit">
-        <span>工作流审计</span>
-        <small>Audit</small>
-      </button>
-      <button class="section-nav-button" type="button" data-view-target="policy">
-        <span>策略配置</span>
-        <small>YAML</small>
-      </button>
-      <button class="section-nav-button" type="button" data-view-target="logs">
-        <span>日志</span>
-        <small>Logs</small>
-      </button>
-      <button class="section-nav-button" type="button" data-view-target="mapping">
-        <span>仓库映射</span>
-        <small>Mapping</small>
-      </button>
+    <nav class="navigation-shell reveal is-visible" aria-label="展示模块导航">
+      <div class="primary-nav" aria-label="核心模块">
+        <button class="section-nav-button is-active" type="button" data-view-target="overview" data-nav-group="overview">
+          <span>总览</span>
+          <small>Overview</small>
+        </button>
+        <button class="section-nav-button" type="button" data-view-target="demo" data-nav-group="demo">
+          <span>动态演示</span>
+          <small>Demo</small>
+        </button>
+        <button class="section-nav-button" type="button" data-view-target="audit" data-nav-group="audit">
+          <span>工作流审计</span>
+          <small>Audit</small>
+        </button>
+        <button class="section-nav-button" type="button" data-view-target="runtime" data-nav-group="settings">
+          <span>设置与日志</span>
+          <small>Settings</small>
+        </button>
+      </div>
+
+      <div class="secondary-nav" data-secondary-nav="settings" aria-label="设置与日志二级导航" hidden>
+        <span class="secondary-nav-label">Settings / Observability</span>
+        <button class="secondary-nav-button" type="button" data-view-target="runtime" data-nav-group="settings">
+          数据接入
+        </button>
+        <button class="secondary-nav-button" type="button" data-view-target="policy" data-nav-group="settings">
+          策略配置
+        </button>
+        <button class="secondary-nav-button" type="button" data-view-target="logs" data-nav-group="settings">
+          日志
+        </button>
+        <button class="secondary-nav-button" type="button" data-view-target="mapping" data-nav-group="settings">
+          仓库映射
+        </button>
+      </div>
     </nav>
 
     <header class="hero hero-shell reveal" data-view-panel="overview">

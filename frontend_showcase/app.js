@@ -26,7 +26,9 @@ const STATUS_META = {
 
 const GLASS_REACTIVE_SELECTOR = [
   ".site-header",
+  ".navigation-shell",
   ".section-nav",
+  ".secondary-nav",
   ".hero",
   ".panel",
   ".subpanel",
@@ -50,6 +52,15 @@ const DEFAULT_SERVER_ORIGIN = "http://127.0.0.1:48317";
 const STORAGE_KEY = "zero-trust-frontend-showcase-state";
 const VIEW_STORAGE_KEY = "zero-trust-frontend-showcase-active-view";
 const DEFAULT_VIEW = "overview";
+const VIEW_GROUPS = {
+  overview: "overview",
+  demo: "demo",
+  audit: "audit",
+  runtime: "settings",
+  policy: "settings",
+  logs: "settings",
+  mapping: "settings",
+};
 let activeGlassElement = null;
 let activeView = loadActiveView();
 
@@ -755,6 +766,10 @@ function setActiveView(viewId, options = {}) {
   }
 }
 
+function getViewGroup(viewId) {
+  return VIEW_GROUPS[viewId] || viewId || DEFAULT_VIEW;
+}
+
 function syncViewNavigation() {
   const panels = Array.from(document.querySelectorAll("[data-view-panel]"));
   const hasActivePanel = panels.some((panel) => panel.dataset.viewPanel === activeView);
@@ -762,6 +777,7 @@ function syncViewNavigation() {
     activeView = DEFAULT_VIEW;
     saveActiveView();
   }
+  const activeGroup = getViewGroup(activeView);
 
   panels.forEach((panel) => {
     const isActive = panel.dataset.viewPanel === activeView;
@@ -773,9 +789,19 @@ function syncViewNavigation() {
   });
 
   document.querySelectorAll("[data-view-target]").forEach((button) => {
-    const isActive = button.dataset.viewTarget === activeView;
+    const isPrimary = Boolean(button.closest(".primary-nav"));
+    const buttonGroup = button.dataset.navGroup || getViewGroup(button.dataset.viewTarget);
+    const isActive = isPrimary
+      ? buttonGroup === activeGroup
+      : button.dataset.viewTarget === activeView;
     button.classList.toggle("is-active", isActive);
     button.setAttribute("aria-current", isActive ? "page" : "false");
+  });
+
+  document.querySelectorAll("[data-secondary-nav]").forEach((nav) => {
+    const isVisible = nav.dataset.secondaryNav === activeGroup;
+    nav.hidden = !isVisible;
+    nav.classList.toggle("is-visible", isVisible);
   });
 }
 
@@ -1114,25 +1140,39 @@ function renderDemoConsole() {
           </label>
         </div>
 
-        ${renderDemoPreflightPanel(selectedScenario, selectedAttack, runInsight, demoMode)}
+        ${renderDemoPathStrip(selectedScenario, selectedAttack, demoMode)}
 
-        <div class="demo-scenario-list">
-          ${visibleScenarios.length
-            ? visibleScenarios.map((scenario) => `
-                <button class="demo-scenario-card ${scenario.id === selectedScenario.id ? "is-active" : ""}" type="button" data-demo-scenario="${escapeAttribute(scenario.id)}" ${isRunning ? "disabled" : ""}>
-                  <span class="status-pill ${escapeAttribute(scenario.tone || "review")}">${escapeHtml(scenario.domainLabel || scenario.framework || "Demo")}</span>
-                  <strong>${escapeHtml(`${scenario.framework || "MAS"} · ${scenario.domainLabel || "场景"}`)}</strong>
-                  <p>${escapeHtml(scenario.summary || "")}</p>
-                  <div class="demo-attack-chips">
-                    ${getScenarioAttackOptions(scenario).slice(0, 4).map((attack) => `<span>${escapeHtml(attack.shortLabel || attack.label || attack.id)}</span>`).join("")}
-                    ${getScenarioAttackOptions(scenario).length > 4 ? `<span>+${getScenarioAttackOptions(scenario).length - 4}</span>` : ""}
-                  </div>
-                  <span class="demo-scenario-path">${escapeHtml(scenario.sourcePath || scenario.commandLabel || "")}</span>
-                  ${scenario.requirementsLabel ? `<span class="demo-scenario-path">deps: ${escapeHtml(scenario.requirementsLabel)}</span>` : ""}
-                </button>
-              `).join("")
-            : `<div class="empty-state">本地服务启动后会扫描 MAS 框架与场景。</div>`}
-        </div>
+        <details class="progressive-panel">
+          <summary>
+            <span>运行前检查与攻击画像</span>
+            <small>脚本入口、模型入口、依赖/API 提示</small>
+          </summary>
+          ${renderDemoPreflightPanel(selectedScenario, selectedAttack, runInsight, demoMode)}
+        </details>
+
+        <details class="progressive-panel">
+          <summary>
+            <span>展开场景库</span>
+            <small>${escapeHtml(visibleScenarios.length ? `${visibleScenarios.length} 个 ${frameworks.find((item) => item.id === selectedFrameworkId)?.label || "MAS"} 场景` : "等待扫描")}</small>
+          </summary>
+          <div class="demo-scenario-list">
+            ${visibleScenarios.length
+              ? visibleScenarios.map((scenario) => `
+                  <button class="demo-scenario-card ${scenario.id === selectedScenario.id ? "is-active" : ""}" type="button" data-demo-scenario="${escapeAttribute(scenario.id)}" ${isRunning ? "disabled" : ""}>
+                    <span class="status-pill ${escapeAttribute(scenario.tone || "review")}">${escapeHtml(scenario.domainLabel || scenario.framework || "Demo")}</span>
+                    <strong>${escapeHtml(`${scenario.framework || "MAS"} · ${scenario.domainLabel || "场景"}`)}</strong>
+                    <p>${escapeHtml(scenario.summary || "")}</p>
+                    <div class="demo-attack-chips">
+                      ${getScenarioAttackOptions(scenario).slice(0, 4).map((attack) => `<span>${escapeHtml(attack.shortLabel || attack.label || attack.id)}</span>`).join("")}
+                      ${getScenarioAttackOptions(scenario).length > 4 ? `<span>+${getScenarioAttackOptions(scenario).length - 4}</span>` : ""}
+                    </div>
+                    <span class="demo-scenario-path">${escapeHtml(scenario.sourcePath || scenario.commandLabel || "")}</span>
+                    ${scenario.requirementsLabel ? `<span class="demo-scenario-path">deps: ${escapeHtml(scenario.requirementsLabel)}</span>` : ""}
+                  </button>
+                `).join("")
+              : `<div class="empty-state">本地服务启动后会扫描 MAS 框架与场景。</div>`}
+          </div>
+        </details>
 
         <div class="panel-actions">
           <button class="button primary" id="runDemoBtn" type="button" ${canRun ? "" : "disabled"}>${isRunning ? "运行中..." : "运行演示"}</button>
@@ -1147,20 +1187,26 @@ function renderDemoConsole() {
         ${renderRunVisualPanel(runInsight)}
         ${renderAgentEvidenceFlow(runInsight)}
         ${renderDecisionMatrix(runInsight)}
-        <div class="terminal-meta">
-          <div class="detail-meta">
-            <span class="meta-pill">${escapeHtml(selectedScenario ? selectedScenario.commandLabel : "zero-trust demo runner")}</span>
-            ${selectedScenario ? `<span class="meta-pill">${escapeHtml(selectedScenario.framework || "Framework")} / ${escapeHtml(selectedScenario.domainLabel || "Scenario")}</span>` : ""}
-            ${job && job.startedAt ? `<span class="meta-pill">Started: ${escapeHtml(job.startedAt)}</span>` : ""}
-            ${job && job.finishedAt ? `<span class="meta-pill">Finished: ${escapeHtml(job.finishedAt)}</span>` : ""}
-            ${job && job.workflowPath ? `<span class="meta-pill">Workflow JSON generated</span>` : ""}
+        <details class="progressive-panel terminal-progressive" ${isRunning || (job && job.status === "failed") ? "open" : ""}>
+          <summary>
+            <span>原始终端输出</span>
+            <small>${escapeHtml(terminalLines.length ? `${terminalLines.length} 行 stdout/stderr` : "默认隐藏，必要时展开排查")}</small>
+          </summary>
+          <div class="terminal-meta">
+            <div class="detail-meta">
+              <span class="meta-pill">${escapeHtml(selectedScenario ? selectedScenario.commandLabel : "zero-trust demo runner")}</span>
+              ${selectedScenario ? `<span class="meta-pill">${escapeHtml(selectedScenario.framework || "Framework")} / ${escapeHtml(selectedScenario.domainLabel || "Scenario")}</span>` : ""}
+              ${job && job.startedAt ? `<span class="meta-pill">Started: ${escapeHtml(job.startedAt)}</span>` : ""}
+              ${job && job.finishedAt ? `<span class="meta-pill">Finished: ${escapeHtml(job.finishedAt)}</span>` : ""}
+              ${job && job.workflowPath ? `<span class="meta-pill">Workflow JSON generated</span>` : ""}
+            </div>
           </div>
-        </div>
-        <div class="terminal-output" id="demoTerminalOutput">
-          ${terminalLines.length
-            ? terminalLines.map(renderTerminalLine).join("")
-            : `<div class="terminal-placeholder">zero-trust@local:~$ 选择场景后点击“运行演示”，这里会显示项目运行输出。</div>`}
-        </div>
+          <div class="terminal-output" id="demoTerminalOutput">
+            ${terminalLines.length
+              ? terminalLines.map(renderTerminalLine).join("")
+              : `<div class="terminal-placeholder">zero-trust@local:~$ 选择场景后点击“运行演示”，这里会显示项目运行输出。</div>`}
+          </div>
+        </details>
       </div>
     </div>
   `;
@@ -1171,9 +1217,41 @@ function renderDemoConsole() {
   }
 }
 
+function renderDemoPathStrip(scenario, attack, demoMode) {
+  const items = [
+    {
+      label: "框架",
+      value: scenario ? scenario.framework || "MAS" : "未选择",
+    },
+    {
+      label: "领域",
+      value: scenario ? scenario.domainLabel || "场景" : "未选择",
+    },
+    {
+      label: "攻击",
+      value: attack ? attack.shortLabel || attack.label || attack.id : "未选择",
+    },
+    {
+      label: "模式",
+      value: demoMode === "live" ? "Live 真实运行" : "Replay 稳定演示",
+    },
+  ];
+
+  return `
+    <section class="demo-path-strip" aria-label="当前演示路径">
+      ${items.map((item) => `
+        <article>
+          <span>${escapeHtml(item.label)}</span>
+          <strong>${escapeHtml(item.value)}</strong>
+        </article>
+      `).join("")}
+    </section>
+  `;
+}
+
 function renderDemoPreflightPanel(scenario, attack, insight, demoMode) {
-  const entryMode = state.config.security_core.entry_mode === "api_url" ? "API + URL" : "本地模型";
-  const apiEndpoint = state.config.security_core.entry_mode === "api_url"
+  const entryMode = state.config.security_core.entry_mode === "api_gateway" ? "API + URL" : "本地模型";
+  const apiEndpoint = state.config.security_core.entry_mode === "api_gateway"
     ? state.config.security_core.endpoint || "待配置 endpoint"
     : state.config.security_core.local_model_path || "本地模型路径待配置";
   const cards = [
@@ -1689,12 +1767,13 @@ function renderWorkflowDetail() {
         </div>
       </section>
 
-      <section class="detail-callout">
-        <div class="subpanel-head">
-          <h3>事件时间线</h3>
-        </div>
+      <details class="progressive-panel detail-progressive">
+        <summary>
+          <span>事件时间线与工具细节</span>
+          <small>${escapeHtml(`${workflow.events.length} 个事件，默认隐藏原始调用细节`)}</small>
+        </summary>
         <div class="timeline">${eventTimeline}</div>
-      </section>
+      </details>
     </div>
   `;
 }
