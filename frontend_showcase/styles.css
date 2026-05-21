@@ -2,8 +2,8 @@
   color-scheme: light;
   --bg: #f5f5f7;
   --bg-top: #ffffff;
-  --surface: rgba(255, 255, 255, 0.78);
-  --surface-strong: rgba(255, 255, 255, 0.94);
+  --surface: #ffffff;
+  --surface-strong: #ffffff;
   --surface-soft: rgba(0, 0, 0, 0.035);
   --surface-alt: rgba(0, 0, 0, 0.055);
   --line: rgba(29, 29, 31, 0.1);
@@ -25,9 +25,9 @@
   --select-bg-selected: #0071e3;
   --select-text: #1d1d1f;
   --select-muted: #86868b;
-  --shadow-lg: 0 28px 90px rgba(0, 0, 0, 0.16);
-  --shadow-md: 0 16px 44px rgba(0, 0, 0, 0.1);
-  --glass-shadow: 0 20px 60px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.06);
+  --glass-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
   --radius-xl: 28px;
   --radius-lg: 20px;
   --radius-md: 16px;
@@ -75,20 +75,19 @@ html {
 }
 
 body {
-  --scene-pointer-x: 50%;
-  --scene-pointer-y: 36%;
   margin: 0;
   min-height: 100vh;
   font-family: var(--font-main);
   font-size: 17px;
   line-height: 1.55;
   color: var(--text);
-  background:
-    radial-gradient(circle at var(--scene-pointer-x) var(--scene-pointer-y), rgba(0, 113, 227, 0.08) 0%, transparent 21%),
-    radial-gradient(circle at 84% 10%, rgba(255, 149, 92, 0.08) 0%, transparent 18%),
-    radial-gradient(circle at 16% 16%, rgba(94, 92, 230, 0.08) 0%, transparent 22%),
-    linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 52%, #ffffff 100%);
+  background: #f5f5f7;
   overflow-x: hidden;
+}
+
+body[data-locale="zh"] .locale-en,
+body[data-locale="en"] .locale-zh {
+  display: none !important;
 }
 
 button,
@@ -134,9 +133,7 @@ select option:disabled {
 .nebula,
 .galaxy-flow,
 .dust-stream {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
+  display: none;
 }
 
 .starfield {
@@ -575,6 +572,34 @@ select option:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.locale-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: #f5f5f7;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.locale-button {
+  appearance: none;
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.locale-button.is-active {
+  background: #ffffff;
+  color: var(--text);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .brand-lockup {
@@ -1742,6 +1767,160 @@ select option:disabled {
   opacity: 1;
   transform: translateY(0);
   transition: opacity 520ms ease, transform 520ms ease;
+}
+
+/* Store-light visual direction: white cards, no glass or space effects. */
+body[data-theme="store-light"] .site-header,
+body[data-theme="store-light"] .navigation-shell,
+body[data-theme="store-light"] .hero,
+body[data-theme="store-light"] .panel,
+body[data-theme="store-light"] .subpanel,
+body[data-theme="store-light"] .metric-card,
+body[data-theme="store-light"] .workflow-card,
+body[data-theme="store-light"] .log-entry,
+body[data-theme="store-light"] .source-card,
+body[data-theme="store-light"] .entity-card,
+body[data-theme="store-light"] .history-row,
+body[data-theme="store-light"] .timeline-card,
+body[data-theme="store-light"] .telemetry-card,
+body[data-theme="store-light"] .hero-panel,
+body[data-theme="store-light"] .security-summary-card,
+body[data-theme="store-light"] .preflight-card,
+body[data-theme="store-light"] .agent-flow-card,
+body[data-theme="store-light"] .decision-matrix-card,
+body[data-theme="store-light"] .progressive-panel {
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.055);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+body[data-theme="store-light"] .site-header::before,
+body[data-theme="store-light"] .navigation-shell::before,
+body[data-theme="store-light"] .hero::before,
+body[data-theme="store-light"] .panel::before,
+body[data-theme="store-light"] .subpanel::before,
+body[data-theme="store-light"] .metric-card::before,
+body[data-theme="store-light"] .workflow-card::before,
+body[data-theme="store-light"] .log-entry::before,
+body[data-theme="store-light"] .source-card::before,
+body[data-theme="store-light"] .entity-card::before,
+body[data-theme="store-light"] .history-row::before,
+body[data-theme="store-light"] .timeline-card::before,
+body[data-theme="store-light"] .telemetry-card::before,
+body[data-theme="store-light"] .hero-panel::before,
+body[data-theme="store-light"] .security-summary-card::before,
+body[data-theme="store-light"] .preflight-card::before,
+body[data-theme="store-light"] .agent-flow-card::before,
+body[data-theme="store-light"] .decision-matrix-card::before,
+body[data-theme="store-light"] .site-header::after,
+body[data-theme="store-light"] .navigation-shell::after,
+body[data-theme="store-light"] .hero::after,
+body[data-theme="store-light"] .panel::after,
+body[data-theme="store-light"] .subpanel::after,
+body[data-theme="store-light"] .metric-card::after,
+body[data-theme="store-light"] .workflow-card::after,
+body[data-theme="store-light"] .log-entry::after,
+body[data-theme="store-light"] .source-card::after,
+body[data-theme="store-light"] .entity-card::after,
+body[data-theme="store-light"] .history-row::after,
+body[data-theme="store-light"] .timeline-card::after,
+body[data-theme="store-light"] .telemetry-card::after,
+body[data-theme="store-light"] .hero-panel::after,
+body[data-theme="store-light"] .security-summary-card::after {
+  display: none;
+}
+
+body[data-theme="store-light"] .is-glass-active {
+  transform: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.055);
+}
+
+body[data-theme="store-light"] .page-shell {
+  width: min(1440px, calc(100% - 40px));
+}
+
+body[data-theme="store-light"] .site-header,
+body[data-theme="store-light"] .navigation-shell {
+  border-radius: 22px;
+}
+
+body[data-theme="store-light"] .hero {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 24px 8px 18px;
+}
+
+body[data-theme="store-light"] .hero h1 {
+  max-width: 12ch;
+  font-size: clamp(50px, 6vw, 82px);
+  line-height: 1.04;
+}
+
+body[data-theme="store-light"] .hero-store-card {
+  display: grid;
+  align-content: center;
+  gap: 16px;
+  min-height: 330px;
+  padding: 34px;
+  border-radius: 30px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.07);
+}
+
+body[data-theme="store-light"] .hero-store-card strong {
+  display: block;
+  font-size: clamp(28px, 3vw, 44px);
+  line-height: 1.12;
+}
+
+body[data-theme="store-light"] .hero-store-card ol {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--muted);
+}
+
+body[data-theme="store-light"] .navigation-shell {
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+}
+
+body[data-theme="store-light"] .section-nav-button.is-active {
+  color: #ffffff;
+  background: #1d1d1f;
+  border-color: #1d1d1f;
+}
+
+body[data-theme="store-light"] .secondary-nav {
+  background: #f5f5f7;
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+body[data-theme="store-light"] .secondary-nav-button {
+  background: #ffffff;
+}
+
+body[data-theme="store-light"] .button.primary {
+  background: #0071e3;
+}
+
+body[data-theme="store-light"] .button.secondary,
+body[data-theme="store-light"] .button.tertiary {
+  background: #ffffff;
+}
+
+body[data-theme="store-light"] .run-visual-panel {
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.055);
+}
+
+body[data-theme="store-light"] .yaml-preview {
+  background: #ffffff;
 }
 
 @keyframes viewPanelIn {

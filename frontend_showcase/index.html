@@ -3,57 +3,78 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Zero Trust Frontend Showcase</title>
+  <title>零信任前端展示台</title>
   <link rel="stylesheet" href="styles.css">
 </head>
-<body data-theme="apple-nasa-hybrid">
-  <div class="starfield"></div>
-  <div class="cosmic-haze"></div>
-  <div class="nebula nebula-a"></div>
-  <div class="nebula nebula-b"></div>
-  <div class="nebula nebula-c"></div>
-  <div class="galaxy-flow galaxy-flow-a"></div>
-  <div class="galaxy-flow galaxy-flow-b"></div>
-  <div class="dust-stream dust-stream-a"></div>
-  <div class="dust-stream dust-stream-b"></div>
+<body data-theme="store-light" data-locale="zh">
 
   <div class="page-shell">
     <header class="site-header reveal">
       <div class="brand-lockup">
         <div class="brand-mark">ZT</div>
         <div>
-          <p class="eyebrow">Zero Trust Mission Console</p>
-          <strong>Local Frontend Showcase</strong>
+          <p class="eyebrow">
+            <span class="locale-zh">零信任审计展示台</span>
+            <span class="locale-en">Zero Trust Audit Showcase</span>
+          </p>
+          <strong>
+            <span class="locale-zh">多智能体安全演示</span>
+            <span class="locale-en">Multi-Agent Security Demo</span>
+          </strong>
         </div>
       </div>
 
       <div class="site-header-actions">
-        <span class="status-pill allowed">Local Demo Ready</span>
+        <div class="locale-switch" aria-label="语言切换">
+          <button class="locale-button is-active" type="button" data-locale-option="zh">
+            <span class="locale-zh">中文</span>
+            <span class="locale-en">Chinese</span>
+          </button>
+          <button class="locale-button" type="button" data-locale-option="en">
+            <span class="locale-zh">英文</span>
+            <span class="locale-en">English</span>
+          </button>
+        </div>
+        <span class="status-pill allowed">
+          <span class="locale-zh">本地演示已就绪</span>
+          <span class="locale-en">Local Demo Ready</span>
+        </span>
       </div>
     </header>
 
     <nav class="navigation-shell reveal is-visible" aria-label="展示模块导航">
       <div class="primary-nav" aria-label="核心模块">
         <button class="section-nav-button is-active" type="button" data-view-target="overview" data-nav-group="overview">
-          <span>总览</span>
-          <small>Overview</small>
+          <span class="locale-zh">总览</span>
+          <span class="locale-en">Overview</span>
+          <small class="locale-zh">项目介绍</small>
+          <small class="locale-en">Overview</small>
         </button>
         <button class="section-nav-button" type="button" data-view-target="demo" data-nav-group="demo">
-          <span>动态演示</span>
-          <small>Demo</small>
+          <span class="locale-zh">动态演示</span>
+          <span class="locale-en">Demo</span>
+          <small class="locale-zh">运行场景</small>
+          <small class="locale-en">Demo</small>
         </button>
         <button class="section-nav-button" type="button" data-view-target="audit" data-nav-group="audit">
-          <span>工作流审计</span>
-          <small>Audit</small>
+          <span class="locale-zh">工作流审计</span>
+          <span class="locale-en">Audit</span>
+          <small class="locale-zh">证据查看</small>
+          <small class="locale-en">Audit</small>
         </button>
         <button class="section-nav-button" type="button" data-view-target="runtime" data-nav-group="settings">
-          <span>设置与日志</span>
-          <small>Settings</small>
+          <span class="locale-zh">设置与日志</span>
+          <span class="locale-en">Settings</span>
+          <small class="locale-zh">配置管理</small>
+          <small class="locale-en">Settings</small>
         </button>
       </div>
 
       <div class="secondary-nav" data-secondary-nav="settings" aria-label="设置与日志二级导航" hidden>
-        <span class="secondary-nav-label">Settings / Observability</span>
+        <span class="secondary-nav-label">
+          <span class="locale-zh">设置与观测</span>
+          <span class="locale-en">Settings / Observability</span>
+        </span>
         <button class="secondary-nav-button" type="button" data-view-target="runtime" data-nav-group="settings">
           数据接入
         </button>
@@ -71,82 +92,83 @@
 
     <header class="hero hero-shell reveal" data-view-panel="overview">
       <div class="hero-copy">
-        <p class="eyebrow">SecurityCore / Workflow Audit / Policy Composer</p>
+        <p class="eyebrow">
+          <span class="locale-zh">安全核 / 工作流审计 / 策略配置</span>
+          <span class="locale-en">Security Core / Workflow Audit / Policy Composer</span>
+        </p>
         <h1>零信任多智能体前端展示台</h1>
         <p class="hero-text">
-          用更像产品发布页和任务控制台的方式，把 workflow 拦截、history、策略配置、模型入口和审计日志放进同一个本地可演示界面。
+          本页面用于本地演示多智能体系统中的安全审计流程：选择框架与攻击场景，运行演示，查看阻断原因、风险标签、调用路径和审计证据。
         </p>
 
         <div class="hero-actions">
-          <button class="button primary" id="focusBlockedBtn" type="button">定位 Blocked Workflow</button>
-          <button class="button secondary" id="downloadYamlBtnTop" type="button">导出 YAML</button>
+          <button class="button primary" id="focusBlockedBtn" type="button">查看阻断工作流</button>
+          <button class="button secondary" id="downloadYamlBtnTop" type="button">导出策略配置</button>
         </div>
 
         <div class="hero-tags">
-          <span class="tag soft">Workflow Block Labels</span>
-          <span class="tag soft">History Viewer</span>
-          <span class="tag soft">Security Core Switch</span>
-          <span class="tag soft">Local / API Model Entry</span>
-          <span class="tag soft">Audit Logs</span>
+          <span class="tag soft">阻断标签</span>
+          <span class="tag soft">历史窗口</span>
+          <span class="tag soft">安全核开关</span>
+          <span class="tag soft">本地模型 / 接口模型</span>
+          <span class="tag soft">审计日志</span>
         </div>
 
         <div class="telemetry-strip">
           <article class="telemetry-card">
-            <span class="telemetry-label">Mission Focus</span>
-            <strong>Policy + Runtime + Evidence</strong>
-            <p>把配置、运行入口和审计结果放进统一演示链路。</p>
+            <span class="telemetry-label">演示主线</span>
+            <strong>选择场景、运行、生成证据</strong>
+            <p>从攻击类型选择到安全核判断，再到工作流审计结果，形成完整闭环。</p>
           </article>
           <article class="telemetry-card">
-            <span class="telemetry-label">Design Language</span>
-            <strong>Light Console + Clear Reading</strong>
-            <p>参考 Apple 的浅色界面、清晰层级和更易阅读的大字号排版。</p>
+            <span class="telemetry-label">审计重点</span>
+            <strong>风险标签、阻断原因、调用路径</strong>
+            <p>默认展示结论，展开后查看原始终端输出、事件时间线和工具参数。</p>
           </article>
           <article class="telemetry-card">
-            <span class="telemetry-label">Next Hook</span>
-            <strong>Prompt Layer Pending</strong>
-            <p>模型提示词入口先预留，后续直接接入真实推理链路。</p>
+            <span class="telemetry-label">运行模式</span>
+            <strong>稳定演示与真实运行</strong>
+            <p>稳定演示用于组会展示；真实运行可连接 MAS 脚本、依赖环境和模型接口。</p>
           </article>
         </div>
       </div>
 
       <div class="hero-visual">
-        <div class="hero-orbit">
-          <div class="orbit-ring orbit-ring-a"></div>
-          <div class="orbit-ring orbit-ring-b"></div>
-          <div class="orbit-ring orbit-ring-c"></div>
-          <div class="orbit-core">
-            <span class="orbit-core-kicker">Zero Trust</span>
-            <strong>Mission Control</strong>
-            <p>Observe, verify, route, explain.</p>
-          </div>
+        <div class="hero-store-card">
+          <span class="orbit-core-kicker">演示流程</span>
+          <strong>四步完成安全审计展示</strong>
+          <ol>
+            <li>选择框架与业务领域</li>
+            <li>选择攻击类型并运行</li>
+            <li>查看安全核阻断原因</li>
+            <li>载入审计证据和历史窗口</li>
+          </ol>
         </div>
 
         <div class="hero-panel-stack">
           <article class="hero-panel">
-            <p class="panel-kicker">Stage 01</p>
-            <h3>Input Orchestration</h3>
-            <p>Agent entry, task routing and call path capture.</p>
+            <p class="panel-kicker">第一步</p>
+            <h3>选择演示场景</h3>
+            <p>覆盖 AutoGen、CrewAI、LangGraph 以及电商、医疗、金融交易场景。</p>
           </article>
           <article class="hero-panel">
-            <p class="panel-kicker">Stage 02</p>
-            <h3>Policy Gate</h3>
-            <p>Rules, semantic review and route hijack checks.</p>
+            <p class="panel-kicker">第二步</p>
+            <h3>运行安全检测</h3>
+            <p>展示路径绕过、调用者伪装、语义注入、间接提示注入等风险。</p>
           </article>
           <article class="hero-panel accent">
-            <p class="panel-kicker">Stage 03</p>
-            <h3>Evidence Surface</h3>
-            <p>Workflow JSON, history window, YAML and logs for demo.</p>
+            <p class="panel-kicker">第三步</p>
+            <h3>查看审计证据</h3>
+            <p>生成工作流审计文件，展示阻断原因、风险标签和调用路径。</p>
           </article>
         </div>
       </div>
     </header>
 
-    <section class="metrics-grid reveal" id="metricsGrid" data-view-panel="overview"></section>
-
     <section class="panel runtime-panel reveal" data-view-panel="runtime" hidden>
       <div class="panel-head">
         <div>
-          <p class="panel-kicker">Data Source</p>
+          <p class="panel-kicker">数据接入</p>
           <h2>真实文件系统接入</h2>
         </div>
       </div>
@@ -156,18 +178,19 @@
     <section class="panel demo-console-panel reveal" data-view-panel="demo" hidden>
       <div class="panel-head">
         <div>
-          <p class="panel-kicker">Demo Console</p>
+          <p class="panel-kicker">动态演示</p>
           <h2>项目动态演示</h2>
         </div>
       </div>
+      <section class="metrics-grid demo-metrics-grid" id="metricsGrid"></section>
       <div id="demoConsole"></div>
     </section>
 
     <section class="workspace reveal" data-view-panel="audit" hidden>
       <aside class="panel workspace-list">
         <div class="panel-head">
-          <div>
-            <p class="panel-kicker">Workflow Library</p>
+        <div>
+            <p class="panel-kicker">工作流列表</p>
             <h2>审计工作流</h2>
           </div>
         </div>
@@ -186,9 +209,9 @@
             <span>状态</span>
             <select id="workflowStatusFilter">
               <option value="all">全部</option>
-              <option value="blocked">Blocked</option>
-              <option value="review">Review</option>
-              <option value="allowed">Passed</option>
+              <option value="blocked">已阻断</option>
+              <option value="review">待复核</option>
+              <option value="allowed">已通过</option>
             </select>
           </label>
         </div>
@@ -199,8 +222,8 @@
       <main class="panel workspace-detail">
         <div class="panel-head">
           <div>
-            <p class="panel-kicker">Evidence View</p>
-            <h2>Workflow Detail</h2>
+            <p class="panel-kicker">证据视图</p>
+            <h2>工作流详情</h2>
           </div>
         </div>
         <div id="workflowDetail"></div>
@@ -208,8 +231,8 @@
 
       <aside class="panel workspace-side">
         <div class="panel-head">
-          <div>
-            <p class="panel-kicker">Security Core</p>
+        <div>
+            <p class="panel-kicker">安全核</p>
             <h2>模型入口与运行配置</h2>
           </div>
         </div>
@@ -221,7 +244,7 @@
       <div class="panel builder-panel">
         <div class="panel-head">
           <div>
-            <p class="panel-kicker">Policy Composer</p>
+            <p class="panel-kicker">策略配置</p>
             <h2>前端配置转 YAML</h2>
           </div>
           <div class="panel-actions">
@@ -266,8 +289,8 @@
       <div class="panel yaml-panel">
         <div class="panel-head">
           <div>
-            <p class="panel-kicker">Generated Output</p>
-            <h2>YAML Preview</h2>
+            <p class="panel-kicker">生成结果</p>
+            <h2>YAML 预览</h2>
           </div>
           <div class="panel-actions">
             <button class="button tertiary" id="copyYamlBtn" type="button">复制 YAML</button>
@@ -284,19 +307,19 @@
     <section class="panel logs-panel reveal" data-view-panel="logs" hidden>
       <div class="panel-head">
         <div>
-          <p class="panel-kicker">Audit Stream</p>
+          <p class="panel-kicker">审计流</p>
           <h2>审计日志</h2>
         </div>
       </div>
 
       <div class="toolbar">
         <label class="field">
-          <span>Level</span>
-          <select id="logLevelFilter">
-            <option value="all">全部</option>
-            <option value="info">Info</option>
-            <option value="warn">Warn</option>
-            <option value="error">Error</option>
+          <span>级别</span>
+            <select id="logLevelFilter">
+              <option value="all">全部</option>
+            <option value="info">信息</option>
+            <option value="warn">警告</option>
+            <option value="error">错误</option>
           </select>
         </label>
         <label class="field">
@@ -310,7 +333,7 @@
         </label>
         <label class="field grow">
           <span>搜索</span>
-          <input id="logSearchInput" type="text" placeholder="输入 trace / tool / risk type">
+          <input id="logSearchInput" type="text" placeholder="输入追踪编号、工具或风险类型">
         </label>
       </div>
 
@@ -320,7 +343,7 @@
     <section class="panel source-panel reveal" data-view-panel="mapping" hidden>
       <div class="panel-head">
         <div>
-          <p class="panel-kicker">Repository Mapping</p>
+          <p class="panel-kicker">仓库映射</p>
           <h2>页面设计对应仓库能力</h2>
         </div>
       </div>
@@ -328,19 +351,19 @@
       <div class="source-grid">
         <article class="source-card">
           <h3>SecurityCore</h3>
-          <p>对齐规则拦截、语义审核、模型入口切换和 policy gate 的展示逻辑。</p>
+          <p>对齐规则拦截、语义审核、模型入口切换和策略门控的展示逻辑。</p>
         </article>
         <article class="source-card">
-          <h3>AuditEvent / AuditDecision</h3>
-          <p>映射事件时间线、reason、risk score、blocked labels 和 suggested alternative。</p>
+          <h3>审计事件 / 审计决策</h3>
+          <p>映射事件时间线、阻断原因、风险分、阻断标签和建议替代路径。</p>
         </article>
         <article class="source-card">
-          <h3>Workflow JSON</h3>
+          <h3>工作流审计文件</h3>
           <p>支持读取真实 `audit_logs/workflows/*.json` 并自动监听新日志刷新。</p>
         </article>
         <article class="source-card">
-          <h3>Policy YAML</h3>
-          <p>前端配置器继续输出兼容 YAML，并预留 API model prompt 的后续接入位置。</p>
+          <h3>策略 YAML</h3>
+          <p>前端配置器继续输出兼容 YAML，并预留接口模型提示词的后续接入位置。</p>
         </article>
       </div>
     </section>
@@ -349,8 +372,8 @@
   <dialog class="history-dialog" id="historyDialog">
     <div class="dialog-head">
       <div>
-        <p class="panel-kicker">History Viewer</p>
-        <h2 id="historyDialogTitle">History 详情</h2>
+        <p class="panel-kicker">历史窗口</p>
+        <h2 id="historyDialogTitle">历史详情</h2>
       </div>
       <form method="dialog">
         <button class="button tertiary" type="submit">关闭</button>

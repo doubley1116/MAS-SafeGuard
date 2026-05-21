@@ -396,9 +396,9 @@ function startDemoJob(scenarioId, options = {}) {
 
   demoJobs.set(job.id, job);
   appendDemoLine(job, "stdout", `zero-trust@local:~$ ${scenario.commandLabel}`);
-  appendDemoLine(job, "stdout", `Demo mode: ${demoMode === "replay" ? "Replay evidence path" : "Live MAS script"}`);
+  appendDemoLine(job, "stdout", `演示模式：${demoMode === "replay" ? "稳定证据链" : "真实 MAS 脚本"}`);
   if (scenario.attackLabel) {
-    appendDemoLine(job, "stdout", `Attack profile: ${scenario.attackLabel}${scenario.scenarioCode ? ` (${scenario.scenarioCode})` : ""}`);
+    appendDemoLine(job, "stdout", `攻击画像：${scenario.attackLabel}${scenario.scenarioCode ? ` (${scenario.scenarioCode})` : ""}`);
   }
 
   if (demoMode === "live" && scenario.sourceType === "mas" && scenario.scriptPath && fs.existsSync(scenario.scriptPath)) {
@@ -934,19 +934,55 @@ function toRepoPath(filePath) {
 
 function buildDemoSteps(scenario) {
   return [
-    { text: `loading policy.yaml for ${scenario.framework}` },
-    { text: `selected attack profile: ${scenario.attackLabel || "安全演示"}${scenario.scenarioCode ? ` (${scenario.scenarioCode})` : ""}` },
-    { text: `initializing SecurityCore: ${scenario.auditLayer || "RuleEngine + LLMReviewer"}` },
-    { text: `capturing message route and history window: ${scenario.interceptionStage || "Policy review"}` },
-    { text: `tool_call intercepted, risk_score=${scenario.riskScore.toFixed(2)}` },
-    { text: `risk labels: ${scenario.riskTypes.join(", ")}` },
+    { text: `加载 policy.yaml：${scenario.framework}` },
+    { text: `已选择攻击画像：${scenario.attackLabel || "安全演示"}${scenario.scenarioCode ? ` (${scenario.scenarioCode})` : ""}` },
+    { text: `初始化 SecurityCore：${formatDemoAuditLayer(scenario.auditLayer || "RuleEngine + LLMReviewer")}` },
+    { text: `捕获消息路径与历史窗口：${formatDemoInterceptionStage(scenario.interceptionStage || "Policy review")}` },
+    { text: `已拦截工具调用，风险分=${scenario.riskScore.toFixed(2)}` },
+    { text: `风险标签：${scenario.riskTypes.join(", ")}` },
     {
       stream: scenario.blocked ? "stderr" : "stdout",
       text: scenario.blocked
-        ? "workflow blocked before sensitive tool execution"
-        : "workflow moved to human review with evidence package",
+        ? "敏感工具执行前已阻断工作流"
+        : "工作流进入人工复核并生成证据包",
     },
   ];
+}
+
+function formatDemoAuditLayer(value) {
+  const normalized = String(value || "").trim();
+  if (/RuleEngine\s*\+\s*LLMReviewer/i.test(normalized)) {
+    return "规则引擎 + 语义复核";
+  }
+  if (/RuleEngine/i.test(normalized)) {
+    return "规则引擎";
+  }
+  if (/LLMReviewer/i.test(normalized)) {
+    return "语义复核层";
+  }
+  if (/History Window/i.test(normalized)) {
+    return "历史窗口";
+  }
+  if (/Trajectory Guard/i.test(normalized)) {
+    return "轨迹防护";
+  }
+  return normalized || "安全核";
+}
+
+function formatDemoInterceptionStage(value) {
+  const normalized = String(value || "").trim();
+  const mapping = {
+    "Call path validation": "调用路径校验",
+    "Caller identity check": "调用者身份校验",
+    "Intent and argument review": "意图与参数复核",
+    "Router confidence review": "路由置信度复核",
+    "External content boundary": "外部内容边界检查",
+    "Message integrity check": "消息完整性检查",
+    "Propagation detection": "传播污染检测",
+    "Policy compliant route": "策略合规路径",
+    "Policy review": "策略复核",
+  };
+  return mapping[normalized] || normalized || "策略复核";
 }
 
 function appendDemoLine(job, stream, text) {
