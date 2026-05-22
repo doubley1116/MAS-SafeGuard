@@ -317,6 +317,7 @@ async function handleApi(request, requestUrl, response) {
       const job = startDemoJob(String(body.scenarioId || ""), {
         attackId: String(body.attackId || ""),
         demoMode: String(body.demoMode || "live"),
+        securityCore: body.securityCore,
       });
       writeJson(response, 200, { job: publicJob(job) });
       return;
@@ -376,6 +377,7 @@ function startDemoJob(scenarioId, options = {}) {
   }
   const scenario = selectDemoScenarioVariant(baseScenario, options.attackId);
   const demoMode = options.demoMode === "replay" ? "replay" : "live";
+  const securityCore = normalizeSecurityCoreConfig(options.securityCore);
 
   const job = {
     id: `demo-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
@@ -391,18 +393,21 @@ function startDemoJob(scenarioId, options = {}) {
     exitCode: null,
     workflowDir: DEMO_WORKFLOW_DIR,
     workflowPath: "",
+    securityCore,
+    securityReview: null,
     lines: [],
   };
 
   demoJobs.set(job.id, job);
   appendDemoLine(job, "stdout", `zero-trust@local:~$ ${scenario.commandLabel}`);
   appendDemoLine(job, "stdout", `演示模式：${demoMode === "replay" ? "稳定证据链" : "真实 MAS 脚本"}`);
+  appendDemoLine(job, "stdout", `审核模型：${formatSecurityCoreEntryLabel(securityCore)} · ${securityCore.model_name}`);
   if (scenario.attackLabel) {
     appendDemoLine(job, "stdout", `攻击画像：${scenario.attackLabel}${scenario.scenarioCode ? ` (${scenario.scenarioCode})` : ""}`);
   }
 
   if (demoMode === "live" && scenario.sourceType === "mas" && scenario.scriptPath && fs.existsSync(scenario.scriptPath)) {
-    startMasProcess(job, scenario);
+    void startMasProcess(job, scenario);
     return job;
   }
 
@@ -411,6 +416,9 @@ function startDemoJob(scenarioId, options = {}) {
 }
 
 function startSimulatedDemoJob(job, scenario) {
+  job.securityReview = createReplaySecurityReview(job.securityCore);
+  appendDemoLine(job, "stdout", job.securityReview.detail);
+
   const steps = buildDemoSteps(scenario);
   steps.forEach((step, index) => {
     setTimeout(() => {
@@ -440,7 +448,151 @@ function startSimulatedDemoJob(job, scenario) {
   }, 520 * (steps.length + 1));
 }
 
-function startMasProcess(job, scenario) {
+async function prepareLiveSecurityCore(job, scenario) {
+  const securityCore = normalizeSecurityCoreConfig(job.securityCore);
+  if (!securityCore.enabled) {
+    job.securityReview = {
+      status: "disabled",
+      entry_mode: securityCore.entry_mode,
+      detail: "SecurityCore 已关闭：Live 运行仅注入基础审计环境变量。",
+    };
+    appendDemoLine(job, "stdout", job.securityReview.detail);
+    return;
+  }
+
+  if (securityCore.entry_mode === "api_gateway") {
+    job.securityReview = await callSecurityCoreApi(securityCore, scenario);
+    appendDemoLine(job, job.securityReview.status === "api_failed" ? "stderr" : "stdout", job.securityReview.detail);
+    return;
+  }
+
+  job.securityReview = {
+    status: "local_injected",
+    entry_mode: "local_model",
+    detail: `本地审核模型配置已注入环境变量：${securityCore.local_model_path || "本地模型路径待配置"}`,
+  };
+  appendDemoLine(job, "stdout", job.securityReview.detail);
+}
+
+function createReplaySecurityReview(securityCore) {
+  const normalized = normalizeSecurityCoreConfig(securityCore);
+  return {
+    status: "replay_evidence",
+    entry_mode: normalized.entry_mode,
+    provider: normalized.provider,
+    model_name: normalized.model_name,
+    detail: `Replay 模式：审核模型快照已写入审计证据（${formatSecurityCoreEntryLabel(normalized)}）。`,
+  };
+}
+
+async function callSecurityCoreApi(securityCore, scenario) {
+  const normalized = normalizeSecurityCoreConfig(securityCore);
+  const apiKeyName = normalized.api_key_env || "ZERO_TRUST_API_KEY";
+  const apiKey = process.env[apiKeyName] || "";
+  const endpoint = String(normalized.endpoint || "").trim();
+
+  if (!endpoint || endpoint.includes("zerotrust.local")) {
+    return {
+      status: "api_skipped",
+      entry_mode: "api_gateway",
+      detail: "API 审核未调用：接口地址仍是占位值，配置已注入 MAS 运行环境。",
+    };
+  }
+  if (!apiKey) {
+    return {
+      status: "api_skipped",
+      entry_mode: "api_gateway",
+      detail: `API 审核未调用：未检测到环境变量 ${apiKeyName}，配置已注入 MAS 运行环境。`,
+    };
+  }
+  if (typeof fetch !== "function") {
+    return {
+      status: "api_skipped",
+      entry_mode: "api_gateway",
+      detail: "API 审核未调用：当前 Node 运行时不支持 fetch，配置已注入 MAS 运行环境。",
+    };
+  }
+
+  const url = joinEndpointRoute(endpoint, normalized.api_route || "/chat/completions");
+  const controller = new AbortController();
+  const timeoutMs = Math.min(Number(normalized.api_timeout_ms) || 30000, 8000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(buildSecurityCoreApiPayload(normalized, scenario)),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    return {
+      status: response.ok ? "api_called" : "api_failed",
+      entry_mode: "api_gateway",
+      http_status: response.status,
+      detail: response.ok
+        ? `API 审核已调用：HTTP ${response.status}，模型 ${normalized.model_name}`
+        : `API 审核调用失败：HTTP ${response.status}，${text.slice(0, 180)}`,
+    };
+  } catch (error) {
+    return {
+      status: "api_failed",
+      entry_mode: "api_gateway",
+      detail: `API 审核调用失败：${error.message}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function buildSecurityCoreApiPayload(securityCore, scenario) {
+  const auditPayload = {
+    task: "zero_trust_security_core_review",
+    framework: scenario.framework,
+    scenario_id: scenario.id,
+    attack_id: scenario.attackId || "",
+    attack_label: scenario.attackLabel || "",
+    risk_types: scenario.riskTypes || [],
+    risk_score: scenario.riskScore,
+    audit_scope: securityCore.audit_scope,
+    history_window: securityCore.history_window,
+  };
+
+  if (securityCore.api_protocol === "custom_rest") {
+    return {
+      model: securityCore.model_name,
+      provider: securityCore.provider,
+      input: auditPayload,
+    };
+  }
+
+  return {
+    model: securityCore.model_name,
+    messages: [
+      {
+        role: "system",
+        content: "You are SecurityCore. Review the multi-agent workflow risk and return concise JSON with decision, risk_score, and reason.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify(auditPayload),
+      },
+    ],
+    temperature: 0,
+    max_tokens: 180,
+  };
+}
+
+function joinEndpointRoute(endpoint, route) {
+  const cleanEndpoint = String(endpoint || "").replace(/\/+$/, "");
+  const cleanRoute = String(route || "").startsWith("/") ? route : `/${route}`;
+  return `${cleanEndpoint}${cleanRoute}`;
+}
+
+async function startMasProcess(job, scenario) {
   const pythonRunner = resolvePythonRunner();
   const scriptPath = scenario.scriptPath;
   const folderPath = scenario.folderPath || path.dirname(scriptPath);
@@ -454,13 +606,11 @@ function startMasProcess(job, scenario) {
     appendDemoLine(job, "stdout", `Requirements: ${scenario.requirementsLabel}`);
   }
 
+  await prepareLiveSecurityCore(job, scenario);
+
   const child = spawn(pythonRunner.command, [...pythonRunner.argsPrefix, scriptPath], {
     cwd: folderPath,
-    env: {
-      ...process.env,
-      PYTHONUNBUFFERED: "1",
-      ENABLE_AUDIT: process.env.ENABLE_AUDIT || "1",
-    },
+    env: buildMasProcessEnv(job.securityCore),
     windowsHide: true,
   });
 
@@ -525,6 +675,90 @@ function resolvePythonRunner() {
     return { command: "py", argsPrefix: ["-3", "-u"] };
   }
   return { command: "python3", argsPrefix: ["-u"] };
+}
+
+function normalizeSecurityCoreConfig(config = {}) {
+  const source = config && typeof config === "object" ? config : {};
+  return {
+    enabled: source.enabled !== false,
+    entry_mode: source.entry_mode === "api_gateway" ? "api_gateway" : "local_model",
+    provider: String(source.provider || "ZeroTrust-Guard"),
+    model_name: String(source.model_name || "zt-defender-v2"),
+    endpoint: String(source.endpoint || ""),
+    local_model_path: String(source.local_model_path || ""),
+    api_protocol: source.api_protocol === "custom_rest" ? "custom_rest" : "openai_compatible",
+    api_key_env: String(source.api_key_env || "ZERO_TRUST_API_KEY"),
+    api_route: String(source.api_route || "/chat/completions"),
+    api_timeout_ms: Number(source.api_timeout_ms) || 30000,
+    prompt_status: String(source.prompt_status || "pending"),
+    audit_scope: String(source.audit_scope || "hybrid"),
+    history_window: Number(source.history_window) || 30,
+    log_level: String(source.log_level || "verbose"),
+  };
+}
+
+function buildMasProcessEnv(securityCore) {
+  const normalized = normalizeSecurityCoreConfig(securityCore);
+  const env = {
+    ...process.env,
+    PYTHONUNBUFFERED: "1",
+    ENABLE_AUDIT: process.env.ENABLE_AUDIT || "1",
+    ZERO_TRUST_SECURITY_CORE_ENABLED: normalized.enabled ? "1" : "0",
+    ZERO_TRUST_SECURITY_CORE_ENTRY_MODE: normalized.entry_mode,
+    ZERO_TRUST_SECURITY_CORE_PROVIDER: normalized.provider,
+    ZERO_TRUST_SECURITY_CORE_MODEL: normalized.model_name,
+    ZERO_TRUST_SECURITY_CORE_AUDIT_SCOPE: normalized.audit_scope,
+    ZERO_TRUST_SECURITY_CORE_HISTORY_WINDOW: String(normalized.history_window),
+    ZERO_TRUST_SECURITY_CORE_LOG_LEVEL: normalized.log_level,
+    MODEL: normalized.model_name,
+  };
+
+  if (normalized.entry_mode === "api_gateway") {
+    const apiKey = process.env[normalized.api_key_env] || "";
+    env.ZERO_TRUST_SECURITY_CORE_ENDPOINT = normalized.endpoint;
+    env.ZERO_TRUST_SECURITY_CORE_API_ROUTE = normalized.api_route;
+    env.ZERO_TRUST_SECURITY_CORE_API_PROTOCOL = normalized.api_protocol;
+    env.ZERO_TRUST_SECURITY_CORE_API_KEY_ENV = normalized.api_key_env;
+    env.BASE_URL = normalized.endpoint || process.env.BASE_URL || "";
+    env.API_BASE = normalized.endpoint || process.env.API_BASE || "";
+    env.OPENAI_BASE_URL = normalized.endpoint || process.env.OPENAI_BASE_URL || "";
+    if (apiKey && !env.API_KEY) {
+      env.API_KEY = apiKey;
+    }
+  } else {
+    env.ZERO_TRUST_SECURITY_CORE_LOCAL_MODEL_PATH = normalized.local_model_path;
+    env.LOCAL_MODEL_PATH = normalized.local_model_path || process.env.LOCAL_MODEL_PATH || "";
+  }
+
+  return env;
+}
+
+function sanitizeSecurityCoreForEvidence(securityCore) {
+  const normalized = normalizeSecurityCoreConfig(securityCore);
+  return {
+    enabled: normalized.enabled,
+    entry_mode: normalized.entry_mode,
+    provider: normalized.provider,
+    model_name: normalized.model_name,
+    endpoint: normalized.entry_mode === "api_gateway" ? normalized.endpoint : "",
+    local_model_path: normalized.entry_mode === "local_model" ? normalized.local_model_path : "",
+    api_protocol: normalized.api_protocol,
+    api_key_env: normalized.entry_mode === "api_gateway" ? normalized.api_key_env : "",
+    api_route: normalized.entry_mode === "api_gateway" ? normalized.api_route : "",
+    api_timeout_ms: normalized.api_timeout_ms,
+    prompt_status: normalized.prompt_status,
+    audit_scope: normalized.audit_scope,
+    history_window: normalized.history_window,
+    log_level: normalized.log_level,
+  };
+}
+
+function formatSecurityCoreEntryLabel(securityCore) {
+  const normalized = normalizeSecurityCoreConfig(securityCore);
+  if (!normalized.enabled) {
+    return "SecurityCore 关闭";
+  }
+  return normalized.entry_mode === "api_gateway" ? "API 接模型" : "本地模型";
 }
 
 function finishDemoJob(job, scenario, exitCode) {
@@ -1012,6 +1246,8 @@ function publicJob(job) {
     exitCode: job.exitCode,
     workflowDir: job.workflowDir,
     workflowPath: job.workflowPath,
+    securityCore: sanitizeSecurityCoreForEvidence(job.securityCore),
+    securityReview: job.securityReview,
     lines: job.lines,
   };
 }
@@ -1022,19 +1258,22 @@ function writeDemoWorkflow(scenario, job) {
   const traceId = `${scenario.id}-${job.id}`;
   const fileName = `${timestamp.toISOString().replace(/[:.]/g, "-")}-${scenario.id}.json`;
   const workflowPath = path.join(DEMO_WORKFLOW_DIR, fileName);
-  const workflow = buildDemoWorkflow(scenario, traceId, timestamp);
+  const workflow = buildDemoWorkflow(scenario, traceId, timestamp, job);
   fs.writeFileSync(workflowPath, JSON.stringify(workflow, null, 2), "utf8");
   return workflowPath;
 }
 
-function buildDemoWorkflow(scenario, traceId, timestamp) {
+function buildDemoWorkflow(scenario, traceId, timestamp, job) {
   const iso = timestamp.toISOString();
+  const securityCore = sanitizeSecurityCoreForEvidence(job?.securityCore || {});
+  const securityReview = job?.securityReview || createReplaySecurityReview(securityCore);
+  const modelEntryLabel = formatSecurityCoreEntryLabel(securityCore);
   const decisionTone = scenario.blocked
     ? "SecurityCore 阻断工作流"
     : scenario.riskScore >= 0.75
       ? "SecurityCore 建议人工复核"
       : "SecurityCore 放行工作流";
-  const reason = `${decisionTone}: ${scenario.attackSummary || scenario.summary}`;
+  const reason = `${decisionTone}（${modelEntryLabel}）: ${scenario.attackSummary || scenario.summary}`;
   const actors = getScenarioActors(scenario);
   const metadata = {
     framework: scenario.framework,
@@ -1045,74 +1284,91 @@ function buildDemoWorkflow(scenario, traceId, timestamp) {
     attack_category: scenario.attackCategory || "",
     audit_layer: scenario.auditLayer || "SecurityCore",
     interception_stage: scenario.interceptionStage || "Policy review",
+    security_core_entry_mode: securityCore.entry_mode,
+    security_core_provider: securityCore.provider,
+    security_core_model: securityCore.model_name,
   };
+  const events = [
+    {
+      event_id: `${traceId}-1`,
+      event_type: "message",
+      sender: actors.user,
+      receiver: actors.entry,
+      content: getScenarioPrompt(scenario),
+      call_path: [actors.user, actors.entry],
+      trace_id: traceId,
+      timestamp: iso,
+      metadata,
+    },
+    {
+      event_id: `${traceId}-2`,
+      event_type: "message",
+      sender: actors.entry,
+      receiver: actors.worker,
+      content: getScenarioRelayMessage(scenario),
+      call_path: [actors.user, actors.entry, actors.worker],
+      trace_id: traceId,
+      timestamp: addSeconds(timestamp, 1),
+      metadata,
+    },
+    {
+      event_id: `${traceId}-3`,
+      event_type: "tool_call",
+      sender: actors.worker,
+      receiver: null,
+      tool_name: actors.tool,
+      tool_args: getScenarioToolArgs(scenario),
+      call_path: actors.callPath,
+      content: "",
+      trace_id: traceId,
+      timestamp: addSeconds(timestamp, 2),
+      metadata: { ...metadata, risk_types: scenario.riskTypes },
+    },
+    {
+      event_id: `${traceId}-4`,
+      event_type: "model_review",
+      sender: "SecurityCore",
+      receiver: modelEntryLabel,
+      content: securityReview.detail || `使用 ${modelEntryLabel} 完成审核模型路由。`,
+      call_path: actors.callPath,
+      trace_id: traceId,
+      timestamp: addSeconds(timestamp, 3),
+      metadata: { ...metadata, security_core: securityCore, model_review: securityReview },
+    },
+    {
+      event_id: `${traceId}-5`,
+      event_type: "audit_decision",
+      sender: "SecurityCore",
+      receiver: actors.worker,
+      content: reason,
+      call_path: actors.callPath,
+      trace_id: traceId,
+      timestamp: addSeconds(timestamp, 4),
+      metadata: { ...metadata, risk_score: scenario.riskScore, history_focus: scenario.historyFocus || "", security_core: securityCore, model_review: securityReview },
+    },
+    {
+      event_id: `${traceId}-6`,
+      event_type: scenario.blocked ? "workflow_blocked" : "human_review",
+      sender: "SecurityCore",
+      receiver: "AuditLogger",
+      content: scenario.blocked ? "Sensitive tool execution stopped." : "Evidence package queued for reviewer.",
+      call_path: actors.callPath,
+      trace_id: traceId,
+      timestamp: addSeconds(timestamp, 5),
+      metadata,
+    },
+  ];
 
   return {
     trace_id: traceId,
     timestamp: iso,
-    event_count: 5,
+    event_count: events.length,
     blocked: scenario.blocked,
     blocked_reason: scenario.blocked ? reason : "",
     scene_name: scenario.attackId ? `${scenario.id}:${scenario.attackId}` : scenario.id,
-    events: [
-      {
-        event_id: `${traceId}-1`,
-        event_type: "message",
-        sender: actors.user,
-        receiver: actors.entry,
-        content: getScenarioPrompt(scenario),
-        call_path: [actors.user, actors.entry],
-        trace_id: traceId,
-        timestamp: iso,
-        metadata,
-      },
-      {
-        event_id: `${traceId}-2`,
-        event_type: "message",
-        sender: actors.entry,
-        receiver: actors.worker,
-        content: getScenarioRelayMessage(scenario),
-        call_path: [actors.user, actors.entry, actors.worker],
-        trace_id: traceId,
-        timestamp: addSeconds(timestamp, 1),
-        metadata,
-      },
-      {
-        event_id: `${traceId}-3`,
-        event_type: "tool_call",
-        sender: actors.worker,
-        receiver: null,
-        tool_name: actors.tool,
-        tool_args: getScenarioToolArgs(scenario),
-        call_path: actors.callPath,
-        content: "",
-        trace_id: traceId,
-        timestamp: addSeconds(timestamp, 2),
-        metadata: { ...metadata, risk_types: scenario.riskTypes },
-      },
-      {
-        event_id: `${traceId}-4`,
-        event_type: "audit_decision",
-        sender: "SecurityCore",
-        receiver: actors.worker,
-        content: reason,
-        call_path: actors.callPath,
-        trace_id: traceId,
-        timestamp: addSeconds(timestamp, 3),
-        metadata: { ...metadata, risk_score: scenario.riskScore, history_focus: scenario.historyFocus || "" },
-      },
-      {
-        event_id: `${traceId}-5`,
-        event_type: scenario.blocked ? "workflow_blocked" : "human_review",
-        sender: "SecurityCore",
-        receiver: "AuditLogger",
-        content: scenario.blocked ? "Sensitive tool execution stopped." : "Evidence package queued for reviewer.",
-        call_path: actors.callPath,
-        trace_id: traceId,
-        timestamp: addSeconds(timestamp, 4),
-        metadata,
-      },
-    ],
+    security_core: securityCore,
+    model_review: securityReview,
+    events,
     decisions: [
       {
         allow: scenario.allow,
@@ -1121,6 +1377,7 @@ function buildDemoWorkflow(scenario, traceId, timestamp) {
         blocking_risk_types: scenario.riskTypes,
         suggested_alternative: getScenarioAlternative(scenario),
         trajectory_score: scenario.riskScore >= 0.9 ? 0.91 : 0.78,
+        model_review: securityReview,
       },
     ],
   };

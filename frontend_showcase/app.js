@@ -1208,6 +1208,8 @@ async function handleInput(event) {
     syncSelectedAttackWithScenario();
   } else if (target.id === "demoAttackSelect") {
     state.demoConsole.selectedAttackId = target.value;
+  } else if (target.id === "demoSecurityCoreEntrySelect") {
+    state.config.security_core.entry_mode = target.value === "api_gateway" ? "api_gateway" : "local_model";
   } else if (target.id === "demoModeSelect") {
     state.demoConsole.demoMode = target.value === "live" ? "live" : "replay";
   } else if (target.dataset.bind) {
@@ -1782,6 +1784,13 @@ function renderDemoConsole() {
             </select>
           </label>
           <label class="field grow">
+            <span>审核模型</span>
+            <select id="demoSecurityCoreEntrySelect" ${isRunning ? "disabled" : ""}>
+              <option value="local_model" ${state.config.security_core.entry_mode === "local_model" ? "selected" : ""}>本地训练模型</option>
+              <option value="api_gateway" ${state.config.security_core.entry_mode === "api_gateway" ? "selected" : ""}>API 接模型</option>
+            </select>
+          </label>
+          <label class="field grow">
             <span>演示模式</span>
             <select id="demoModeSelect" ${isRunning ? "disabled" : ""}>
               <option value="replay" ${demoMode === "replay" ? "selected" : ""}>稳定演示</option>
@@ -1790,7 +1799,7 @@ function renderDemoConsole() {
           </label>
         </div>
 
-        ${renderDemoPathStrip(selectedScenario, selectedAttack, demoMode)}
+        ${renderDemoPathStrip(selectedScenario, selectedAttack, demoMode, runInsight.securityCore)}
 
         <details class="progressive-panel">
           <summary>
@@ -1867,7 +1876,7 @@ function renderDemoConsole() {
   }
 }
 
-function renderDemoPathStrip(scenario, attack, demoMode) {
+function renderDemoPathStrip(scenario, attack, demoMode, securityCore) {
   const items = [
     {
       label: "框架",
@@ -1885,6 +1894,10 @@ function renderDemoPathStrip(scenario, attack, demoMode) {
       label: "模式",
       value: demoMode === "live" ? "真实运行" : "稳定演示",
     },
+    {
+      label: "审核模型",
+      value: getSecurityCoreEntryLabel(securityCore || state.config.security_core),
+    },
   ];
 
   return `
@@ -1900,10 +1913,9 @@ function renderDemoPathStrip(scenario, attack, demoMode) {
 }
 
 function renderDemoPreflightPanel(scenario, attack, insight, demoMode) {
-  const entryMode = state.config.security_core.entry_mode === "api_gateway" ? "接口地址" : "本地模型";
-  const apiEndpoint = state.config.security_core.entry_mode === "api_gateway"
-    ? state.config.security_core.endpoint || "待配置接口地址"
-    : state.config.security_core.local_model_path || "本地模型路径待配置";
+  const securityCore = insight.securityCore || createRuntimeSecurityCorePayload();
+  const entryMode = getSecurityCoreEntryLabel(securityCore);
+  const apiEndpoint = getSecurityCoreRuntimeDetail(securityCore);
   const cards = [
     {
       tone: scenario && scenario.runnable ? "allowed" : "review",
@@ -1920,10 +1932,10 @@ function renderDemoPreflightPanel(scenario, attack, insight, demoMode) {
         : "会真实调用 MAS 脚本；如果缺 API_KEY/BASE_URL/MODEL 或依赖，会在面板里诊断。",
     },
     {
-      tone: state.config.security_core.enabled ? "allowed" : "blocked",
+      tone: securityCore.enabled ? "allowed" : "blocked",
       label: "安全核",
-      value: state.config.security_core.enabled ? entryMode : "已关闭",
-      detail: state.config.security_core.enabled ? apiEndpoint : "关闭后仅展示审计记录，不执行阻断策略。",
+      value: securityCore.enabled ? entryMode : "已关闭",
+      detail: securityCore.enabled ? apiEndpoint : "关闭后仅展示审计记录，不执行阻断策略。",
     },
     {
       tone: attack ? attack.tone || "review" : "review",
@@ -1995,12 +2007,19 @@ function getDemoRunInsight(job, scenario, attack, lines, demoMode) {
   const rawAuditLayer = attack?.auditLayer || scenario?.auditLayer || "SecurityCore";
   const auditLayer = formatAuditLayerLabel(rawAuditLayer);
   const interceptionStage = formatInterceptionStageLabel(attack?.interceptionStage || scenario?.interceptionStage || "策略复核");
+  const securityCore = normalizeRuntimeSecurityCore(job?.securityCore || createRuntimeSecurityCorePayload());
+  const securityReview = job?.securityReview || null;
+  const modelEntryLabel = getSecurityCoreEntryLabel(securityCore);
+  const modelDetail = getSecurityCoreRuntimeDetail(securityCore);
+  const reviewSummary = getSecurityReviewSummary(securityReview);
 
   return {
     status,
     scenario,
     attack,
     demoMode,
+    securityCore,
+    securityReview,
     missingModule: moduleName,
     packageName,
     installCommand: installLine ? installLine.text.replace("If this is a dependency issue, install:", "").trim() : "",
@@ -2027,6 +2046,12 @@ function getDemoRunInsight(job, scenario, attack, lines, demoMode) {
         detail: environmentDetail,
       },
       {
+        tone: securityCore.enabled ? "allowed" : "blocked",
+        label: "审核模型",
+        value: securityCore.enabled ? modelEntryLabel : "已关闭",
+        detail: reviewSummary ? `${reviewSummary} · ${modelDetail}` : modelDetail,
+      },
+      {
         tone: attackTone,
         label: "攻击画像",
         value: attack ? attack.shortLabel || attack.label || attack.id : "待选择",
@@ -2036,7 +2061,7 @@ function getDemoRunInsight(job, scenario, attack, lines, demoMode) {
         tone: decisionTone,
         label: "SecurityCore",
         value: decisionText,
-        detail: workflowGenerated ? `经 ${auditLayer} 处理，安全决策已写入工作流审计文件。` : `预计由 ${auditLayer} 处理。`,
+        detail: workflowGenerated ? `经 ${auditLayer} / ${modelEntryLabel} 处理，安全决策已写入工作流审计文件。` : `预计由 ${auditLayer} / ${modelEntryLabel} 处理。`,
       },
       {
         tone: workflowGenerated ? "allowed" : "review",
@@ -2049,6 +2074,7 @@ function getDemoRunInsight(job, scenario, attack, lines, demoMode) {
       { label: "框架", value: scenario ? scenario.framework || "MAS" : "MAS", tone: scenario ? "allowed" : "review" },
       { label: "场景", value: scenario ? scenario.domainLabel || "场景" : "未选择", tone: scenario ? "allowed" : "review" },
       { label: "攻击", value: attack ? attack.shortLabel || attack.label || attack.id : "未选择", tone: attackTone },
+      { label: "审核模型", value: securityCore.enabled ? modelEntryLabel : "已关闭", tone: securityCore.enabled ? "allowed" : "blocked" },
       { label: demoMode === "replay" ? "稳定演示" : "脚本运行", value: demoMode === "replay" ? "稳定证据" : processStarted ? "脚本已启动" : "待启动", tone: missingModuleMatch ? "blocked" : processStarted || demoMode === "replay" ? "allowed" : "review" },
       { label: "审计", value: decisionText, tone: decisionTone },
       { label: "证据", value: workflowGenerated ? "审计文件" : "等待生成", tone: workflowGenerated ? "allowed" : "review" },
@@ -2110,6 +2136,75 @@ function formatInterceptionStageLabel(value) {
     "Policy review": "策略复核",
   };
   return mapping[normalized] || normalized || "策略复核";
+}
+
+function createRuntimeSecurityCorePayload() {
+  return normalizeRuntimeSecurityCore(state.config.security_core || {});
+}
+
+function normalizeRuntimeSecurityCore(config = {}) {
+  return {
+    enabled: config.enabled !== false,
+    entry_mode: config.entry_mode === "api_gateway" ? "api_gateway" : "local_model",
+    provider: String(config.provider || "ZeroTrust-Guard"),
+    model_name: String(config.model_name || "zt-defender-v2"),
+    endpoint: String(config.endpoint || ""),
+    local_model_path: String(config.local_model_path || ""),
+    api_protocol: config.api_protocol === "custom_rest" ? "custom_rest" : "openai_compatible",
+    api_key_env: String(config.api_key_env || "ZERO_TRUST_API_KEY"),
+    api_route: String(config.api_route || "/chat/completions"),
+    api_timeout_ms: Number(config.api_timeout_ms) || 30000,
+    prompt_status: String(config.prompt_status || "pending"),
+    audit_scope: String(config.audit_scope || "hybrid"),
+    history_window: Number(config.history_window) || 30,
+    log_level: String(config.log_level || "verbose"),
+  };
+}
+
+function getSecurityCoreEntryLabel(config) {
+  const securityCore = normalizeRuntimeSecurityCore(config);
+  if (!securityCore.enabled) {
+    return "已关闭";
+  }
+  return securityCore.entry_mode === "api_gateway" ? "API 接模型" : "本地模型";
+}
+
+function getSecurityCoreRuntimeDetail(config) {
+  const securityCore = normalizeRuntimeSecurityCore(config);
+  if (!securityCore.enabled) {
+    return "关闭后仅展示审计记录，不执行阻断策略。";
+  }
+  if (securityCore.entry_mode === "api_gateway") {
+    const route = securityCore.api_route || "/chat/completions";
+    const endpoint = securityCore.endpoint || "待配置接口地址";
+    return `${securityCore.provider} / ${securityCore.model_name} · ${endpoint}${route}`;
+  }
+  return `${securityCore.provider} / ${securityCore.model_name} · ${securityCore.local_model_path || "本地模型路径待配置"}`;
+}
+
+function getSecurityReviewSummary(review) {
+  if (!review || typeof review !== "object") {
+    return "";
+  }
+  if (review.status === "api_called") {
+    return "API 已调用";
+  }
+  if (review.status === "api_skipped") {
+    return "API 未调用";
+  }
+  if (review.status === "api_failed") {
+    return "API 调用失败";
+  }
+  if (review.status === "local_injected") {
+    return "本地模型已注入";
+  }
+  if (review.status === "disabled") {
+    return "安全核已关闭";
+  }
+  if (review.status === "replay_evidence") {
+    return "Replay 证据已写入";
+  }
+  return "";
 }
 
 function getPythonPackageName(moduleName) {
@@ -2398,6 +2493,8 @@ function renderWorkflowDetail() {
   }
 
   const status = STATUS_META[workflow.status];
+  const workflowSecurityCore = workflow.securityCore || workflow.decision.model_review || null;
+  const workflowModelReview = workflow.decision.model_review || null;
   const decisionTags = (workflow.decision.blocking_risk_types || [])
     .map((tag) => `<span class="tag ${workflow.status === "blocked" ? "risk" : "warn"}">${escapeHtml(getRiskLabel(tag))}</span>`)
     .join("");
@@ -2462,6 +2559,16 @@ function renderWorkflowDetail() {
         <div class="decision-strip">
           ${decisionTags || `<span class="tag ${workflow.status === "allowed" ? "safe" : "info"}">${workflow.status === "allowed" ? "未命中阻断标签" : "待补充人工标签"}</span>`}
         </div>
+        ${
+          workflowSecurityCore
+            ? `<p class="detail-paragraph"><strong>审核模型：</strong>${escapeHtml(getSecurityCoreEntryLabel(workflowSecurityCore))} · ${escapeHtml(getSecurityCoreRuntimeDetail(workflowSecurityCore))}</p>`
+            : ""
+        }
+        ${
+          workflowModelReview && workflowModelReview.detail
+            ? `<p class="detail-paragraph"><strong>模型审核记录：</strong>${escapeHtml(workflowModelReview.detail)}</p>`
+            : ""
+        }
         ${
           workflow.decision.suggested_alternative
             ? `<p class="detail-paragraph"><strong>建议替代路径：</strong>${escapeHtml(workflow.decision.suggested_alternative)}</p>`
@@ -3135,6 +3242,7 @@ async function runSelectedDemo() {
         scenarioId: selectedScenarioId,
         attackId: state.demoConsole.selectedAttackId,
         demoMode: state.demoConsole.demoMode === "live" ? "live" : "replay",
+        securityCore: createRuntimeSecurityCorePayload(),
       }),
     });
     state.demoConsole.job = payload.job || null;
@@ -3630,6 +3738,7 @@ function syncFilterControls() {
     demoFrameworkSelect: state.demoConsole.selectedFrameworkId,
     demoScenarioSelect: state.demoConsole.selectedScenarioId,
     demoAttackSelect: state.demoConsole.selectedAttackId,
+    demoSecurityCoreEntrySelect: state.config.security_core.entry_mode,
     demoModeSelect: state.demoConsole.demoMode,
   };
 
@@ -3676,6 +3785,12 @@ function formatEventTitle(event) {
   }
   if (event.event_type === "tool_result") {
     return `返回 ${event.tool_name}`;
+  }
+  if (event.event_type === "model_review") {
+    return `审核模型 ${event.receiver || "SecurityCore"}`;
+  }
+  if (event.event_type === "audit_decision") {
+    return `安全决策 ${event.sender || "SecurityCore"}`;
   }
   return `消息 ${event.sender}`;
 }
@@ -4041,6 +4156,7 @@ function normalizeRawWorkflow(rawItem, humanReview) {
       : String(latestDecision.reason || `${name} 共记录 ${events.length} 个事件。`),
     callPath,
     blockedReason: String(data.blocked_reason || ""),
+    securityCore: normalizeWorkflowSecurityCore(data.security_core || latestDecision.model_review || null),
     decision: normalizeDecisionShape(latestDecision),
     events: events.map((event, index) => normalizeWorkflowEvent(event, rawItem.filePath || name, index)),
     decisions: decisions.length ? decisions.map((decision) => normalizeDecisionShape(decision)) : [normalizeDecisionShape(latestDecision)],
@@ -4056,7 +4172,15 @@ function normalizeDecisionShape(decision) {
     blocking_risk_types: Array.isArray(decision.blocking_risk_types) ? decision.blocking_risk_types.map(String) : [],
     suggested_alternative: decision.suggested_alternative ? String(decision.suggested_alternative) : null,
     trajectory_score: decision.trajectory_score == null ? null : Number(decision.trajectory_score),
+    model_review: decision.model_review && typeof decision.model_review === "object" ? decision.model_review : null,
   };
+}
+
+function normalizeWorkflowSecurityCore(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  return normalizeRuntimeSecurityCore(value);
 }
 
 function normalizeWorkflowEvent(event, filePath, index) {
