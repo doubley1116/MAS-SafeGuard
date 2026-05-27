@@ -89,3 +89,5 @@ tmp_*.py
 *.dylib
 # Jupyter笔记本检查点
 .ipynb_checkpoints/
+# 训练模型
+AuditDataGen/SFT/qwen-sft-output/
