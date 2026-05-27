@@ -1633,6 +1633,222 @@ select option:disabled {
     rgba(255, 255, 255, 0.86);
 }
 
+/* ── SFT model weight card ── */
+
+.sft-model-card {
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 248, 251, 0.94) 100%),
+    #ffffff;
+  border: 1px solid var(--line);
+  box-shadow: var(--glass-shadow);
+  overflow: hidden;
+}
+
+.sft-model-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 20px 10px;
+}
+
+.sft-model-card-head h3 {
+  margin: 2px 0 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.sft-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 20px 14px;
+}
+
+.sft-meta-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+}
+
+.sft-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 20px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.sft-stat {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.88)),
+    #ffffff;
+  text-align: center;
+  min-width: 0;
+}
+
+.sft-stat-value {
+  font-size: 24px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sft-stat-value small {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.sft-stat-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sft-class-section {
+  margin: 14px 20px;
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+}
+
+.sft-class-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.sft-class-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.sft-class-label-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sft-class-bars {
+  display: grid;
+  gap: 8px;
+}
+
+.sft-class-row {
+  display: grid;
+  grid-template-columns: 8px 72px 1fr 48px 40px;
+  align-items: center;
+  gap: 8px;
+}
+
+.sft-class-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sft-class-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sft-class-name small {
+  font-weight: 500;
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+.sft-class-bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+
+.sft-class-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  min-width: 2px;
+  transition: width 400ms ease;
+}
+
+.sft-class-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: right;
+}
+
+.sft-class-pct {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  text-align: right;
+}
+
+.sft-path-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 20px 18px;
+}
+
+.sft-path-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sft-path-value {
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+  color: var(--text);
+  word-break: break-all;
+  line-height: 1.6;
+}
+
+.sft-path-file {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 5px 12px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  align-self: flex-start;
+}
+
 .call-path {
   margin-top: 14px;
 }

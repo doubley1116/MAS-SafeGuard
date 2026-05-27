@@ -24,6 +24,36 @@ const STATUS_META = {
   review: { label: "待复核", tone: "review" },
 };
 
+const SFT_MODEL_INFO = {
+  base_model: "Qwen2.5-7B-Instruct",
+  method: "LoRA (PEFT)",
+  lora_rank: 16,
+  lora_alpha: 32,
+  lora_dropout: 0.05,
+  trainable_params: "40.4M",
+  trainable_ratio: "0.53%",
+  total_params: "7.66B",
+  task_type: "CAUSAL_LM",
+  accuracy: 90.08,
+  macro_f1: 0.819,
+  weighted_f1: 0.896,
+  test_samples: 958,
+  train_samples: 8375,
+  train_split: "7,537 train / 838 val",
+  epochs: 2.78,
+  best_step: 1500,
+  best_metric: 0.708,
+  classes: [
+    { key: "safe", label_cn: "安全", label_en: "Safe", count: 3408, color: "var(--success)" },
+    { key: "suspicious", label_cn: "可疑", label_en: "Suspicious", count: 571, color: "var(--warning)" },
+    { key: "dangerous", label_cn: "危险", label_en: "Dangerous", count: 4396, color: "var(--danger)" },
+  ],
+  weights_path: "AuditDataGen/SFT/qwen-sft-output/final_model/",
+  adapter_file: "adapter_model.safetensors",
+  hardware: "NVIDIA A6000 (48 GB)",
+  train_time: "~4 hours",
+};
+
 const TEXT_TRANSLATIONS = new Map(Object.entries({
   "零信任审计展示台": "Zero Trust Audit Showcase",
   "多智能体安全演示": "Multi-Agent Security Demo",
@@ -639,15 +669,15 @@ function createDefaultState() {
       security_core: {
         enabled: true,
         entry_mode: "local_model",
-        provider: "ZeroTrust-Guard",
-        model_name: "zt-defender-v2",
-        endpoint: "https://api.zerotrust.local/v1",
-        local_model_path: "./models/defender",
+        provider: "ZeroTrust-SFT",
+        model_name: "qwen2.5-7b-sft-defender",
+        endpoint: "http://127.0.0.1:8000/v1",
+        local_model_path: "http://127.0.0.1:8000",
         api_protocol: "openai_compatible",
         api_key_env: "ZERO_TRUST_API_KEY",
         api_route: "/chat/completions",
-        api_timeout_ms: 30000,
-        prompt_status: "pending",
+        api_timeout_ms: 60000,
+        prompt_status: "ready",
         audit_scope: "hybrid",
         history_window: 30,
         log_level: "verbose",
@@ -2595,6 +2625,76 @@ function renderWorkflowDetail() {
   `;
 }
 
+function renderSftModelCard() {
+  const m = SFT_MODEL_INFO;
+  const classBars = m.classes.map((c) => {
+    const pct = ((c.count / m.train_samples) * 100).toFixed(1);
+    return `
+      <div class="sft-class-row">
+        <span class="sft-class-dot" style="background:${c.color}"></span>
+        <span class="sft-class-name">${c.label_cn} <small>${c.label_en}</small></span>
+        <span class="sft-class-bar-track">
+          <span class="sft-class-bar-fill" style="width:${pct}%;background:${c.color}"></span>
+        </span>
+        <span class="sft-class-count">${c.count.toLocaleString()}</span>
+        <span class="sft-class-pct">${pct}%</span>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="sft-model-card">
+      <div class="sft-model-card-head">
+        <div>
+          <p class="panel-kicker">SFT 模型权重</p>
+          <h3>${escapeHtml(m.base_model)}</h3>
+        </div>
+        <span class="status-pill allowed">已加载</span>
+      </div>
+
+      <div class="sft-meta-row">
+        <span class="sft-meta-tag">${escapeHtml(m.method)}</span>
+        <span class="sft-meta-tag">r=${m.lora_rank} α=${m.lora_alpha}</span>
+        <span class="sft-meta-tag">${escapeHtml(m.task_type)}</span>
+        <span class="sft-meta-tag">${m.hardware}</span>
+      </div>
+
+      <div class="sft-stats-grid">
+        <div class="sft-stat">
+          <span class="sft-stat-value">${m.accuracy.toFixed(1)}<small>%</small></span>
+          <span class="sft-stat-label">准确率 Accuracy</span>
+        </div>
+        <div class="sft-stat">
+          <span class="sft-stat-value">${m.macro_f1.toFixed(3)}</span>
+          <span class="sft-stat-label">Macro F1</span>
+        </div>
+        <div class="sft-stat">
+          <span class="sft-stat-value">${(m.train_samples / 1000).toFixed(1)}<small>k</small></span>
+          <span class="sft-stat-label">训练样本</span>
+        </div>
+        <div class="sft-stat">
+          <span class="sft-stat-value">${m.trainable_params}<small> / ${m.trainable_ratio}</small></span>
+          <span class="sft-stat-label">可训练参数</span>
+        </div>
+      </div>
+
+      <div class="sft-class-section">
+        <div class="sft-class-header">
+          <span class="sft-class-label">分类类别分布</span>
+          <span class="sft-class-label-sub">共 ${m.train_samples.toLocaleString()} 条 · ${m.epochs} epochs · best step ${m.best_step}</span>
+        </div>
+        <div class="sft-class-bars">${classBars}</div>
+      </div>
+
+      <div class="sft-path-row">
+        <span class="sft-path-label">权重路径</span>
+        <code class="sft-path-value">${escapeHtml(m.weights_path)}</code>
+        <span class="sft-path-file">${escapeHtml(m.adapter_file)}</span>
+      </div>
+    </div>
+  `;
+}
+
 function renderSecurityControl() {
   const config = state.config.security_core;
   const workflow = getActiveWorkflow();
@@ -2709,6 +2809,12 @@ function renderSecurityControl() {
           </select>
         </label>
       </div>
+
+      ${
+        config.entry_mode === "local_model"
+          ? renderSftModelCard()
+          : ""
+      }
 
       <div class="security-summary-card">
         <div class="decision-strip">

@@ -515,7 +515,7 @@ async function callSecurityCoreApi(securityCore, scenario) {
 
   const url = joinEndpointRoute(endpoint, normalized.api_route || "/chat/completions");
   const controller = new AbortController();
-  const timeoutMs = Math.min(Number(normalized.api_timeout_ms) || 30000, 8000);
+  const timeoutMs = Math.min(Number(normalized.api_timeout_ms) || 60000, 120000);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
