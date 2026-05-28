@@ -59,6 +59,8 @@ autogen_logs/
 agent_cache/
 # AutoGen 生成的代码
 generated_code/
+AuditDataGen/SFT/qwen-sft-output-2/
+AuditDataGen/SFT/qwen-sft-output/
 
 # ===================== IDE/编辑器配置 =====================
 # VSCode

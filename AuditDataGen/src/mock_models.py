@@ -18,9 +18,56 @@ if audit_gen_dir not in sys.path:
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
+import datetime
 from models.base_models import BaseAttackerModel, BaseDefenderModel, RolloutSample, GRPOConfig
 from skeletons import SKELETONS
-from generator import sample_values
+
+
+# ── sample_values: 从 generator.py 内联过来 ────────────────────────────────────
+FILLERS = {
+    "order_id":    ["OD-2024-88421", "OD-2024-99215", "OD-2023-55103", "OD-2024-77342"],
+    "carrier":     ["SF-Express", "JD-Logistics", "YTO-Expreess", "ZTO-Express"],
+    "tracking_no": ["SF1044008237423", "JDV0018237463", "YT8374192038471", "ZT0029481720"],
+    "contract_id": ["CT-2024-00821", "CT-2023-05531", "CT-2024-11092", "CT-2023-07782"],
+    "party_id":    ["PTY-88421", "PTY-99215", "PTY-55103", "PTY-77342"],
+    "doc_category": ["采购合同", "保密协议", "劳动合同", "租赁合同", "服务协议"],
+    "waybill_id":  ["WB-2024-88421", "WB-2024-99215", "WB-2023-55103", "WB-2024-77342"],
+    "cargo_id":    ["CARGO-CN-88421", "CARGO-CN-99215", "CARGO-EU-55103", "CARGO-US-77342"],
+    "warehouse_id": ["WH-SH-001", "WH-SZ-002", "WH-GZ-003", "WH-BJ-004"],
+    "destination":  ["深圳", "上海", "广州", "北京", "成都", "杭州"],
+    "emp_id":       ["EMP-20240317", "EMP-20240123", "EMP-20240205", "EMP-20240329"],
+    "salary_amount": ["8500", "12000", "15000", "22000", "35000"],
+    "role_name":    ["ROLE-FIN-ANALYST", "ROLE-HR-ADMIN", "ROLE-SYSTEM-ADMIN", "ROLE-AUDITOR"],
+    "device_id":    ["DEVICE-88421", "DEVICE-99215", "DEVICE-55103", "DEVICE-77342"],
+    "node_id":      ["NODE-A1", "NODE-B2", "NODE-C3", "NODE-D4"],
+    "threshold_rule": ["max_position_limit", "daily_trade_limit", "exposure_cap", "var_limit"],
+    "threshold_value": ["500000", "2000000", "0.15", "0.08"],
+    "grid_command":  ["START", "STOP", "RESTART", "SYNC", "CALIBRATE"],
+}
+
+
+def sample_values(scenario_type: str | None = None) -> dict:
+    """随机采样一套填充值，供骨架模板替换用。"""
+    return {
+        "order_id":    random.choice(FILLERS["order_id"]),
+        "carrier":     random.choice(FILLERS["carrier"]),
+        "tracking_no": random.choice(FILLERS["tracking_no"]),
+        "contract_id":   random.choice(FILLERS["contract_id"]),
+        "party_id":      random.choice(FILLERS["party_id"]),
+        "doc_category":  random.choice(FILLERS["doc_category"]),
+        "waybill_id":    random.choice(FILLERS["waybill_id"]),
+        "cargo_id":      random.choice(FILLERS["cargo_id"]),
+        "warehouse_id":  random.choice(FILLERS["warehouse_id"]),
+        "destination":   random.choice(FILLERS["destination"]),
+        "emp_id":        random.choice(FILLERS["emp_id"]),
+        "salary_amount": random.choice(FILLERS["salary_amount"]),
+        "role_name":     random.choice(FILLERS["role_name"]),
+        "device_id":     random.choice(FILLERS["device_id"]),
+        "node_id":       random.choice(FILLERS["node_id"]),
+        "threshold_rule":  random.choice(FILLERS["threshold_rule"]),
+        "threshold_value": random.choice(FILLERS["threshold_value"]),
+        "grid_command":    random.choice(FILLERS["grid_command"]),
+    }
 
 
 class MockAttackerModel(BaseAttackerModel):

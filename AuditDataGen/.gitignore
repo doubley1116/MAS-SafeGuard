@@ -43,6 +43,10 @@ build/
 .DS_Store
 Thumbs.db
 
+# ===================== SFT 模型产物 =====================
+SFT/qwen-sft-output*/
+SFT/qwen-sft-output*/
+
 # ===================== 临时文件 =====================
 *.tmp
 *.log

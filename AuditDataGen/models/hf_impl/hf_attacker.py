@@ -161,6 +161,10 @@ class HFAttackerModel(BaseAttackerModel):
         trainable = [p for p in self.model.parameters() if p.requires_grad]
         if trainable:
             self.optimizer = torch.optim.AdamW(trainable, lr=1e-5)
+            # 启用梯度检查点，用计算换显存（节省 50-70% 激活内存）
+            if hasattr(self.model, "gradient_checkpointing_enable"):
+                self.model.gradient_checkpointing_enable()
+                print("[OK] 已启用 Gradient Checkpointing")
             print("[OK] 使用自定义 GRPO 训练器（AdamW + clip）")
         else:
             self.optimizer = None
@@ -204,6 +208,11 @@ class HFAttackerModel(BaseAttackerModel):
         generated_ids = output[0][input_length:]
 
         generated = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+        # 释放 generate 过程中的 tensor（generate 可能产生 KV cache 等中间量）
+        del inputs, output
+        torch.cuda.empty_cache()
+
         return generated.strip()
 
     def log_prob(self, prompt: str, response: str) -> float:
@@ -229,7 +238,7 @@ class HFAttackerModel(BaseAttackerModel):
             prompt_len = match_len
 
         with torch.no_grad():
-            outputs = self.model(input_ids, output_hidden_states=False)
+            outputs = self.model(input_ids, output_hidden_states=False, use_cache=False)
             logits = outputs.logits  # [1, L, V]
 
         # 核心修复：与 update 函数保持一致的 shift 操作
@@ -260,7 +269,13 @@ class HFAttackerModel(BaseAttackerModel):
             index=response_shift_targets.unsqueeze(-1)
         ).squeeze(-1)
 
-        return response_log_probs.sum().item()
+        result = response_log_probs.sum().item()
+
+        # 释放 logits 相关大张量（log_prob 在 rollout 中频繁调用）
+        del outputs, logits, encoded, input_ids, prompt_ids
+        torch.cuda.empty_cache()
+
+        return result
 
     def update(self, samples: List[RolloutSample], config: GRPOConfig):
         """GRPO 更新（Batch 版本）"""
@@ -333,7 +348,7 @@ class HFAttackerModel(BaseAttackerModel):
         for epoch in range(grpo_epochs):
             self.optimizer.zero_grad()
 
-            outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+            outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
             logits = outputs.logits  # [B, L, V]
 
             # shift for next-token prediction
@@ -394,6 +409,11 @@ class HFAttackerModel(BaseAttackerModel):
 
         print(f"  [HFAttacker] GRPO更新 | epochs={grpo_epochs} samples={n} "
               f"avg_reward={avg_reward:.3f} policy_loss={stats['policy_loss']:.4f}")
+
+        # 释放本轮 update 产生的 GPU 中间张量，防止跨迭代累积
+        del outputs, logits, encoded, input_ids, attention_mask, prompt_encoded
+        torch.cuda.empty_cache()
+
         return stats
 
     def save(self, path: str):
