@@ -26,6 +26,7 @@ import json
 import re
 import time
 import argparse
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
 from pathlib import Path
@@ -49,8 +50,8 @@ DEFAULT_DATA_PATH = "all_consistent.jsonl"
 DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_OUTPUT_DIR = "./eval_results_api"
-DEFAULT_MAX_NEW_TOKENS = 512
-DEFAULT_WORKERS = 10
+DEFAULT_MAX_NEW_TOKENS = 16384
+DEFAULT_WORKERS = 3
 
 LABEL_MAP = {
     "normal": "safe", "benign": "safe", "safe": "safe",
@@ -109,24 +110,35 @@ def safe_get_str(d, key, max_len=None):
     return val
 
 
+_api_semaphore = threading.BoundedSemaphore(3)  # 最多 3 个并发请求
+_api_time_lock = threading.Lock()  # 保护 _last_api_call_time
+_last_api_call_time = 0.0
+_MIN_API_INTERVAL = 0.05  # 两次请求最小间隔（秒），避免触发速率限制
+
+
 def call_deepseek(client, model, messages, max_tokens, enable_thinking=False, retries=2):
     """调用 DeepSeek API，支持 thinking 模式"""
-    extra_body = {}
+    kwargs = dict(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=0.0,
+        top_p=1.0,
+    )
     if enable_thinking:
-        extra_body["thinking"] = {"type": "enabled"}
-        print(f"    [Thinking 模式已启用]")
+        kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
 
     for attempt in range(retries + 1):
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.0,
-                top_p=1.0,
-                extra_body=extra_body,
-            )
-            return response.choices[0].message.content
+            with _api_semaphore:
+                with _api_time_lock:
+                    global _last_api_call_time
+                    elapsed = time.time() - _last_api_call_time
+                    if elapsed < _MIN_API_INTERVAL:
+                        time.sleep(_MIN_API_INTERVAL - elapsed)
+                    _last_api_call_time = time.time()
+                response = client.chat.completions.create(**kwargs)
+            return response.choices[0].message.content or ""
         except Exception as e:
             if attempt < retries:
                 wait = 2 ** attempt
@@ -258,11 +270,12 @@ def main():
         print("  3. .env 文件: 在脚本目录创建 .env 文件并写入 DEEPSEEK_API_KEY=sk-xxxx")
         sys.exit(1)
 
-    client = OpenAI(api_key=api_key, base_url=args.base_url)
+    client = OpenAI(api_key=api_key, base_url=args.base_url, timeout=120.0)
 
     from datasets import load_dataset
-    print(f"加载数据: {args.data}")
-    dataset = load_dataset("json", data_files=args.data, split="train")
+    data_path = str(Path(args.data).resolve())
+    print(f"加载数据: {data_path}")
+    dataset = load_dataset("json", data_files=data_path, split="train")
     dataset = dataset.filter(is_valid_example)
     print(f"过滤后总样本数: {len(dataset)}")
 
@@ -287,6 +300,7 @@ def main():
 
     all_results = []
     print(f"\n开始调用 DeepSeek API (模型: {args.model}, 并发: {args.workers})")
+    print(f"已提交 {n_total} 个请求，等待首次响应...")
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         future_to_idx = {
             executor.submit(
@@ -308,12 +322,12 @@ def main():
                 result = future.result()
                 all_results.append(result)
                 completed += 1
-                if completed % 10 == 0 or completed == n_total:
+                if completed <= 3 or completed % 50 == 0 or completed == n_total:
                     elapsed = time.time() - t_start
                     avg = elapsed / completed
                     eta = avg * (n_total - completed)
                     current_acc = sum(1 for r in all_results if r["true"] == r["pred"]) / len(all_results)
-                    print(f"已完成 {completed}/{n_total} acc={current_acc:.4f} avg={avg:.2f}s eta={eta/60:.1f}min")
+                    print(f"[{completed}/{n_total}] acc={current_acc:.4f} avg={avg:.2f}s eta={eta/60:.1f}min")
             except Exception as e:
                 print(f"idx={idx} 处理失败: {e}")
 
