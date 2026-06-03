@@ -52,8 +52,11 @@ cache/
 # 攻击验证报告
 reports/
 attack_results/
-*.json
-*.jsonl
+# 生成的 workflow 数据（MAS 攻击/正常场景输出）
+MAS/Langgraph_ecommerce/data/workflows/
+MAS/Langgraph_healthcare/data/workflows/
+# 模型二进制（role_model / trajectory_detector 可重新训练）
+*.pkl
 # AutoGen 临时文件
 autogen_logs/
 agent_cache/

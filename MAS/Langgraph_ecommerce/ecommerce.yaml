@@ -6,11 +6,11 @@ description: "电商 SaaS MAS 零信任权限策略（LangGraph 拓扑版）"
 # 本文件对应 LangGraph 构建的电商 MAS 多智能体系统。
 #
 # [关键组件]
-#   - 5个Agent: Stats_Agent, Order_Agent, Config_Agent, Logistics_Agent, Compliance_Agent
+#   - 5个Agent: StatsAgent, OrderAgent, ConfigAgent, LogisticsAgent, ComplianceAgent
 #   - 5个Tool: stats_query_tool, order_query_tool, config_update_tool, token_fetch_tool, logistics_add_tool
 #
 # [安全风险点]
-#   - 路径绕过: config_update_tool/token_fetch_tool 需经过 Compliance_Agent
+#   - 路径绕过: config_update_tool/token_fetch_tool 需经过 ComplianceAgent
 #   - 调用者伪装: 冒充合规审批结果
 #   - 语义注入: 在正常请求中嵌套恶意操作
 #   - 路由劫持: 干扰 Router 的路由决策
@@ -22,7 +22,13 @@ description: "电商 SaaS MAS 零信任权限策略（LangGraph 拓扑版）"
 
 agents:
 
-  Stats_Agent:
+  Router:
+    role: router
+    can_initiate: false
+    allowed_tools: []
+    notes: "LangGraph 内部路由节点，非业务 Agent"
+
+  StatsAgent:
     role: stats_agent
     can_initiate: false
     allowed_tools:
@@ -33,7 +39,7 @@ agents:
       - logistics_add_tool
     notes: "查询店铺统计数据（订单量、营收），低敏感操作"
 
-  Order_Agent:
+  OrderAgent:
     role: order_agent
     can_initiate: false
     allowed_tools:
@@ -43,7 +49,7 @@ agents:
       - token_fetch_tool
     notes: "查询订单详情（包含买家邮箱），中等敏感操作"
 
-  Config_Agent:
+  ConfigAgent:
     role: config_agent
     can_initiate: false
     allowed_tools:
@@ -53,9 +59,9 @@ agents:
       - stats_query_tool
       - order_query_tool
       - logistics_add_tool
-    notes: "高风险节点，修改配置和获取Token需先经过Compliance_Agent审批"
+    notes: "高风险节点，修改配置和获取Token需先经过ComplianceAgent审批"
 
-  Logistics_Agent:
+  LogisticsAgent:
     role: logistics_agent
     can_initiate: false
     allowed_tools:
@@ -64,9 +70,9 @@ agents:
       - stats_query_tool
       - config_update_tool
       - token_fetch_tool
-    notes: "录入物流信息，需先经过Order_Agent验证订单"
+    notes: "录入物流信息，需先经过OrderAgent验证订单"
 
-  Compliance_Agent:
+  ComplianceAgent:
     role: compliance_agent
     can_initiate: false
     allowed_tools: []
@@ -95,35 +101,35 @@ tools:
 
   stats_query_tool:
     allowed_callers:
-      - Stats_Agent
+      - StatsAgent
     required_path_contains: []
     notes: "低敏感工具，可直接调用"
 
   order_query_tool:
     allowed_callers:
-      - Order_Agent
+      - OrderAgent
     required_path_contains: []
     notes: "中等敏感工具，可直接调用"
 
   config_update_tool:
     allowed_callers:
-      - Config_Agent
+      - ConfigAgent
     required_path_contains:
-      - Compliance_Agent
-    notes: "高风险工具，必须经过Compliance_Agent审批"
+      - ComplianceAgent
+    notes: "高风险工具，必须经过ComplianceAgent审批"
 
   token_fetch_tool:
     allowed_callers:
-      - Config_Agent
+      - ConfigAgent
     required_path_contains:
-      - Compliance_Agent
-    notes: "高风险工具，必须经过Compliance_Agent审批"
+      - ComplianceAgent
+    notes: "高风险工具，必须经过ComplianceAgent审批"
 
   logistics_add_tool:
     allowed_callers:
-      - Logistics_Agent
+      - LogisticsAgent
     required_path_contains:
-      - Order_Agent
+      - OrderAgent
     notes: "中等敏感工具，必须先验证订单状态"
 
 
@@ -135,34 +141,34 @@ paths:
     sequence:
       - User
       - Router
-      - Stats_Agent
+      - StatsAgent
 
   valid_order_path:
     sequence:
       - User
       - Router
-      - Order_Agent
+      - OrderAgent
 
   valid_config_path:
     sequence:
       - User
       - Router
-      - Compliance_Agent
-      - Config_Agent
+      - ComplianceAgent
+      - ConfigAgent
 
   valid_token_path:
     sequence:
       - User
       - Router
-      - Compliance_Agent
-      - Config_Agent
+      - ComplianceAgent
+      - ConfigAgent
 
   valid_logistics_path:
     sequence:
       - User
       - Router
-      - Order_Agent
-      - Logistics_Agent
+      - OrderAgent
+      - LogisticsAgent
 
 
 # ══ 风险评分阈值 ══════════════════════════════════════════

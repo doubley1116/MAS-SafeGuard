@@ -3,38 +3,151 @@ SecurityCore — MAS 审核中间层
 接收 AuditEvent，对照 YAML 权限策略，返回 AuditDecision
 
 审核流程：
-  1. 规则引擎：工具调用者校验 + 消息路径校验 → 计算 rule_score
+  1. 规则引擎 + 角色引擎：结构校验 → rule_score
   2. 根据 rule_score 分流：
      - rule_score >= rule_block(0.90) → 直接拦截，不走 LLM
-     - rule_score <  rule_block(0.90) → 全部进入 LLM 语义审核
-  3. LLM 审核返回 AuditDecision，综合规则分和 LLM 分给出最终决策
+     - rule_passthrough <= rule_score < rule_block → 进入 LLM 语义审核
+     - rule_score < rule_passthrough(0.40) → 直接放行，不走 LLM
+  3. LLM 审核返回 AuditDecision
+  4. 轨迹检测器评分（EMA + 角色抽象）→ 与 LLM 分融合
+
+增强能力:
+  - 角色引擎: 基于通信图拓扑自动发现角色，校验角色序列和邻接合法性
+  - 轨迹监控: 基于 EMA 自适应阈值的轻量轨迹异常检测（类比 PID 控制器）
+  - 在线学习: 确认正常的 call_path 自动更新 EMA 基线，越用越准
+  - 分数融合: llm_score 与 trajectory_score 按路径深度动态加权
 """
 
 from __future__ import annotations
-import yaml
-from typing import List
+
+import os
+import pickle
+from typing import Optional
+
 from audit_layer.utils.policy_loader import PolicyLoader
 from audit_layer.rule_engine import RuleEngine
 from audit_layer.audit_models import AuditEvent, AuditDecision
 from audit_layer.llm_reviewer import LLMReviewer
-# ══════════════════════════════════════════════════════════════
-# SecurityCore 主入口
-# ══════════════════════════════════════════════════════════════
+
+# 可选依赖：仅在使用相应功能时才需要
+try:
+    from audit_layer.role_discovery import RoleDiscovery
+    from audit_layer.role_engine import RoleEngine
+    HAS_ROLE_ENGINE = True
+except ImportError:
+    HAS_ROLE_ENGINE = False
+
+try:
+    from audit_layer.trajectory_model import TrajectoryAnomalyDetector
+    HAS_TRAJECTORY = True
+except ImportError:
+    HAS_TRAJECTORY = False
+
 
 class SecurityCore:
-    def __init__(self, yaml_path: str):
+    """
+    MAS 安全审核中间层。
+
+    用法（基础）:
+        core = SecurityCore("policy.yaml")
+        decision = core.audit(event)
+
+    用法（完整）:
+        core = SecurityCore(
+            "policy.yaml",
+            role_discovery_path="audit_layer/roles/",
+            trajectory_detector_path="audit_layer/trajectory_checkpoints/detector.pkl",
+        )
+        decision = core.audit(event)
+    """
+
+    def __init__(
+        self,
+        yaml_path: str,
+        system_prompt: str | None = None,
+        user_prompt_template: str | None = None,
+        threshold_overrides: dict[str, float] | None = None,
+        llm_reviewer=None,
+        # 角色引擎
+        role_discovery_path: Optional[str] = None,
+        role_adjacency: Optional[dict[str, list[str]]] = None,
+        # 轨迹检测（EMA 轻量版）
+        trajectory_detector_path: Optional[str] = None,
+        trajectory_online_learning: bool = True,
+    ):
         self.policy = PolicyLoader(yaml_path)
+        if threshold_overrides:
+            self.policy._policy.setdefault("thresholds", {}).update(threshold_overrides)
         self.rule_engine = RuleEngine(self.policy)
-        self.llm_reviewer = LLMReviewer()
+
+        # ── 角色引擎（可选）──
+        self.role_engine: Optional[RoleEngine] = None
+        self._role_discovery: Optional[RoleDiscovery] = None
+        if role_discovery_path and HAS_ROLE_ENGINE:
+            self._role_discovery = RoleDiscovery.load(role_discovery_path)
+            self.role_engine = RoleEngine(
+                self._role_discovery, role_adjacency=role_adjacency
+            )
+        elif role_adjacency and HAS_ROLE_ENGINE:
+            self.role_engine = RoleEngine(role_adjacency=role_adjacency)
+
+        # ── LLM 审核器 ──
+        if llm_reviewer is not None:
+            self.llm_reviewer = llm_reviewer
+        else:
+            self.llm_reviewer = LLMReviewer(
+                system_prompt=system_prompt,
+                user_prompt_template=user_prompt_template,
+            )
+
+        # ── 轨迹检测器（EMA 轻量版，可选）──
+        self.trajectory_detector: Optional[TrajectoryAnomalyDetector] = None
+        self._trajectory_online = trajectory_online_learning
+
+        if trajectory_detector_path and HAS_TRAJECTORY:
+            self._load_trajectory_detector(trajectory_detector_path)
+
+        # ── Trace 级学习状态 ──
+        # 策略：一个 trace 中只要有一个事件异常，整条 trace 的 call_path 都不学习
+        self._trace_buffer: list = []        # 待学习的 call_path 列表
+        self._trace_clean: bool = True       # 当前 trace 是否有异常
+        self._current_trace_id: str = ""     # 用于检测 trace 边界
+
+    # ══════════════════════════════════════════════════════════
+    # 主审核入口
+    # ══════════════════════════════════════════════════════════
 
     def audit(self, event: AuditEvent) -> AuditDecision:
         """主审核入口，对外暴露的唯一方法。"""
+        # ── Trace 边界检测 ──
+        if event.trace_id and event.trace_id != self._current_trace_id:
+            self._flush_trace()
+            self._current_trace_id = event.trace_id
+            self._trace_clean = True
+            self._trace_buffer = []
+
         rule_score, risk_types, rule_reason = self.rule_engine.evaluate(event)
 
-        t_block = self.policy.threshold("rule_block")   # 0.90
+        # ── 角色引擎评分（如果启用）──
+        if self.role_engine and event.call_path:
+            role_score, role_types, role_reason = self.role_engine.evaluate(
+                event.call_path,
+                tool_name=event.tool_name,
+                depth_constraints=self._get_depth_constraints(),
+            )
+            if role_score > rule_score:
+                rule_score = role_score
+            if role_types:
+                risk_types = list(set(risk_types + role_types))
+            if role_reason and role_score > 0:
+                rule_reason = f"{rule_reason} | [角色] {role_reason}"
 
-        # ── 分支 A：规则引擎直接拦截（高置信度违规，无需 LLM 确认）──
+        t_block = self.policy.threshold("rule_block")   # 0.90
+        t_pass  = self.policy.threshold("llm_needed")   # 0.40
+
+        # ── 分支 A：直接拦截 ──
         if rule_score >= t_block:
+            self._trace_clean = False
             return AuditDecision(
                 allow=False,
                 risk_score=rule_score,
@@ -42,18 +155,152 @@ class SecurityCore:
                 blocking_risk_types=risk_types,
             )
 
-        # ── 分支 B：所有未被规则拦截的事件，均进入 LLM 语义审核 ──
+        # ── 分支 B：直接放行 ──
+        if rule_score < t_pass:
+            trajectory_score = self._compute_trajectory_score(event)
+
+            # 轨迹分 >= 0.1 → 结构有疑点，推入 LLM 复审
+            if trajectory_score is not None and trajectory_score >= 0.1:
+                pass  # 强制走分支 C
+            else:
+                decision = AuditDecision(
+                    allow=True,
+                    risk_score=rule_score,
+                    reason=f"[规则放行] {rule_reason}",
+                    blocking_risk_types=[],
+                    trajectory_score=trajectory_score,
+                )
+                self._maybe_learn(event)
+                return decision
+
+        # ── 分支 C：LLM 语义审核 ──
         llm_decision = self.llm_reviewer.review(event, rule_risk_types=risk_types)
 
-        # 将规则引擎的信息补充到 LLM 决策中
         if risk_types:
             merged_types = list(set(risk_types + llm_decision.blocking_risk_types))
             llm_decision.blocking_risk_types = merged_types
 
-        # 在 reason 中附加规则引擎的上下文
         llm_decision.reason = (
             f"规则分={rule_score:.2f} → {llm_decision.reason}"
         )
 
+        # ── 轨迹评分融合 ──
+        trajectory_score = self._compute_trajectory_score(event)
+        if trajectory_score is not None:
+            path_len = len(event.call_path) if event.call_path else 0
+            alpha = self._compute_alpha(path_len)
+
+            llm_score = llm_decision.risk_score
+            fused_score = alpha * llm_score + (1 - alpha) * trajectory_score
+            llm_decision.risk_score = round(fused_score, 4)
+            llm_decision.trajectory_score = round(trajectory_score, 4)
+            llm_decision.reason += (
+                f" | 轨迹分={trajectory_score:.2f} (α={alpha:.1f})"
+            )
+
+        # LLM 判 safe → 缓冲待学; LLM 判 block → 整条 trace 污染
+        if llm_decision.allow:
+            self._maybe_learn(event)
+        else:
+            self._trace_clean = False
+
         return llm_decision
 
+    # ══════════════════════════════════════════════════════════
+    # 轨迹评分
+    # ══════════════════════════════════════════════════════════
+
+    def _compute_trajectory_score(self, event: AuditEvent) -> Optional[float]:
+        """
+        对当前事件的 call_path 做轨迹异常评分。
+
+        call_path 本身就是一条轨迹——它记录了从入口到当前节点的
+        完整路由链。EMA 检测器直接对它打分。
+        """
+        if self.trajectory_detector is None:
+            return None
+        if not event.call_path or len(event.call_path) < 2:
+            return None
+
+        return self.trajectory_detector.score(event.call_path)
+
+    def _maybe_learn(self, event: AuditEvent) -> None:
+        """
+        将当前事件的 call_path 加入 trace 缓冲区。
+        实际学习在 _flush_trace() 中执行：只有整条 trace 无异常时才提交。
+        """
+        if not self._trajectory_online:
+            return
+        if self.trajectory_detector is None:
+            return
+        if not event.call_path or len(event.call_path) < 2:
+            return
+        self._trace_buffer.append(event.call_path)
+
+    def _flush_trace(self) -> None:
+        """提交或丢弃当前 trace 的缓冲区。只有无异常的 trace 才学习。"""
+        if self._trace_clean and self._trace_buffer and self.trajectory_detector:
+            for cp in self._trace_buffer:
+                self.trajectory_detector.observe(cp)
+        self._trace_buffer = []
+        self._trace_clean = True
+
+    def flush_trace(self) -> None:
+        """外部接口：显式 flush 当前 trace（adapter 在场景结束时调用）。"""
+        self._flush_trace()
+
+    def _compute_alpha(self, path_len: int) -> float:
+        """
+        动态计算 LLM 分数的权重 α。
+
+        call_path 越长 → 轨迹信息越丰富 → 轨迹分权重越高。
+
+          len <= 2: α = 0.9  (几乎完全信任 LLM)
+          len 3~4:  α = 0.6
+          len 5~7:  α = 0.4
+          len > 7:  α = 0.25 (轨迹模式非常可靠)
+        """
+        if path_len <= 2:
+            return 0.9
+        elif path_len <= 4:
+            return 0.6
+        elif path_len <= 7:
+            return 0.4
+        else:
+            return 0.25
+
+    # ══════════════════════════════════════════════════════════
+    # 轨迹检测器加载
+    # ══════════════════════════════════════════════════════════
+
+    def _load_trajectory_detector(self, path: str) -> None:
+        """加载 EMA 轨迹检测器（pickle 格式）."""
+        self.trajectory_detector = TrajectoryAnomalyDetector.load(
+            path,
+            role_discovery=self._role_discovery,
+        )
+
+    def _get_depth_constraints(self) -> dict[str, tuple[int, int]]:
+        """从 YAML policy 读取路径深度约束."""
+        raw = self.policy.depth_constraints
+        return {
+            tool: (int(rule["min"]), int(rule["max"]))
+            for tool, rule in raw.items()
+            if "min" in rule and "max" in rule
+        }
+
+    # ══════════════════════════════════════════════════════════
+    # 调试与监控
+    # ══════════════════════════════════════════════════════════
+
+    def get_trajectory_summary(self) -> Optional[str]:
+        """获取轨迹检测器的基线摘要."""
+        if self.trajectory_detector is None:
+            return None
+        return self.trajectory_detector.summary()
+
+    def get_trajectory_observation_count(self) -> int:
+        """获取轨迹检测器已学习的正常样本数."""
+        if self.trajectory_detector is None:
+            return 0
+        return self.trajectory_detector.observation_count

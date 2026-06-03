@@ -94,8 +94,18 @@ class LangGraphAuditAdapter:
         allowed_callers: Optional[Dict[str, List[str]]] = None,
         required_path_nodes: Optional[Dict[str, List[str]]] = None,
         legal_agents: Optional[Set[str]] = None,
+        # ── 链路安全参数 ──────────────────────────────────────
+        role_discovery_path: Optional[str] = None,
+        trajectory_detector_path: Optional[str] = None,
     ) -> None:
-        self.security_core = SecurityCore(yaml_path) if yaml_path else None
+        self.security_core = (
+            SecurityCore(
+                yaml_path,
+                role_discovery_path=role_discovery_path,
+                trajectory_detector_path=trajectory_detector_path,
+            )
+            if yaml_path else None
+        )
         self.trace_id = trace_id
         self.scenario_id: str = ""
         self.verbose = verbose
@@ -846,12 +856,17 @@ class LangGraphAuditAdapter:
                         "reason": decision.reason,
                         "blocking_risk_types": decision.blocking_risk_types,
                         "suggested_alternative": decision.suggested_alternative,
+                        "trajectory_score": decision.trajectory_score,
                         "level": level,
                     }
                 except Exception as exc:
                     ev.metadata["audit_decision"] = {"error": str(exc)}
 
         self._all_trace_events.setdefault(trace_id, []).extend(events)
+
+        # Trace 级学习：flush 当前 trace 的缓冲区
+        if self.security_core:
+            self.security_core.flush_trace()
 
         sep = "-" * 60
         print(f"\n{sep}\n[攻击结果摘要]")

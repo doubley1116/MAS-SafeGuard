@@ -17,6 +17,21 @@ class PolicyLoader:
         return self._policy.get("paths", {})
 
     @property
+    def adjacency(self) -> dict[str, list[str]]:
+        """Agent 级邻接矩阵: {agent_name: [allowed_next_agents]}."""
+        return self._policy.get("adjacency", {})
+
+    @property
+    def role_adjacency(self) -> dict[str, list[str]]:
+        """角色级邻接矩阵: {role_name: [allowed_next_roles]}."""
+        return self._policy.get("role_adjacency", {})
+
+    @property
+    def depth_constraints(self) -> dict[str, dict]:
+        """路径深度约束: {tool_name: {min: int, max: int}}."""
+        return self._policy.get("depth_constraints", {})
+
+    @property
     def thresholds(self) -> dict:
         return self._policy.get("thresholds", {})
 

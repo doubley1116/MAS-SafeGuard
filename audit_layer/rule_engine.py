@@ -23,6 +23,8 @@ class RuleEngine:
             hits += self._check_intent_confidence_required(event)
             hits += self._check_route_hijack(event)
             hits += self._check_arg_constraints(event)
+            hits += self._check_unknown_agent(event)
+            hits += self._check_adjacency(event)
 
         elif event.event_type == "message":
             hits += self._check_message_target(event)
@@ -268,6 +270,23 @@ class RuleEngine:
     # ── 规则5：消息目标必须在 allowed_message_targets 内（AutoGen 场景）──
     # LangGraph / CrewAI 版 YAML 不含此字段时自动跳过
 
+    # ── 规则：未定义节点检测（AiTM 中间人攻击）──────────────────
+    # 检测 call_path 中是否出现 YAML 未定义的节点
+
+    def _check_unknown_agent(self, event: AuditEvent) -> List[tuple]:
+        defined_agents = set(self.policy.agents.keys())
+        unknown = [
+            node for node in event.call_path
+            if node not in defined_agents and not self._is_user_node(node)
+        ]
+        if unknown:
+            return [(
+                0.93,
+                "unknown_agent_in_path",
+                f"call_path 中出现未定义节点：{unknown}，疑似中间人攻击(AiTM)"
+            )]
+        return []
+
     # ── 规则：工具参数范围校验（arg_constraints）──────────────────
     # YAML 中为工具定义参数约束，超出范围直接拦截
     # 示例 YAML：
@@ -318,6 +337,53 @@ class RuleEngine:
                     0.93,
                     "arg_constraint_violation",
                     f"{label}={num_val} 超过最大值 {max_val}"
+                ))
+
+        return hits
+
+    # ── 规则：邻接矩阵检查 ───────────────────────────────────
+    # 检查 call_path 中每一对相邻 agent (vi → vi+1) 是否在允许的邻接表中。
+    #
+    # YAML 示例:
+    #   adjacency:
+    #     User: [Triage_Agent]
+    #     Triage_Agent: [Diagnosis_Agent, Specialist_Agent]
+    #     Diagnosis_Agent: [Review_Agent, Treatment_Agent]
+    #
+    # 这比 path_rule (有序子序列匹配) 更严格:
+    #   - path_rule 只要求 "A 在 B 之前出现过" (非直接相邻也可以)
+    #   - adjacency 要求 "A 直接调用 B" (必须紧邻)
+    #
+    # 能检测:
+    #   - 跳级调用: User → Diagnosis_Agent (跳过了 Triage)
+    #   - 反向调用: Diagnosis → Triage (回退到上游)
+    #   - AiTM 导致的异常邻接
+
+    def _check_adjacency(self, event: AuditEvent) -> List[tuple]:
+        adjacency = self.policy.adjacency
+        if not adjacency:
+            return []
+
+        path = self._agent_path(event)
+        if len(path) < 2:
+            return []
+
+        hits = []
+        for i in range(len(path) - 1):
+            src, dst = path[i], path[i + 1]
+            allowed = adjacency.get(src, [])
+            if not allowed:
+                continue  # 源节点无邻接约束定义 → 跳过
+
+            if dst not in allowed:
+                # 用户节点容错（User/UserProxy 视为等价）
+                if self._is_user_node(src) and self._is_user_node(dst):
+                    continue
+
+                hits.append((
+                    0.88,
+                    "adjacency_violation",
+                    f"非法邻接: {src} → {dst}，{src} 允许的下一跳: {allowed}"
                 ))
 
         return hits

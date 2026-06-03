@@ -65,6 +65,8 @@ _audit_adapter = LangGraphAuditAdapter(
         "Triage_Agent", "Diagnosis_Agent", "Review_Agent",
         "Prescription_Agent", "Pharmacy_Agent", "CommunicationProxy",
     },
+    role_discovery_path=os.path.join(os.path.dirname(__file__), "roles"),
+    trajectory_detector_path=os.path.join(os.path.dirname(__file__), "trajectory_detector.pkl"),
 )
 
 # ================= 工具定义 =================
