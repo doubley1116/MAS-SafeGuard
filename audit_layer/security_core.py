@@ -4,12 +4,9 @@ SecurityCore — MAS 审核中间层
 
 审核流程：
   1. 规则引擎 + 角色引擎：结构校验 → rule_score
-  2. 根据 rule_score 分流：
-     - rule_score >= rule_block(0.90) → 直接拦截，不走 LLM
-     - rule_passthrough <= rule_score < rule_block → 进入 LLM 语义审核
-     - rule_score < rule_passthrough(0.40) → 直接放行，不走 LLM
-  3. LLM 审核返回 AuditDecision
-  4. 轨迹检测器评分（EMA + 角色抽象）→ 与 LLM 分融合
+  2. rule_score >= rule_block(0.90) → 直接拦截（规则是硬约束）
+  3. rule_score <  rule_block(0.90) → 全部经 LLM 语义审核 + EWMA 融合
+     （规则只覆盖结构化攻击，语义/轨迹攻击必须由 LLM+EWMA 捕获）
 
 增强能力:
   - 角色引擎: 基于通信图拓扑自动发现角色，校验角色序列和邻接合法性
@@ -143,7 +140,6 @@ class SecurityCore:
                 rule_reason = f"{rule_reason} | [角色] {role_reason}"
 
         t_block = self.policy.threshold("rule_block")   # 0.90
-        t_pass  = self.policy.threshold("llm_needed")   # 0.40
 
         # ── 分支 A：直接拦截 ──
         if rule_score >= t_block:
@@ -155,25 +151,10 @@ class SecurityCore:
                 blocking_risk_types=risk_types,
             )
 
-        # ── 分支 B：直接放行 ──
-        if rule_score < t_pass:
-            trajectory_score = self._compute_trajectory_score(event)
-
-            # 轨迹分 >= 0.1 → 结构有疑点，推入 LLM 复审
-            if trajectory_score is not None and trajectory_score >= 0.1:
-                pass  # 强制走分支 C
-            else:
-                decision = AuditDecision(
-                    allow=True,
-                    risk_score=rule_score,
-                    reason=f"[规则放行] {rule_reason}",
-                    blocking_risk_types=[],
-                    trajectory_score=trajectory_score,
-                )
-                self._maybe_learn(event)
-                return decision
-
-        # ── 分支 C：LLM 语义审核 ──
+        # ── LLM 语义审核 ──
+        # 所有未达到拦截阈值的事件都经 LLM+EWMA 双审。
+        # 规则引擎只覆盖结构化攻击；语义注入、IPI、路由劫持、感染传播
+        # 对规则透明，必须由 LLM 和轨迹层捕获。
         llm_decision = self.llm_reviewer.review(event, rule_risk_types=risk_types)
 
         if risk_types:

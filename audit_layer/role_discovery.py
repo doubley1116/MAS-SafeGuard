@@ -172,11 +172,25 @@ class RoleDiscovery:
                 positions = data["positions"]
                 avg_pos = sum(positions) / len(positions)
                 variance = sum((p - avg_pos) ** 2 for p in positions) / len(positions)
+                pos_range = max(positions) - min(positions) if positions else 0
                 pos_stats[agent] = {
                     "avg_pos_norm": avg_pos / max(max_pos, 1),
                     "pos_std": math.sqrt(variance) / max(max_pos, 1),
                     "has_tool": 1.0 if data["has_tool"] else 0.0,
+                    "pos_range": pos_range,
                 }
+
+        # 计算邻居熵: 区分路由节点(多样邻居)和外围节点(单一邻居)
+        for agent in G:
+            if agent in adj:
+                counts = list(adj[agent].values())
+                total = sum(counts)
+                if total > 0:
+                    entropy = -sum((c / total) * math.log(c / total) for c in counts)
+                    if agent in pos_stats:
+                        pos_stats[agent]["neighbor_entropy"] = entropy
+                    else:
+                        pos_stats[agent] = {"neighbor_entropy": entropy}
 
         return G, pos_stats
 
@@ -302,13 +316,14 @@ class RoleDiscovery:
         has_tool: 是否发起工具调用（审核/路由=0, 执行者=1）
         """
         n = len(self.agents)
-        w = max(1.0, self.embedding_dim / 4)  # 增强维度权重
-        aug = np.zeros((n, 3), dtype=np.float32)
+        aug = np.zeros((n, 5), dtype=np.float32)
         for i, agent in enumerate(self.agents):
             stats = pos_stats.get(agent, {})
-            aug[i, 0] = stats.get("avg_pos_norm", 0.5) * w
-            aug[i, 1] = stats.get("pos_std", 0.0) * w
-            aug[i, 2] = stats.get("has_tool", 0.0) * w
+            aug[i, 0] = stats.get("avg_pos_norm", 0.5)
+            aug[i, 1] = stats.get("pos_std", 0.0)
+            aug[i, 2] = stats.get("has_tool", 0.0)
+            aug[i, 3] = stats.get("neighbor_entropy", 0.0)
+            aug[i, 4] = stats.get("pos_range", 0.0)
         return np.concatenate([embeddings, aug], axis=1)
 
     # ══════════════════════════════════════════════════════════
@@ -319,16 +334,35 @@ class RoleDiscovery:
         self, embeddings: np.ndarray
     ) -> tuple[np.ndarray, dict[int, str]]:
         """
-        聚类发现角色。
+        统一分类方案：逐点决策树标注。
 
-        小图（≤8 Agent）：直接根据嵌入向量中的"位置+工具"信号分配角色，
-        不需要 KMeans——星型拓扑下纯邻接嵌入没有区分度。
-        大图：KMeans 聚类。
+        特征顺序: [...SVD..., avg_pos, pos_std, has_tool, neighbor_entropy, pos_range]
+        所有特征权重=1，与结构嵌入同量级。
+        决策优先级: entry > triage > reviewer > specialist
         """
         n = len(embeddings)
-        if n <= 8:
-            return self._cluster_by_behavior(embeddings)
-        return self._cluster_by_kmeans(embeddings)
+        aug = embeddings[:, -5:]
+
+        per_agent = [""] * n
+        for i in range(n):
+            a = aug[i]
+            if a[0] < 0.02:
+                per_agent[i] = "entry"
+            elif a[3] > 0.5:
+                per_agent[i] = "triage"
+            elif a[2] < 0.1 and a[4] < 0.5 and a[0] < 0.35:
+                # 无工具、位置范围≈0（严格单一位置）、在管线前段
+                per_agent[i] = "reviewer"
+            else:
+                per_agent[i] = "specialist"
+
+        # 为每个唯一角色分配虚拟簇标签，保持接口兼容
+        unique_roles = sorted(set(per_agent))
+        role_to_label = {r: i for i, r in enumerate(unique_roles)}
+        labels = np.array([role_to_label[r] for r in per_agent], dtype=int)
+        role_names = {i: r for r, i in role_to_label.items()}
+
+        return labels, role_names
 
     def _cluster_by_behavior(
         self, embeddings: np.ndarray
