@@ -2,59 +2,59 @@
 __pycache__/
 *.py[cod]
 *$py.class
-# ===================== 系统通用文件 =====================
-# Mac系统隐藏文件
+# ===================== 绯荤粺閫氱敤鏂囦欢 =====================
+# Mac绯荤粺闅愯棌鏂囦欢
 .DS_Store
-# Windows系统缩略图缓存
+# Windows绯荤粺缂╃暐鍥剧紦瀛?
 Thumbs.db
-# Linux临时文件
+# Linux涓存椂鏂囦欢
 *.swp
 *.tmp
 *~
 
-# ===================== Python项目核心 =====================
-# 虚拟环境
+# ===================== Python椤圭洰鏍稿績 =====================
+# 铏氭嫙鐜
 venv/
 env/
 ENV/
 .venv/
-# 字节码文件
+# 瀛楄妭鐮佹枃浠?
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyo
-# Python打包/构建产物
+# Python鎵撳寘/鏋勫缓浜х墿
 dist/
 build/
 *.egg-info/
 .eggs/
 
-# ===================== 项目专属文件 =====================
-# 敏感环境变量
+# ===================== 椤圭洰涓撳睘鏂囦欢 =====================
+# 鏁忔劅鐜鍙橀噺
 .env
 .env.local
 .env.*.local
-# SQLite数据库文件（核心修正：覆盖MAS根目录的db）
+# SQLite鏁版嵁搴撴枃浠讹紙鏍稿績淇锛氳鐩朚AS鏍圭洰褰曠殑db锛?
 MAS/asset.db
 MAS/trade.db
 *.db
 *.sqlite
 *.sqlite3
-# 日志文件
+# 鏃ュ織鏂囦欢
 logs/
 *.log
 *.log.*
 logs/*.log
-# 临时数据/缓存
+# 涓存椂鏁版嵁/缂撳瓨
 temp/
 cache/
 *.cache
-# 攻击验证报告
+# 鏀诲嚮楠岃瘉鎶ュ憡
 reports/
 attack_results/
-# Claude Code 内部
+# Claude Code 鍐呴儴
 .claude/
-# AuditDataGen 生成数据 / 评估结果
+# AuditDataGen 鐢熸垚鏁版嵁 / 璇勪及缁撴灉
 AuditDataGen/SFT/ablation_test/
 AuditDataGen/SFT/eval_results_api/
 AuditDataGen/SFT/eval_results_multi/
@@ -64,23 +64,24 @@ AuditDataGen/SFT/run_ablation_server.py
 AuditDataGen/eval_results/
 AuditDataGen/mas_prompts.jsonl
 AuditDataGen/output_benign_1k/
-# MAS 运行日志/输出
+# MAS 杩愯鏃ュ織/杈撳嚭
 MAS/Langgraph_ecommerce/database/audit_log.jsonl
 MAS/Langgraph_trading/universal_audit_events.json
-# 生成的 workflow 数据（MAS 攻击/正常场景输出）
+# 鐢熸垚鐨?workflow 鏁版嵁锛圡AS 鏀诲嚮/姝ｅ父鍦烘櫙杈撳嚭锛?
 MAS/Langgraph_ecommerce/data/workflows/
 MAS/Langgraph_healthcare/data/workflows/
-# 模型二进制（role_model / trajectory_detector 可重新训练）
+MAS/Langgraph_trading/data/
+# 妯″瀷浜岃繘鍒讹紙role_model / trajectory_detector 鍙噸鏂拌缁冿級
 *.pkl
-# AutoGen 临时文件
+# AutoGen 涓存椂鏂囦欢
 autogen_logs/
 agent_cache/
-# AutoGen 生成的代码
+# AutoGen 鐢熸垚鐨勪唬鐮?
 generated_code/
 AuditDataGen/SFT/qwen-sft-output-2/
 AuditDataGen/SFT/qwen-sft-output/
 
-# ===================== IDE/编辑器配置 =====================
+# ===================== IDE/缂栬緫鍣ㄩ厤缃?=====================
 # VSCode
 .vscode/
 *.code-workspace
@@ -95,17 +96,17 @@ AuditDataGen/SFT/qwen-sft-output/
 # Vim
 *.vim
 
-# ===================== 其他无需上传的文件 =====================
-# 测试文件/临时脚本
+# ===================== 鍏朵粬鏃犻渶涓婁紶鐨勬枃浠?=====================
+# 娴嬭瘯鏂囦欢/涓存椂鑴氭湰
 test_*.py
 tmp_*.py
-# 数据备份
+# 鏁版嵁澶囦唤
 *.bak
 *.backup
-# 操作系统临时文件
+# 鎿嶄綔绯荤粺涓存椂鏂囦欢
 *.dll
 *.exe
 *.so
 *.dylib
-# Jupyter笔记本检查点
+# Jupyter绗旇鏈鏌ョ偣
 .ipynb_checkpoints/
