@@ -110,3 +110,5 @@ tmp_*.py
 *.dylib
 # Jupyter绗旇鏈鏌ョ偣
 .ipynb_checkpoints/
+AuditDataGen/eval_results_verify.zip
+AuditDataGen/eval_results_verify/

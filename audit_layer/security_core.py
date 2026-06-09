@@ -3,10 +3,9 @@ SecurityCore — MAS 审核中间层
 接收 AuditEvent，对照 YAML 权限策略，返回 AuditDecision
 
 审核流程：
-  1. 规则引擎 + 角色引擎：结构校验 → rule_score
-  2. rule_score >= rule_block(0.90) → 直接拦截（规则是硬约束）
-  3. rule_score <  rule_block(0.90) → 全部经 LLM 语义审核 + EWMA 融合
-     （规则只覆盖结构化攻击，语义/轨迹攻击必须由 LLM+EWMA 捕获）
+  1. 规则引擎 + 角色引擎：结构校验 → rule_score / risk_types
+  2. 全部经 LLM 语义审核 + EWMA 融合（不走规则直拦分支）
+  3. 规则分作为加权信号参与最终融合决策
 
 增强能力:
   - 角色引擎: 基于通信图拓扑自动发现角色，校验角色序列和邻接合法性
@@ -139,22 +138,10 @@ class SecurityCore:
             if role_reason and role_score > 0:
                 rule_reason = f"{rule_reason} | [角色] {role_reason}"
 
-        t_block = self.policy.threshold("rule_block")   # 0.90
-
-        # ── 分支 A：直接拦截 ──
-        if rule_score >= t_block:
-            self._trace_clean = False
-            return AuditDecision(
-                allow=False,
-                risk_score=rule_score,
-                reason=f"[规则拦截] {rule_reason}",
-                blocking_risk_types=risk_types,
-            )
-
         # ── LLM 语义审核 ──
-        # 所有未达到拦截阈值的事件都经 LLM+EWMA 双审。
-        # 规则引擎只覆盖结构化攻击；语义注入、IPI、路由劫持、感染传播
-        # 对规则透明，必须由 LLM 和轨迹层捕获。
+        # 所有事件都走 LLM+EWMA 双审，不走规则直拦分支。
+        # 规则引擎只产出结构证据（risk_types + rule_score），
+        # 语义注入、IPI、路由劫持、感染传播对规则透明，必须由 LLM 和轨迹层捕获。
         llm_decision = self.llm_reviewer.review(event, rule_risk_types=risk_types)
 
         if risk_types:
@@ -179,11 +166,22 @@ class SecurityCore:
                 f" | 轨迹分={trajectory_score:.2f} (α={alpha:.1f})"
             )
 
-        # LLM 判 safe → 缓冲待学; LLM 判 block → 整条 trace 污染
-        if llm_decision.allow:
-            self._maybe_learn(event)
-        else:
+        # 规则分作为 floor：规则引擎命中的高危信号不因 LLM 低分而被掩盖
+        if rule_score > llm_decision.risk_score:
+            llm_decision.risk_score = round(rule_score, 4)
+            llm_decision.blocking_risk_types = list(set(
+                llm_decision.blocking_risk_types + risk_types
+            ))
+            llm_decision.reason = (
+                f"[规则加权] {rule_reason} | {llm_decision.reason}"
+            )
+
+        # 最终 allow 判定：risk_score >= 0.5 视为拦截
+        if llm_decision.risk_score >= 0.5:
+            llm_decision.allow = False
             self._trace_clean = False
+        else:
+            self._maybe_learn(event)
 
         return llm_decision
 

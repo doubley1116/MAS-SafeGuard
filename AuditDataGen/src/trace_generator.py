@@ -72,6 +72,10 @@ def sample_values(scenario_type: Optional[str] = None) -> dict:
         ipi_key = "ipi_file_content_campus"
     elif scenario_type in ("manufacturing", "MFG-IPI"):
         ipi_key = "ipi_file_content_manufacturing"
+    elif scenario_type in ("iov",):
+        ipi_key = "ipi_file_content_iov"
+    elif scenario_type in ("converged_media",):
+        ipi_key = "ipi_file_content_converged_media"
     else:
         ipi_key = "ipi_file_content_financial"
 
@@ -127,6 +131,18 @@ def sample_values(scenario_type: Optional[str] = None) -> dict:
         "line_id":         random.choice(FILLERS["line_id"]),
         "product_code":    random.choice(FILLERS["product_code"]),
         "defect_rate":     random.choice(FILLERS["defect_rate"]),
+        # IoV domain
+        "vehicle_id":       random.choice(FILLERS["vehicle_id"]),
+        "firmware_version": random.choice(FILLERS["firmware_version"]),
+        "route_id":         random.choice(FILLERS["route_id"]),
+        "v2x_cert_id":      random.choice(FILLERS["v2x_cert_id"]),
+        "ota_package_id":   random.choice(FILLERS["ota_package_id"]),
+        # Converged Media domain
+        "content_id":        random.choice(FILLERS["content_id"]),
+        "channel":           random.choice(FILLERS["channel"]),
+        "copyright_case_id": random.choice(FILLERS["copyright_case_id"]),
+        "publisher_id":      random.choice(FILLERS["publisher_id"]),
+        "media_asset_id":    random.choice(FILLERS["media_asset_id"]),
     }
 
 
