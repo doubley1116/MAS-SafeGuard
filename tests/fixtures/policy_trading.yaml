@@ -1,0 +1,109 @@
+version: "2.0"
+description: "金融交易 MAS 零信任策略（适配 AuditDataGen financial 域数据）"
+
+agents:
+  User:
+    role: entry
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools:
+      - read_external_file_tool
+    allowed_message_targets:
+      - Router
+      - Research_Agent
+      - Risk_Agent
+      - Trade_Agent
+      - Asset_Agent
+    notes: "用户入口节点"
+
+  Router:
+    role: triage
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_external_file_tool
+    allowed_message_targets:
+      - Research_Agent
+      - Risk_Agent
+      - Trade_Agent
+      - Asset_Agent
+    notes: "路由分发节点"
+
+  Research_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools:
+      - read_external_file_tool
+    blocked_tools: []
+    allowed_message_targets:
+      - Risk_Agent
+    notes: "投研分析代理，唯一可读取外部文件"
+
+  Risk_Agent:
+    role: reviewer
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_external_file_tool
+    allowed_message_targets:
+      - Research_Agent
+      - Trade_Agent
+    notes: "风控审批代理，交易执行前的必经审批节点"
+
+  Trade_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_external_file_tool
+    allowed_message_targets:
+      - Asset_Agent
+    notes: "交易执行代理"
+
+  Asset_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_external_file_tool
+    allowed_message_targets: []
+    notes: "资产查询代理，终端节点"
+
+tools:
+  read_external_file_tool:
+    allowed_callers:
+      - Research_Agent
+    required_path_contains: []
+    path_rule: ""
+    route_hijack_check: false
+    arg_constraints:
+      filename:
+        label: "文件名"
+        min: 1
+        max: 256
+    notes: "外部文件读取工具，仅投研代理可用"
+
+adjacency:
+  User:
+    - Router
+    - Research_Agent
+    - Risk_Agent
+    - Trade_Agent
+    - Asset_Agent
+  Router:
+    - Research_Agent
+    - Risk_Agent
+    - Trade_Agent
+    - Asset_Agent
+  Research_Agent:
+    - Risk_Agent
+  Risk_Agent:
+    - Research_Agent
+    - Trade_Agent
+  Trade_Agent:
+    - Asset_Agent
+  Asset_Agent: []
+
+thresholds:
+  rule_block: 0.90
+  human_review: 0.75

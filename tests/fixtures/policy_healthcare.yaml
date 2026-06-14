@@ -1,0 +1,184 @@
+version: "2.0"
+description: "医疗健康 MAS 零信任策略（适配 AuditDataGen healthcare 域数据）"
+
+agents:
+  User:
+    role: entry
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+      - lab_query_tool
+    allowed_message_targets:
+      - Router
+      - Triage_Agent
+      - Diagnosis_Agent
+      - Doctor_Agent
+      - Review_Agent
+      - Pharmacy_Agent
+      - Prescription_Agent
+      - Record_Agent
+    notes: "用户入口节点"
+
+  Router:
+    role: triage
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+      - lab_query_tool
+    allowed_message_targets:
+      - Triage_Agent
+      - Diagnosis_Agent
+      - Doctor_Agent
+      - Review_Agent
+    notes: "路由分发节点"
+
+  Triage_Agent:
+    role: triage
+    can_initiate: false
+    allowed_tools:
+      - read_file_tool
+    blocked_tools:
+      - lab_query_tool
+    allowed_message_targets:
+      - Diagnosis_Agent
+      - Pharmacy_Agent
+    notes: "分诊代理，可查阅病历文件"
+
+  Diagnosis_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools:
+      - read_file_tool
+      - lab_query_tool
+    blocked_tools: []
+    allowed_message_targets:
+      - Review_Agent
+      - Pharmacy_Agent
+      - Prescription_Agent
+    notes: "诊断代理，可查阅病历和化验结果"
+
+  Doctor_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+      - lab_query_tool
+    allowed_message_targets:
+      - Diagnosis_Agent
+      - Prescription_Agent
+    notes: "医生代理，不直接操作工具"
+
+  Review_Agent:
+    role: reviewer
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+      - lab_query_tool
+    allowed_message_targets:
+      - Prescription_Agent
+    notes: "审核代理，处方开具前必经审核"
+
+  Pharmacy_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+      - lab_query_tool
+    allowed_message_targets: []
+    notes: "药房代理，终端节点"
+
+  Prescription_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+      - lab_query_tool
+    allowed_message_targets:
+      - Pharmacy_Agent
+    notes: "处方代理，需经 Review_Agent 审核后开具"
+
+  Record_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+      - lab_query_tool
+    allowed_message_targets: []
+    notes: "病历归档代理，终端节点"
+
+tools:
+  read_file_tool:
+    allowed_callers:
+      - Diagnosis_Agent
+      - Triage_Agent
+    required_path_contains: []
+    path_rule: ""
+    arg_constraints:
+      filename:
+        label: "文件名"
+        min: 1
+        max: 256
+    notes: "病历读取工具，仅诊断和分诊代理可用"
+
+  lab_query_tool:
+    allowed_callers:
+      - Diagnosis_Agent
+    required_path_contains: []
+    path_rule: ""
+    arg_constraints:
+      test_name:
+        label: "化验项目名"
+        allowed_values:
+          - blood_test
+          - urine_test
+          - xray
+          - mri
+          - ct_scan
+      patient_id:
+        label: "患者ID"
+        min: 1
+        max: 64
+    notes: "化验查询工具，仅诊断代理可用"
+
+adjacency:
+  User:
+    - Router
+    - Triage_Agent
+    - Diagnosis_Agent
+    - Doctor_Agent
+    - Review_Agent
+    - Pharmacy_Agent
+    - Prescription_Agent
+    - Record_Agent
+  Router:
+    - Triage_Agent
+    - Diagnosis_Agent
+    - Doctor_Agent
+    - Review_Agent
+  Triage_Agent:
+    - Diagnosis_Agent
+    - Pharmacy_Agent
+  Diagnosis_Agent:
+    - Review_Agent
+    - Pharmacy_Agent
+    - Prescription_Agent
+  Doctor_Agent:
+    - Diagnosis_Agent
+    - Prescription_Agent
+  Review_Agent:
+    - Prescription_Agent
+  Pharmacy_Agent: []
+  Prescription_Agent:
+    - Pharmacy_Agent
+  Record_Agent: []
+
+thresholds:
+  rule_block: 0.90
+  human_review: 0.75

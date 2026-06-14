@@ -1,0 +1,107 @@
+version: "2.0"
+description: "电商平台 MAS 零信任策略（适配 AuditDataGen ecommerce 域数据）"
+
+agents:
+  User:
+    role: entry
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+    allowed_message_targets:
+      - Router
+      - StatsAgent
+      - OrderAgent
+      - ComplianceAgent
+      - ConfigAgent
+    notes: "用户入口节点"
+
+  Router:
+    role: triage
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+    allowed_message_targets:
+      - StatsAgent
+      - OrderAgent
+      - ComplianceAgent
+      - ConfigAgent
+    notes: "路由分发节点"
+
+  StatsAgent:
+    role: specialist
+    can_initiate: false
+    allowed_tools:
+      - read_file_tool
+    blocked_tools: []
+    allowed_message_targets:
+      - ConfigAgent
+    notes: "统计分析代理，可读取数据文件"
+
+  OrderAgent:
+    role: specialist
+    can_initiate: false
+    allowed_tools:
+      - read_file_tool
+    blocked_tools: []
+    allowed_message_targets:
+      - ConfigAgent
+    notes: "订单处理代理，可读取订单文件"
+
+  ComplianceAgent:
+    role: reviewer
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+    allowed_message_targets:
+      - ConfigAgent
+    notes: "合规审核代理，配置变更前必经审核"
+
+  ConfigAgent:
+    role: specialist
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_file_tool
+    allowed_message_targets: []
+    notes: "配置管理代理，终端节点。不允许反向调用上游代理"
+
+tools:
+  read_file_tool:
+    allowed_callers:
+      - StatsAgent
+      - OrderAgent
+    required_path_contains: []
+    path_rule: ""
+    arg_constraints:
+      filename:
+        label: "文件名"
+        min: 1
+        max: 256
+    notes: "数据文件读取工具，仅统计和订单代理可用"
+
+adjacency:
+  User:
+    - Router
+    - StatsAgent
+    - OrderAgent
+    - ComplianceAgent
+    - ConfigAgent
+  Router:
+    - StatsAgent
+    - OrderAgent
+    - ComplianceAgent
+    - ConfigAgent
+  StatsAgent:
+    - ConfigAgent
+  OrderAgent:
+    - ConfigAgent
+  ComplianceAgent:
+    - ConfigAgent
+  ConfigAgent: []
+
+thresholds:
+  rule_block: 0.90
+  human_review: 0.75
