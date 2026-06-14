@@ -48,9 +48,9 @@ class OnlineGaussian:
       - 默认 0.05: 约 20 次观测后旧数据权重衰减到 ~36%
     """
 
-    def __init__(self, alpha: float = 0.05, k: float = 3.0):
+    def __init__(self, alpha: float = 0.05, k: float = 2.0):
         self.alpha = alpha
-        self.k = k          # 几倍标准差算异常
+        self.k = k          # 几倍标准差算异常（2.0: ~5%的正常观测落在界外）
         self.mean: Optional[float] = None
         self.var: float = 0.0
         self.n_obs: int = 0
@@ -119,11 +119,11 @@ class RoleAdaptiveMonitor:
         self,
         role_discovery=None,  # RoleDiscovery 实例，可选
         alpha: float = 0.05,
-        k_depth: float = 3.0,
-        k_roles: float = 2.5,
-        k_entropy: float = 3.5,
-        k_jumps: float = 2.0,
-        k_backtracks: float = 2.5,
+        k_depth: float = 2.0,
+        k_roles: float = 2.0,
+        k_entropy: float = 2.5,
+        k_jumps: float = 1.5,
+        k_backtracks: float = 2.0,
         k_gap: float = 2.0,
         k_missing: float = 1.5,
     ):
