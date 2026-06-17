@@ -80,12 +80,12 @@ class OnlineGaussian:
     def anomaly_score(self, x: float) -> float:
         """
         返回归一化的异常分 [0, 1]。
-        0 = 完全在正常范围内，1 = 严重偏离。
+        0 = 完全在正常范围内，1 = 严重偏离（z >= 2*k）。
         """
         z = self.z_score(x)
         if z <= self.k:
             return 0.0
-        return min(1.0, (z - self.k) / (self.k * 2))
+        return min(1.0, (z - self.k) / self.k)
 
     def ensure_variance(self, min_var: float = 0.01) -> None:
         """确保方差至少为 min_var，防止零方差导致 z_score 失效。"""

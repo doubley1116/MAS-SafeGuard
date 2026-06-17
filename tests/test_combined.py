@@ -1,7 +1,7 @@
 """
 Combined tests: Rule Engine + EWMA synergy + Ablation experiments.
-Tests full SecurityCore pipeline with mock LLM.
-Compares: R-only, E-only, R+E, Full configurations.
+Tests full SecurityCore pipeline with mock LLM using cascading OR-gate.
+Compares: R-only, E-only, R+E, Full configurations via layer switches.
 """
 import sys, os, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,15 +13,21 @@ from tests.utils.helpers import (
     MockLLMReviewer, make_audit_event,
 )
 
-AUDIT_DATA = os.path.join(os.path.dirname(__file__), "..", "AuditDataGen", "data", "all_consistent.jsonl")
+AUDIT_DATA = os.path.join(os.path.dirname(__file__), "..", "AuditDataGen", "eval_results_verify", "origin_consistent.jsonl")
 RESULT_DIR = os.path.join(os.path.dirname(__file__), "tmp_rule_ewma_results")
 CKPT_DIR = os.path.join(os.path.dirname(__file__), "..", "audit_layer", "trajectory_checkpoints")
 os.makedirs(RESULT_DIR, exist_ok=True)
 
-DOMAIN_MAP = {"financial": "trading", "healthcare": "healthcare", "ecommerce": "ecommerce"}
+DOMAIN_MAP = {
+    "financial": "trading",
+    "healthcare": "healthcare",
+    "ecommerce": "ecommerce",
+    "iov": "iov",
+    "converged_media": "converged_media",
+}
 
 print("=" * 60)
-print("Combined Tests + Ablation")
+print("Combined Tests + Ablation (Cascading OR-Gate)")
 print("=" * 60)
 
 all_events = load_audit_events(AUDIT_DATA)
@@ -56,9 +62,11 @@ for domain, domain_events in events_by_domain.items():
     core_R = SecurityCore(
         yaml_path=policy_path,
         llm_reviewer=mock_llm,
+        trajectory_detector_path=ckpt_path,
+        trajectory_online_learning=False,
     )
-    # Disable trajectory in this core
-    core_R.trajectory_detector = None
+    core_R._enable_ewma = False
+    core_R._enable_llm = False
 
     # ---- Config: E (EWMA only) ----
     core_E = SecurityCore(
@@ -67,9 +75,20 @@ for domain, domain_events in events_by_domain.items():
         trajectory_detector_path=ckpt_path,
         trajectory_online_learning=False,
     )
+    core_E._enable_rule = False
+    core_E._enable_llm = False
 
     # ---- Config: R+E (rule + EWMA) ----
     core_RE = SecurityCore(
+        yaml_path=policy_path,
+        llm_reviewer=mock_llm,
+        trajectory_detector_path=ckpt_path,
+        trajectory_online_learning=False,
+    )
+    core_RE._enable_llm = False
+
+    # ---- Config: Full (Rule + EWMA + LLM) ----
+    core_Full = SecurityCore(
         yaml_path=policy_path,
         llm_reviewer=mock_llm,
         trajectory_detector_path=ckpt_path,
@@ -90,38 +109,12 @@ for domain, domain_events in events_by_domain.items():
 
         attack_type = e.get("metadata", {}).get("scenario", "benign")
 
-        # R-only: rule engine score alone
-        rule_score, rule_risk_types, _ = core_R.rule_engine.evaluate(event)
-        rule_blocked = rule_score >= 0.5
-        ablation_results["R"][attack_type]["total"] += 1
-        if rule_blocked:
-            ablation_results["R"][attack_type]["blocked"] += 1
-
-        # E-only: EWMA trajectory score alone
-        traj_score = core_E._compute_trajectory_score(event)
-        ewma_blocked = (traj_score or 0.0) >= 0.5
-        ablation_results["E"][attack_type]["total"] += 1
-        if ewma_blocked:
-            ablation_results["E"][attack_type]["blocked"] += 1
-
-        # R+E: fused without LLM influence (rule + EWMA only)
-        if traj_score is not None and traj_score > 0:
-            path_len = len(event.call_path) if event.call_path else 0
-            alpha = core_RE._compute_alpha(path_len)
-            fused = alpha * rule_score + (1 - alpha) * traj_score
-            fused = max(fused, rule_score)
-            re_blocked = fused >= 0.5
-        else:
-            re_blocked = rule_blocked
-        ablation_results["R+E"][attack_type]["total"] += 1
-        if re_blocked:
-            ablation_results["R+E"][attack_type]["blocked"] += 1
-
-        # Full: SecurityCore.audit() with mock LLM (R+E+LLM)
-        decision = core_RE.audit(event)
-        ablation_results["Full"][attack_type]["total"] += 1
-        if not decision.allow:
-            ablation_results["Full"][attack_type]["blocked"] += 1
+        # All configs use audit() with layer switches for clean isolation
+        for cfg_name, core in [("R", core_R), ("E", core_E), ("R+E", core_RE), ("Full", core_Full)]:
+            decision = core.audit(event)
+            ablation_results[cfg_name][attack_type]["total"] += 1
+            if not decision.allow:
+                ablation_results[cfg_name][attack_type]["blocked"] += 1
 
 # Print ablation summary table
 print(f"\n{'='*75}")

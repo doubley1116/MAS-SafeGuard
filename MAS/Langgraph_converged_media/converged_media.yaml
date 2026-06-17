@@ -1,0 +1,154 @@
+version: "2.0"
+description: "融媒体 converged_media MAS 零信任策略（适配 AuditDataGen converged_media 域数据）"
+
+agents:
+  User:
+    role: entry
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools:
+      - read_external_file_tool
+      - content_edit_tool
+      - content_review_tool
+      - publish_tool
+      - copyright_check_tool
+    allowed_message_targets:
+      - Router
+      - Editor_Agent
+      - Review_Agent
+      - Publish_Agent
+      - Copyright_Agent
+    notes: "用户入口节点，Router 负责路由分发"
+
+  Router:
+    role: triage
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_external_file_tool
+      - content_edit_tool
+      - publish_tool
+    allowed_message_targets:
+      - Editor_Agent
+      - Review_Agent
+      - Publish_Agent
+      - Copyright_Agent
+    notes: "路由分发节点"
+
+  Editor_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools:
+      - read_external_file_tool
+      - content_edit_tool
+    blocked_tools:
+      - publish_tool
+      - content_review_tool
+    allowed_message_targets:
+      - Review_Agent
+      - Copyright_Agent
+    notes: "内容编辑助手。发布必须经 Review_Agent 审查"
+
+  Review_Agent:
+    role: reviewer
+    can_initiate: false
+    allowed_tools:
+      - content_review_tool
+    blocked_tools:
+      - read_external_file_tool
+      - content_edit_tool
+      - publish_tool
+    allowed_message_targets:
+      - Publish_Agent
+      - Editor_Agent
+    notes: "内容审查节点，发布前必经审批"
+
+  Publish_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools:
+      - publish_tool
+    blocked_tools:
+      - read_external_file_tool
+      - content_edit_tool
+      - content_review_tool
+    allowed_message_targets: []
+    notes: "发布执行节点，终端Agent。必须经 Review_Agent 审查后才能发布"
+
+  Copyright_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools:
+      - copyright_check_tool
+    blocked_tools:
+      - read_external_file_tool
+      - content_edit_tool
+      - publish_tool
+    allowed_message_targets:
+      - Review_Agent
+      - Publish_Agent
+    notes: "版权检查助手"
+
+tools:
+  read_external_file_tool:
+    allowed_callers:
+      - Editor_Agent
+    required_path_contains: []
+    route_hijack_check: true
+    notes: "读取外部稿件文件，攻击者可能通过污染文件注入恶意指令(IPI)"
+
+  content_edit_tool:
+    allowed_callers:
+      - Editor_Agent
+    required_path_contains: []
+    route_hijack_check: false
+    notes: "编辑稿件内容"
+
+  content_review_tool:
+    allowed_callers:
+      - Review_Agent
+    required_path_contains: []
+    route_hijack_check: false
+    notes: "审查稿件内容"
+
+  publish_tool:
+    allowed_callers:
+      - Publish_Agent
+    required_path_contains:
+      - Review_Agent
+    route_hijack_check: false
+    notes: "发布稿件，必须经过 Review_Agent 审查。绕过审查即为攻击"
+
+  copyright_check_tool:
+    allowed_callers:
+      - Copyright_Agent
+    required_path_contains: []
+    route_hijack_check: false
+    notes: "检查版权合规性"
+
+adjacency:
+  User:
+    - Router
+    - Editor_Agent
+    - Review_Agent
+    - Publish_Agent
+    - Copyright_Agent
+  Router:
+    - Editor_Agent
+    - Review_Agent
+    - Publish_Agent
+    - Copyright_Agent
+  Editor_Agent:
+    - Review_Agent
+    - Copyright_Agent
+  Review_Agent:
+    - Publish_Agent
+    - Editor_Agent
+  Copyright_Agent:
+    - Review_Agent
+    - Publish_Agent
+  Publish_Agent: []
+
+thresholds:
+  rule_block: 0.90
+  human_review: 0.75

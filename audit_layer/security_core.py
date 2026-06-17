@@ -112,12 +112,32 @@ class SecurityCore:
         self._trace_clean: bool = True       # 当前 trace 是否有异常
         self._current_trace_id: str = ""     # 用于检测 trace 边界
 
+        # ── 分层门控阈值 ──
+        # 每层独立门槛，基于实验测定的精度-召回特性:
+        #   Rule: 0.50 (FP=0%, 命中即确信)
+        #   EWMA: 0.35 (连续谱打分天生保守, 降门槛换召回)
+        #   LLM:  0.50 (语义检测标准门槛)
+        self._rule_threshold: float = threshold_overrides.get("rule_threshold", 0.50) if threshold_overrides else 0.50
+        self._ewma_threshold: float = threshold_overrides.get("ewma_threshold", 0.35) if threshold_overrides else 0.35
+        self._llm_threshold: float = threshold_overrides.get("llm_threshold", 0.50) if threshold_overrides else 0.50
+
+        # ── 层开关（用于消融实验）──
+        self._enable_rule: bool = True
+        self._enable_ewma: bool = True
+        self._enable_llm: bool = True
+
     # ══════════════════════════════════════════════════════════
     # 主审核入口
     # ══════════════════════════════════════════════════════════
 
     def audit(self, event: AuditEvent) -> AuditDecision:
-        """主审核入口，对外暴露的唯一方法。"""
+        """主审核入口 — 分层门控架构。
+
+        三层独立判决，任意一层触发即拦截:
+          Layer 1 (Rule):  score >= 0.50 → BLOCK (0% FP, 命中即确信)
+          Layer 2 (EWMA):  score >= 0.35 → BLOCK (连续谱, 较低门槛补偿保守打分)
+          Layer 3 (LLM):   score >= 0.50 → BLOCK (语义检测, 标准门槛)
+        """
         # ── Trace 边界检测 ──
         if event.trace_id and event.trace_id != self._current_trace_id:
             self._flush_trace()
@@ -138,59 +158,86 @@ class SecurityCore:
                 rule_score = role_score
             if role_types:
                 risk_types = list(set(risk_types + role_types))
-            if role_reason and role_score > 0:
+            if role_reason and rule_score > 0:
                 rule_reason = f"{rule_reason} | [角色] {role_reason}"
 
         # ── LLM 语义审核 ──
-        # 所有事件都走 LLM+EWMA 双审，不走规则直拦分支。
-        # 规则引擎只产出结构证据（risk_types + rule_score），
-        # 语义注入、IPI、路由劫持、感染传播对规则透明，必须由 LLM 和轨迹层捕获。
         llm_decision = self.llm_reviewer.review(event, rule_risk_types=risk_types)
 
         if risk_types:
             merged_types = list(set(risk_types + llm_decision.blocking_risk_types))
             llm_decision.blocking_risk_types = merged_types
 
-        llm_decision.reason = (
-            f"规则分={rule_score:.2f} → {llm_decision.reason}"
-        )
-
-        # ── 轨迹评分融合 ──
+        # ── 轨迹评分 ──
         trajectory_score = self._compute_trajectory_score(event)
-        if trajectory_score is not None:
-            path_len = len(event.call_path) if event.call_path else 0
-            alpha = self._compute_alpha(path_len)
+        llm_decision.trajectory_score = round(trajectory_score, 4) if trajectory_score is not None else None
 
-            llm_score = llm_decision.risk_score
-            fused_score = alpha * llm_score + (1 - alpha) * trajectory_score
-            llm_decision.risk_score = round(fused_score, 4)
-            llm_decision.trajectory_score = round(trajectory_score, 4)
-            llm_decision.reason += (
-                f" | 轨迹分={trajectory_score:.2f} (α={alpha:.1f})"
-            )
+        # ── 分层门控（per-layer thresholds + 消融开关）──
+        trigger_layer = None
 
-        # 规则分作为 floor：规则引擎命中的高危信号不因 LLM 低分而被掩盖
-        if rule_score > llm_decision.risk_score:
+        # Layer 1: 规则引擎 — 0% FP, 命中直接拦截
+        if self._enable_rule and rule_score >= self._rule_threshold:
+            trigger_layer = "R"
             llm_decision.risk_score = round(rule_score, 4)
             llm_decision.blocking_risk_types = list(set(
                 llm_decision.blocking_risk_types + risk_types
             ))
             llm_decision.reason = (
-                f"[规则加权] {rule_reason} | {llm_decision.reason}"
+                f"[R 拦截] {rule_reason} | 规则分={rule_score:.2f}"
             )
+            if trajectory_score is not None:
+                llm_decision.reason += f" | 轨迹分={trajectory_score:.2f}"
 
-        # 最终 allow 判定：risk_score >= 0.5 视为拦截
-        if llm_decision.risk_score >= 0.5:
+        # Layer 2: EWMA 轨迹检测 — 较低门槛补偿保守打分
+        elif (self._enable_ewma
+              and trajectory_score is not None
+              and trajectory_score >= self._ewma_threshold):
+            trigger_layer = "E"
+            llm_decision.risk_score = round(trajectory_score, 4)
+            llm_decision.reason = (
+                f"[E 拦截] 轨迹异常 | 轨迹分={trajectory_score:.2f}"
+                f" (阈值={self._ewma_threshold})"
+            )
+            if rule_score > 0:
+                llm_decision.reason += f" | 规则分={rule_score:.2f}"
+
+        # Layer 3: LLM 语义审核
+        elif self._enable_llm and llm_decision.risk_score >= self._llm_threshold:
+            trigger_layer = "L"
+            llm_decision.reason = (
+                f"[L 拦截] {llm_decision.reason}"
+                f" | 规则分={rule_score:.2f}"
+            )
+            if trajectory_score is not None:
+                llm_decision.reason += f" | 轨迹分={trajectory_score:.2f}"
+
+        else:
+            trigger_layer = "-"
+            llm_decision.risk_score = round(
+                max(rule_score, llm_decision.risk_score,
+                    trajectory_score or 0.0), 4
+            )
+            llm_decision.reason = (
+                f"[放行] 规则分={rule_score:.2f}"
+                f" | LLM分={llm_decision.risk_score:.2f}"
+            )
+            if trajectory_score is not None:
+                llm_decision.reason += f" | 轨迹分={trajectory_score:.2f}"
+
+        # ── 执行判决 ──
+        if trigger_layer != "-":
             llm_decision.allow = False
             self._trace_clean = False
         else:
             self._maybe_learn(event)
 
         return llm_decision
-
     # ══════════════════════════════════════════════════════════
     # 轨迹评分
     # ══════════════════════════════════════════════════════════
+
+    # ── 基础设施节点（warmup 时剥离，推理时也需剥离以保持对齐）──
+    _INFRA_NODES = {"Router", "Tool_Node"}
 
     def _compute_trajectory_score(self, event: AuditEvent) -> Optional[float]:
         """
@@ -201,10 +248,13 @@ class SecurityCore:
         """
         if self.trajectory_detector is None:
             return None
-        if not event.call_path or len(event.call_path) < 2:
+
+        # 剥离基础设施节点，与 warmup_from_mas_dir 的预处理对齐
+        path = [n for n in (event.call_path or []) if n not in self._INFRA_NODES]
+        if len(path) < 2:
             return None
 
-        return self.trajectory_detector.score(event.call_path)
+        return self.trajectory_detector.score(path)
 
     def _maybe_learn(self, event: AuditEvent) -> None:
         """

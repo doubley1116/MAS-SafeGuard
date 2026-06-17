@@ -195,6 +195,88 @@ def extract_attack_call_paths(
     return results
 
 
+def extract_mas_call_paths(
+    mas_dir: str,
+    strip_nodes: Optional[list] = None,
+    min_path_len: int = 2,
+    dedup: bool = False,
+) -> list[list[str]]:
+    """
+    Extract call_paths from MAS-generated JSONL trace files for EWMA warmup.
+
+    MAS traces are flat JSONL — each line is the event object with a "call_path"
+    field. Unlike all_consistent.jsonl, there is no {"original": ...} wrapper.
+
+    Args:
+        mas_dir: Path to directory containing MAS JSONL trace files.
+        strip_nodes: Infrastructure node names to remove from call_path
+                     (default: ["Router", "Tool_Node"]). Router must be stripped
+                     for alignment with all_consistent.jsonl / policy YAML agents.
+        min_path_len: Minimum call_path length after stripping (default: 2).
+        dedup: If True, deduplicate call_paths. Default False for EWMA warmup
+               (EWMA benefits from observation count, not uniqueness).
+
+    Returns:
+        List of call_path lists (each list[str] with agent names only).
+    """
+    if strip_nodes is None:
+        strip_nodes = ["Router", "Tool_Node"]
+
+    paths = []
+    if not os.path.isdir(mas_dir):
+        return paths
+
+    for fname in sorted(os.listdir(mas_dir)):
+        if not fname.endswith(".jsonl"):
+            continue
+        fpath = os.path.join(mas_dir, fname)
+        with open(fpath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                cp = obj.get("call_path", [])
+                cp_clean = [n for n in cp if n not in strip_nodes]
+                if len(cp_clean) >= min_path_len:
+                    paths.append(cp_clean)
+
+    return dedup_call_paths(paths) if dedup else paths
+
+
+_DOMAIN_TO_MAS_DIR = {
+    "financial":  "MAS/Langgraph_trading/data/workflows/trading_normal",
+    "healthcare": "MAS/Langgraph_healthcare/data/workflows/healthcare_normal",
+    "ecommerce":  "MAS/Langgraph_ecommerce/data/workflows/ecommerce_normal",
+    "iov":        "MAS/Langgraph_iov/data/workflows/iov_normal",
+    "converged_media": "MAS/Langgraph_converged_media/data/workflows/converged_media_normal",
+}
+
+
+def get_mas_data_dir(domain_key: str) -> Optional[str]:
+    """
+    Map a test domain key to the corresponding MAS trace directory.
+
+    Args:
+        domain_key: One of "financial", "healthcare", "ecommerce".
+
+    Returns:
+        Absolute path to the MAS *_normal/ directory, or None if not found
+        (meaning the 3-domain MAS approach doesn't cover this domain).
+    """
+    mas_rel = _DOMAIN_TO_MAS_DIR.get(domain_key)
+    if mas_rel is None:
+        return None
+    mas_abs = os.path.join(PROJECT_ROOT, "..", mas_rel)
+    mas_abs = os.path.abspath(mas_abs)
+    if os.path.isdir(mas_abs):
+        return mas_abs
+    return None
+
+
 def generate_test_policy(
     events: list[dict],
     output_path: str,

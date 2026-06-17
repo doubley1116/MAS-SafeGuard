@@ -245,7 +245,11 @@ check_clean("unknown_agent / all known",
 # ================================================================
 
 POLICY_MSG = {
-    "agents": {"Agent_A": {"role": "worker", "allowed_message_targets": ["Agent_B"]}},
+    "agents": {
+        "Agent_A": {"role": "worker", "allowed_message_targets": ["Agent_B"]},
+        "Agent_B": {"role": "worker"},
+        "Agent_C": {"role": "worker"},
+    },
 }
 
 # 8a: Message to disallowed target
@@ -282,7 +286,7 @@ from tests.utils.helpers import (
     load_audit_events, split_by_domain, make_audit_event,
 )
 
-AUDIT_DATA = os.path.join(os.path.dirname(__file__), "..", "AuditDataGen", "data", "all_consistent.jsonl")
+AUDIT_DATA = os.path.join(os.path.dirname(__file__), "..", "AuditDataGen", "eval_results_verify", "origin_consistent.jsonl")
 RESULT_DIR = os.path.join(os.path.dirname(__file__), "tmp_rule_ewma_results")
 os.makedirs(RESULT_DIR, exist_ok=True)
 
@@ -291,6 +295,8 @@ DOMAIN_MAP = {
     "financial": "trading",
     "healthcare": "healthcare",
     "ecommerce": "ecommerce",
+    "iov": "iov",
+    "converged_media": "converged_media",
 }
 
 print("\n" + "=" * 60)

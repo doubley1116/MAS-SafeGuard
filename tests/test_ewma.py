@@ -105,9 +105,10 @@ from collections import Counter, defaultdict
 from tests.utils.helpers import (
     load_audit_events, split_by_domain,
     extract_benign_call_paths, extract_attack_call_paths,
+    extract_mas_call_paths, get_mas_data_dir,
 )
 
-AUDIT_DATA = os.path.join(os.path.dirname(__file__), "..", "AuditDataGen", "data", "all_consistent.jsonl")
+AUDIT_DATA = os.path.join(os.path.dirname(__file__), "..", "AuditDataGen", "eval_results_verify", "origin_consistent.jsonl")
 RESULT_DIR = os.path.join(os.path.dirname(__file__), "tmp_rule_ewma_results")
 CKPT_DIR = os.path.join(os.path.dirname(__file__), "..", "audit_layer", "trajectory_checkpoints")
 os.makedirs(RESULT_DIR, exist_ok=True)
@@ -134,11 +135,19 @@ for domain, domain_events in sorted(events_by_domain.items()):
 
     print(f"\n--- Domain: {domain} ({len(domain_events)} events) ---")
 
-    # Extract benign paths WITHOUT dedup for warmup (EWMA benefits from observation count)
-    benign_paths_all = extract_benign_call_paths(domain_events, dedup=False)
-    # Extract deduped paths for holdout (unique paths, to avoid counting repeats)
-    benign_paths_unique = extract_benign_call_paths(domain_events, dedup=True)
-    print(f"  Benign call_paths for warmup: {len(benign_paths_all)} (unique: {len(benign_paths_unique)})")
+    # Try MAS-generated benign paths first for warmup (realistic depth diversity).
+    # Fall back to all_consistent.jsonl benign data when MAS traces unavailable.
+    mas_dir = get_mas_data_dir(domain)
+    if mas_dir:
+        benign_paths_all = extract_mas_call_paths(mas_dir, dedup=False)
+        benign_paths_unique = extract_mas_call_paths(mas_dir, dedup=True)
+        print(f"  Benign call_paths for warmup: {len(benign_paths_all)} (unique: {len(benign_paths_unique)})")
+        print(f"  Warmup source: MAS ({mas_dir})")
+    else:
+        benign_paths_all = extract_benign_call_paths(domain_events, dedup=False)
+        benign_paths_unique = extract_benign_call_paths(domain_events, dedup=True)
+        print(f"  Benign call_paths for warmup: {len(benign_paths_all)} (unique: {len(benign_paths_unique)})")
+        print(f"  Warmup source: all_consistent.jsonl (fallback)")
 
     # Attack paths for testing (deduped to avoid double-counting identical paths)
     attack_paths = extract_attack_call_paths(domain_events)

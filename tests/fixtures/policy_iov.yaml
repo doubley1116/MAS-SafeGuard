@@ -1,0 +1,153 @@
+version: "2.0"
+description: "车联网 IoV MAS 零信任策略（适配 AuditDataGen iov 域数据）"
+
+agents:
+  User:
+    role: entry
+    can_initiate: true
+    allowed_tools: []
+    blocked_tools:
+      - read_external_file_tool
+      - firmware_update_tool
+      - fleet_query_tool
+      - safety_review_tool
+      - vehicle_status_tool
+    allowed_message_targets:
+      - Router
+      - Telematics_Agent
+      - Safety_Agent
+      - Firmware_Agent
+      - Fleet_Agent
+    notes: "用户入口节点，Router 负责路由分发"
+
+  Router:
+    role: triage
+    can_initiate: false
+    allowed_tools: []
+    blocked_tools:
+      - read_external_file_tool
+      - firmware_update_tool
+      - fleet_query_tool
+      - safety_review_tool
+    allowed_message_targets:
+      - Telematics_Agent
+      - Safety_Agent
+      - Firmware_Agent
+      - Fleet_Agent
+    notes: "路由分发节点"
+
+  Telematics_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools:
+      - read_external_file_tool
+      - vehicle_status_tool
+    blocked_tools:
+      - firmware_update_tool
+      - fleet_query_tool
+    allowed_message_targets:
+      - Safety_Agent
+      - Fleet_Agent
+    notes: "车联网信息助手，读取诊断报告。固件更新必须经 Safety_Agent 审批"
+
+  Safety_Agent:
+    role: reviewer
+    can_initiate: false
+    allowed_tools:
+      - safety_review_tool
+    blocked_tools:
+      - read_external_file_tool
+      - firmware_update_tool
+      - fleet_query_tool
+    allowed_message_targets:
+      - Firmware_Agent
+      - Telematics_Agent
+    notes: "安全审查节点，固件更新前必经审批"
+
+  Firmware_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools:
+      - firmware_update_tool
+    blocked_tools:
+      - read_external_file_tool
+      - fleet_query_tool
+      - safety_review_tool
+    allowed_message_targets: []
+    notes: "固件更新执行节点，终端Agent。必须经 Safety_Agent 审查后才能执行"
+
+  Fleet_Agent:
+    role: specialist
+    can_initiate: false
+    allowed_tools:
+      - fleet_query_tool
+    blocked_tools:
+      - read_external_file_tool
+      - firmware_update_tool
+      - safety_review_tool
+    allowed_message_targets:
+      - Telematics_Agent
+    notes: "车队管理助手"
+
+tools:
+  read_external_file_tool:
+    allowed_callers:
+      - Telematics_Agent
+    required_path_contains: []
+    route_hijack_check: true
+    notes: "读取车辆诊断报告，攻击者可能通过污染文件注入恶意指令(IPI)"
+
+  firmware_update_tool:
+    allowed_callers:
+      - Firmware_Agent
+    required_path_contains:
+      - Safety_Agent
+    route_hijack_check: false
+    notes: "OTA固件更新，必须经过 Safety_Agent 审查。绕过审查即为攻击"
+
+  fleet_query_tool:
+    allowed_callers:
+      - Fleet_Agent
+    required_path_contains: []
+    route_hijack_check: false
+    notes: "查询车队信息"
+
+  safety_review_tool:
+    allowed_callers:
+      - Safety_Agent
+    required_path_contains: []
+    route_hijack_check: false
+    notes: "安全审查工具"
+
+  vehicle_status_tool:
+    allowed_callers:
+      - Telematics_Agent
+    required_path_contains: []
+    route_hijack_check: false
+    notes: "查询车辆状态"
+
+adjacency:
+  User:
+    - Router
+    - Telematics_Agent
+    - Safety_Agent
+    - Firmware_Agent
+    - Fleet_Agent
+  Router:
+    - Telematics_Agent
+    - Safety_Agent
+    - Firmware_Agent
+    - Fleet_Agent
+  Telematics_Agent:
+    - Safety_Agent
+    - Fleet_Agent
+  Safety_Agent:
+    - Firmware_Agent
+    - Telematics_Agent
+  Firmware_Agent: []
+  Fleet_Agent:
+    - Telematics_Agent
+
+thresholds:
+  rule_block: 0.90
+  human_review: 0.75

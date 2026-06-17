@@ -14,6 +14,10 @@ class RuleEngine:
     def evaluate(self, event: AuditEvent) -> tuple[float, List[str], str]:
         hits: List[tuple[float, str, str]] = []
 
+        # ── 事件类型无关的结构性检查（依赖 call_path + policy）──
+        hits += self._check_unknown_agent(event)
+        hits += self._check_adjacency(event)
+
         if event.event_type == "tool_call":
             hits += self._check_tool_caller(event)
             hits += self._check_required_path(event)
@@ -23,11 +27,11 @@ class RuleEngine:
             hits += self._check_intent_confidence_required(event)
             hits += self._check_route_hijack(event)
             hits += self._check_arg_constraints(event)
-            hits += self._check_unknown_agent(event)
-            hits += self._check_adjacency(event)
 
         elif event.event_type == "message":
             hits += self._check_message_target(event)
+            hits += self._check_blocked_tools(event)
+            hits += self._check_route_hijack(event)
 
         if not hits:
             return 0.0, [], "规则引擎未命中任何规则"
