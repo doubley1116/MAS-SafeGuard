@@ -97,12 +97,14 @@ class LangGraphAuditAdapter:
         # ── 链路安全参数 ──────────────────────────────────────
         role_discovery_path: Optional[str] = None,
         trajectory_detector_path: Optional[str] = None,
+        trajectory_detector: Optional[object] = None,  # 预训练的检测器实例
     ) -> None:
         self.security_core = (
             SecurityCore(
                 yaml_path,
                 role_discovery_path=role_discovery_path,
                 trajectory_detector_path=trajectory_detector_path,
+                trajectory_detector=trajectory_detector,
             )
             if yaml_path else None
         )

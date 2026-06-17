@@ -87,6 +87,11 @@ class OnlineGaussian:
             return 0.0
         return min(1.0, (z - self.k) / (self.k * 2))
 
+    def ensure_variance(self, min_var: float = 0.01) -> None:
+        """确保方差至少为 min_var，防止零方差导致 z_score 失效。"""
+        if self.var < min_var:
+            self.var = min_var
+
     def to_dict(self) -> dict:
         return {
             "alpha": self.alpha, "k": self.k,
@@ -126,8 +131,10 @@ class RoleAdaptiveMonitor:
         k_backtracks: float = 2.0,
         k_gap: float = 2.0,
         k_missing: float = 1.5,
+        k_novel_edge: float = 0.5,
     ):
         self.rd = role_discovery
+        self._known_edges: set[tuple[str, str]] = set()  # agent→agent transitions seen during warmup
 
         self._stats = {
             "depth":        OnlineGaussian(alpha, k_depth),
@@ -137,6 +144,7 @@ class RoleAdaptiveMonitor:
             "backtracks":   OnlineGaussian(alpha, k_backtracks),
             "max_gap":      OnlineGaussian(alpha, k_gap),
             "spec_no_review": OnlineGaussian(alpha, k_missing),
+            "novel_edge_ratio": OnlineGaussian(alpha, k_novel_edge),
         }
 
     # ── 特征提取 ──
@@ -185,6 +193,17 @@ class RoleAdaptiveMonitor:
         spec_no_review = 1.0 if ("specialist" in unique_roles_set
                                  and "reviewer" not in unique_roles_set) else 0.0
 
+        # 新颖边比例：从未在预热中出现过的 agent→agent 转移边
+        total_edges = n - 1
+        if total_edges > 0 and self._known_edges:
+            novel_count = sum(
+                1 for i in range(total_edges)
+                if (call_path[i], call_path[i + 1]) not in self._known_edges
+            )
+            novel_edge_ratio = novel_count / total_edges
+        else:
+            novel_edge_ratio = 0.0
+
         return {
             "depth": float(n),
             "unique_roles": float(len(unique_roles_set)),
@@ -193,6 +212,7 @@ class RoleAdaptiveMonitor:
             "backtracks": float(backtracks),
             "max_gap": float(max_gap),
             "spec_no_review": spec_no_review,
+            "novel_edge_ratio": float(novel_edge_ratio),
         }
 
     # ── 在线学习 ──
@@ -202,11 +222,30 @@ class RoleAdaptiveMonitor:
         feats = self._extract(call_path)
         for name, value in feats.items():
             self._stats[name].observe(value)
+        # 将本条路径的边加入已知集（在线扩展基线）
+        for i in range(len(call_path) - 1):
+            self._known_edges.add((call_path[i], call_path[i + 1]))
 
     def observe_batch(self, call_paths: list[list[str]]) -> None:
         """批量观察正常轨迹以快速建立基线."""
         for path in call_paths:
             self.observe(path)
+
+    def _collect_edges(self, call_paths: list[list[str]]) -> None:
+        """仅收集边到 _known_edges，不更新 EWMA 统计."""
+        for path in call_paths:
+            for i in range(len(path) - 1):
+                self._known_edges.add((path[i], path[i + 1]))
+
+    def _warmup_finalize(self) -> None:
+        """预热收尾：为 novel_edge_ratio 设置最小方差。
+
+        所有预热路径的 novel_edge_ratio=0（edges 已全量收集），
+        但 EWMA 需要非零方差才能对测试路径的新颖边产生 z-score。
+        设置 σ=0.15 意味着 1 条新颖边在 4 边路径中 (ratio=0.25)
+        产生 z≈1.67 > k_novel_edge=0.5，触发异常。
+        """
+        self._stats["novel_edge_ratio"].ensure_variance(min_var=0.0225)  # σ=0.15
 
     # ── 异常评分 ──
 
@@ -307,9 +346,62 @@ class TrajectoryAnomalyDetector:
         )
 
     def fit_normal(self, call_paths: list[list[str]]) -> "TrajectoryAnomalyDetector":
-        """用历史正常 call_path 批量初始化基线."""
+        """用历史正常 call_path 批量初始化基线。
+
+        两阶段预热：
+        1. 收集所有 agent→agent 转移边到已知集
+        2. 逐条观察更新 EWMA（此时 novel_edge_ratio 全为 0）
+        3. 为 novel_edge_ratio 设置最小方差以启用 z-score 检测
+        """
+        self.monitor._collect_edges(call_paths)
         self.monitor.observe_batch(call_paths)
+        self.monitor._warmup_finalize()
         return self
+
+    def warmup_from_mas_dir(
+        self,
+        mas_dir: str,
+        strip_nodes: list[str] | None = None,
+        min_path_len: int = 2,
+    ) -> int:
+        """从 MAS 生成的 JSONL trace 目录预热检测器。
+
+        读取目录下所有 .jsonl 文件，提取 call_path，
+        剥离基础设施节点（默认 Router、Tool_Node），
+        然后调用 fit_normal() 建立基线。
+
+        Returns:
+            提取到的 call_path 数量。
+        """
+        import json as _json
+
+        if strip_nodes is None:
+            strip_nodes = ["Router", "Tool_Node"]
+
+        paths: list[list[str]] = []
+        if not os.path.isdir(mas_dir):
+            return 0
+
+        for fname in sorted(os.listdir(mas_dir)):
+            if not fname.endswith(".jsonl"):
+                continue
+            with open(os.path.join(mas_dir, fname), "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = _json.loads(line)
+                    except Exception:
+                        continue
+                    cp = obj.get("call_path", [])
+                    cp_clean = [n for n in cp if n not in strip_nodes]
+                    if len(cp_clean) >= min_path_len:
+                        paths.append(cp_clean)
+
+        if paths:
+            self.fit_normal(paths)
+        return len(paths)
 
     def score(self, call_path: list[str]) -> float:
         """返回单条 call_path 的异常分 [0, 1]."""
@@ -337,8 +429,11 @@ class TrajectoryAnomalyDetector:
     def save(self, path: str) -> None:
         """保存检测器状态（pickle 格式）."""
         state = {
-            name: stat.to_dict()
-            for name, stat in self.monitor._stats.items()
+            "stats": {
+                name: stat.to_dict()
+                for name, stat in self.monitor._stats.items()
+            },
+            "known_edges": list(self.monitor._known_edges),
         }
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "wb") as f:
@@ -350,8 +445,17 @@ class TrajectoryAnomalyDetector:
         with open(path, "rb") as f:
             state = pickle.load(f)
 
+        # 兼容旧格式（仅 stats dict，无 known_edges 包装）
+        if "stats" in state:
+            stats_data = state["stats"]
+            known_edges = set(state.get("known_edges", []))
+        else:
+            stats_data = state
+            known_edges = set()
+
         obj = cls(role_discovery=role_discovery)
-        for name, d in state.items():
+        for name, d in stats_data.items():
             if name in obj.monitor._stats:
                 obj.monitor._stats[name] = OnlineGaussian.from_dict(d)
+        obj.monitor._known_edges = known_edges
         return obj

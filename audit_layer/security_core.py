@@ -69,6 +69,7 @@ class SecurityCore:
         role_adjacency: Optional[dict[str, list[str]]] = None,
         # 轨迹检测（EMA 轻量版）
         trajectory_detector_path: Optional[str] = None,
+        trajectory_detector: Optional[object] = None,  # 预训练的 TrajectoryAnomalyDetector 实例
         trajectory_online_learning: bool = True,
     ):
         self.policy = PolicyLoader(yaml_path)
@@ -100,7 +101,9 @@ class SecurityCore:
         self.trajectory_detector: Optional[TrajectoryAnomalyDetector] = None
         self._trajectory_online = trajectory_online_learning
 
-        if trajectory_detector_path and HAS_TRAJECTORY:
+        if trajectory_detector is not None and HAS_TRAJECTORY:
+            self.trajectory_detector = trajectory_detector
+        elif trajectory_detector_path and HAS_TRAJECTORY:
             self._load_trajectory_detector(trajectory_detector_path)
 
         # ── Trace 级学习状态 ──
@@ -258,6 +261,28 @@ class SecurityCore:
             path,
             role_discovery=self._role_discovery,
         )
+
+    def save_trajectory_detector(self, path: str) -> None:
+        """保存当前轨迹检测器状态到文件。"""
+        if self.trajectory_detector is None:
+            raise ValueError("没有轨迹检测器可保存")
+        self.trajectory_detector.save(path)
+
+    def warmup_trajectory_detector(self, call_paths: list[list[str]]) -> None:
+        """用一批正常 call_path 预热轨迹检测器。
+
+        如果检测器尚不存在则自动创建。两趟预热：
+        1. 收集所有 agent→agent 转移边
+        2. 逐条更新 EWMA 基线
+        3. 为 novel_edge_ratio 设置最小方差
+        """
+        if self.trajectory_detector is None:
+            if not HAS_TRAJECTORY:
+                return
+            self.trajectory_detector = TrajectoryAnomalyDetector(
+                role_discovery=self._role_discovery,
+            )
+        self.trajectory_detector.fit_normal(call_paths)
 
     def _get_depth_constraints(self) -> dict[str, tuple[int, int]]:
         """从 YAML policy 读取路径深度约束."""

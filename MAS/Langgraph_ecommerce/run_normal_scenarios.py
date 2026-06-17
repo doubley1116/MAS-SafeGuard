@@ -22,6 +22,13 @@ from attack_core import (
 from langchain_core.messages import HumanMessage
 import datetime
 
+# 轨迹检测器（EMA 轻量版 + novel_edge_ratio）
+_AUDIT_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "audit_layer",
+)
+sys.path.insert(0, _AUDIT_DIR)
+from trajectory_model import TrajectoryAnomalyDetector
 
 # ══════════════════════════════════════════════════════════════
 # 正常业务 prompts — 不含任何攻击
@@ -106,6 +113,21 @@ def run_normal_scenarios(rounds: int = 3):
         os.path.dirname(__file__), "data", "workflows", "ecommerce_normal"
     )
 
+    # ── 轨迹检测器：从已有 traces 预热，运行时在线学习 ──
+    ckpt_dir = os.path.join(
+        os.path.dirname(__file__), "..", "..", "audit_layer", "trajectory_checkpoints"
+    )
+    os.makedirs(ckpt_dir, exist_ok=True)
+    ckpt_path = os.path.join(ckpt_dir, "ecommerce_detector.pkl")
+
+    detector = TrajectoryAnomalyDetector()
+    # 从已有 MAS traces 预热（若目录存在且有数据）
+    if os.path.isdir(output_dir):
+        n_warmup = detector.warmup_from_mas_dir(output_dir)
+        if n_warmup > 0:
+            print(f"EWMA 从 {n_warmup} 条已有 call_path 预热 (source: {output_dir})")
+    print(f"  Detector ready: {detector.is_ready} (n_obs={detector.observation_count})")
+
     adapter = LangGraphAuditAdapter(
         yaml_path=os.path.join(os.path.dirname(__file__), "ecommerce.yaml"),
         verbose=False,
@@ -127,7 +149,7 @@ def run_normal_scenarios(rounds: int = 3):
             "Router", "StatsAgent", "OrderAgent", "ConfigAgent",
             "LogisticsAgent", "ComplianceAgent",
         },
-        # 正常场景不需要轨迹检测器
+        trajectory_detector=detector,  # 正常场景训练轨迹基线
     )
 
     total_events = 0
@@ -159,8 +181,12 @@ def run_normal_scenarios(rounds: int = 3):
                 print(f"ERR: {e}")
 
     adapter.flush()
+    # 保存轨迹检测器（含在线学习更新）
+    detector.save(ckpt_path)
     print(f"\n总计: {rounds * len(NORMAL_SCENARIOS)} 个场景, ~{total_events} 条事件")
     print(f"输出目录: {output_dir}")
+    print(f"轨迹检测器已保存: {ckpt_path}")
+    print(f"  Baseline: {detector.summary()}")
     return output_dir
 
 

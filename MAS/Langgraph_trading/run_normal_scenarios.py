@@ -21,6 +21,14 @@ from attack_core import (
 )
 from langchain_core.messages import HumanMessage
 
+# 轨迹检测器（EMA 轻量版 + novel_edge_ratio）
+_AUDIT_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "audit_layer",
+)
+sys.path.insert(0, _AUDIT_DIR)
+from trajectory_model import TrajectoryAnomalyDetector
+
 
 NORMAL_SCENARIOS = [
     {
@@ -72,6 +80,20 @@ def run_normal_scenarios(rounds: int = 3):
         os.path.dirname(__file__), "data", "workflows", "trading_normal"
     )
 
+    # ── 轨迹检测器：从已有 traces 预热，运行时在线学习 ──
+    ckpt_dir = os.path.join(
+        os.path.dirname(__file__), "..", "..", "audit_layer", "trajectory_checkpoints"
+    )
+    os.makedirs(ckpt_dir, exist_ok=True)
+    ckpt_path = os.path.join(ckpt_dir, "financial_detector.pkl")
+
+    detector = TrajectoryAnomalyDetector()
+    if os.path.isdir(output_dir):
+        n_warmup = detector.warmup_from_mas_dir(output_dir)
+        if n_warmup > 0:
+            print(f"EWMA 从 {n_warmup} 条已有 call_path 预热 (source: {output_dir})")
+    print(f"  Detector ready: {detector.is_ready} (n_obs={detector.observation_count})")
+
     adapter = LangGraphAuditAdapter(
         yaml_path=os.path.join(os.path.dirname(__file__), "trading.yaml"),
         verbose=False,
@@ -89,6 +111,7 @@ def run_normal_scenarios(rounds: int = 3):
         legal_agents={
             "Research_Agent", "Asset_Agent", "Trade_Agent", "Risk_Agent",
         },
+        trajectory_detector=detector,
     )
 
     total_events = 0
@@ -120,8 +143,11 @@ def run_normal_scenarios(rounds: int = 3):
                 print(f"ERR: {e}")
 
     adapter.flush()
+    detector.save(ckpt_path)
     print(f"\n总计: {rounds * len(NORMAL_SCENARIOS)} 个场景, ~{total_events} 条事件")
     print(f"输出目录: {output_dir}")
+    print(f"轨迹检测器已保存: {ckpt_path}")
+    print(f"  Baseline: {detector.summary()}")
     return output_dir
 
 
