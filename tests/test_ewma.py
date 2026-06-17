@@ -194,11 +194,11 @@ for domain, domain_events in sorted(events_by_domain.items()):
     benign_paths_all = extract_benign_call_paths(domain_events, dedup=False)
     benign_paths_unique = extract_benign_call_paths(domain_events, dedup=True)
 
-    # Merge: MAS first, then all_consistent benign
+    # Merge: MAS + benign 合并，确保所有合法边都在 warmup 中出现过
     if mas_paths_all:
-        warmup_paths = mas_paths_all
+        warmup_paths = mas_paths_all + benign_paths_all
         warmup_unique = dedup_call_paths(mas_paths_unique + benign_paths_unique)
-        print(f"  Warmup source: MAS ({len(mas_paths_all)} obs) + benign supplement")
+        print(f"  Warmup source: MAS ({len(mas_paths_all)} obs) + benign ({len(benign_paths_all)} obs)")
     else:
         warmup_paths = benign_paths_all
         warmup_unique = benign_paths_unique
