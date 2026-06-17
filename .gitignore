@@ -98,8 +98,9 @@ AuditDataGen/SFT/qwen-sft-output/
 
 # ===================== 鍏朵粬鏃犻渶涓婁紶鐨勬枃浠?=====================
 # 娴嬭瘯鏂囦欢/涓存椂鑴氭湰
-test_*.py
+/test_*.py
 tmp_*.py
+tests/tmp_rule_ewma_results/
 # 鏁版嵁澶囦唤
 *.bak
 *.backup
@@ -112,3 +113,4 @@ tmp_*.py
 .ipynb_checkpoints/
 AuditDataGen/eval_results_verify.zip
 AuditDataGen/eval_results_verify/
+tests/tmp_rule_ewma_results/
