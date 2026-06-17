@@ -8,7 +8,7 @@ run_all_tests.py — 完整实验执行脚本
 
 用法:
     python run_all_tests.py                    # 运行所有测试
-    python run_all_tests.py --skip-synthetic   # 跳过合成数据生成
+    python run_all_tests.py --skip-normal-runs # 跳过MAS正常场景运行(使用已有数据)
     python run_all_tests.py --domains iov,converged_media  # 只测试指定领域
 """
 import os, sys, subprocess, datetime, argparse
@@ -19,55 +19,38 @@ os.chdir(SCRIPT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
 
-def generate_synthetic_data(rounds=5):
-    """为 iov 和 converged_media 生成合成正常轨迹"""
+def run_normal_scenarios(rounds=5):
+    """为 iov 和 converged_media 运行真实 MAS 正常场景(LLM驱动)"""
     print("=" * 70)
-    print("Step 0: 生成合成正常轨迹 (用于 EWMA 预热)")
+    print("Step 0: 运行 MAS 正常业务场景 (LLM 驱动, 用于 EWMA 预热)")
     print("=" * 70)
 
-    gen_script = os.path.join(SCRIPT_DIR, "MAS", "synthetic_trace_generator.py")
+    for domain, mas_name in [("iov", "Langgraph_iov"), ("converged_media", "Langgraph_converged_media")]:
+        mas_dir = os.path.join(SCRIPT_DIR, "MAS", mas_name)
+        output_dir = os.path.join(mas_dir, "data", "workflows", f"{domain}_normal")
+        os.makedirs(output_dir, exist_ok=True)
 
-    for domain in ["iov", "converged_media"]:
-        output_dir = os.path.join(
-            SCRIPT_DIR, "MAS", f"Langgraph_{domain}",
-            "data", "workflows", f"{domain}_normal"
+        jsonl_files = [f for f in os.listdir(output_dir) if f.endswith('.jsonl')] if os.path.isdir(output_dir) else []
+        if len(jsonl_files) >= 30:
+            print(f"  [{domain}] 已有 {len(jsonl_files)} 个trace文件，跳过运行")
+            continue
+
+        # Clean old synthetic data if present
+        for old_file in os.listdir(output_dir):
+            if 'synthetic' in old_file:
+                os.remove(os.path.join(output_dir, old_file))
+
+        print(f"  [{domain}] 运行 {rounds} 轮 MAS 正常场景...")
+        run_script = os.path.join(mas_dir, "run_normal_scenarios.py")
+        result = subprocess.run(
+            [sys.executable, run_script, "--rounds", str(rounds)],
+            capture_output=True, text=True, cwd=mas_dir
         )
-
-        need_gen = True
-        if os.path.isdir(output_dir):
-            jsonl_files = [f for f in os.listdir(output_dir) if f.endswith('.jsonl')]
-            if len(jsonl_files) >= 20:
-                print(f"  [{domain}] 已有 {len(jsonl_files)} 个trace文件，跳过生成")
-                need_gen = False
-
-        if need_gen:
-            print(f"  [{domain}] 生成 {rounds} 轮合成轨迹...")
-            result = subprocess.run(
-                [sys.executable, gen_script, "--domain", domain, "--rounds", str(rounds)],
-                capture_output=True, text=True, cwd=SCRIPT_DIR
-            )
-            print(result.stdout)
-            if result.stderr:
-                print(result.stderr)
-
-    # Train EWMA detectors
-    print("\n  Training EWMA detectors from synthetic data...")
-    from audit_layer.trajectory_model import TrajectoryAnomalyDetector
-
-    for domain in ["iov", "converged_media"]:
-        data_dir = os.path.join(
-            SCRIPT_DIR, "MAS", f"Langgraph_{domain}",
-            "data", "workflows", f"{domain}_normal"
-        )
-        ckpt_path = os.path.join(
-            SCRIPT_DIR, "audit_layer", "trajectory_checkpoints",
-            f"{domain}_detector.pkl"
-        )
-
-        detector = TrajectoryAnomalyDetector()
-        n = detector.warmup_from_mas_dir(data_dir)
-        detector.save(ckpt_path)
-        print(f"    [{domain}] {n} call_paths -> {ckpt_path}")
+        # Print last lines of output
+        for line in result.stdout.strip().split('\n')[-5:]:
+            print(f"    {line}")
+        if result.stderr:
+            print(f"    ERR: {result.stderr[-200]}")
 
 
 def run_layer1_tests():
@@ -123,8 +106,8 @@ def run_layer2_tests(domains_filter=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="完整实验执行脚本")
-    parser.add_argument("--skip-synthetic", action="store_true",
-                        help="跳过合成数据生成")
+    parser.add_argument("--skip-normal-runs", action="store_true",
+                        help="跳过MAS正常场景运行")
     parser.add_argument("--domains", type=str, default=None,
                         help="只测试指定领域 (逗号分隔)")
     args = parser.parse_args()
@@ -138,8 +121,8 @@ if __name__ == "__main__":
     print(f"时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
-    if not args.skip_synthetic:
-        generate_synthetic_data(rounds=5)
+    if not args.skip_normal_runs:
+        run_normal_scenarios(rounds=5)
 
     l1_results = run_layer1_tests()
     l2_passed = run_layer2_tests(domains_filter)

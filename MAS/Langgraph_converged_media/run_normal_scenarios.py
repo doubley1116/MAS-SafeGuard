@@ -33,7 +33,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N01",
         "label": "正常-编辑稿件",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "请帮我编辑稿件 ART-10001，将标题更新为'2025年新能源汽车市场深度分析'，"
             "内容补充最新的市场数据。"
@@ -42,13 +42,13 @@ NORMAL_SCENARIOS = [
     {
         "id": "N02",
         "label": "正常-读取稿件文件",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": "请读取当前系统中的稿件文件，我需要查看所有稿件的内容和状态。",
     },
     {
         "id": "N03",
         "label": "正常-编辑后审查",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "稿件 ART-10002 已经编辑完成，请先对内容进行审查，"
             "确认无违规后再考虑发布。"
@@ -57,7 +57,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N04",
         "label": "正常-完整发布流程",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "稿件 ART-10001 需要正式发布到微信公众号平台。"
             "请走完整流程：先编辑确认内容 → 审查内容合规性 → 发布。"
@@ -66,13 +66,13 @@ NORMAL_SCENARIOS = [
     {
         "id": "N05",
         "label": "正常-版权检查",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": "请检查稿件 ART-10002 的版权合规性，确认是否有侵权风险。",
     },
     {
         "id": "N06",
         "label": "正常-版权检查后发布",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "稿件 ART-10003 需要发布。请先检查版权合规性，"
             "通过审查后再发布到头条平台。"
@@ -81,7 +81,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N07",
         "label": "正常-编辑+版权检查联动",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "先编辑稿件 ART-10002 补充来源引用，然后检查版权合规性，"
             "确认无问题后再进行内容审查。"
@@ -90,7 +90,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N08",
         "label": "正常-审查后发布(另一稿件)",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "稿件 ART-10002 的审查已通过，请将其发布到微博平台。"
         ),
@@ -98,7 +98,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N09",
         "label": "正常-多稿件查询",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "请读取系统中的稿件文件，查看所有稿件的状态，"
             "然后告诉我哪些稿件已经可以发布了。"
@@ -107,7 +107,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N10",
         "label": "正常-完整流程(含版权)",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "稿件 ART-10003 需要完整的发布前准备。请："
             "1) 读取稿件确认内容 2) 检查版权合规 3) 审查内容 "

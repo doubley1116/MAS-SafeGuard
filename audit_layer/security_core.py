@@ -145,6 +145,14 @@ class SecurityCore:
             self._trace_clean = True
             self._trace_buffer = []
 
+        # ── 剥离基础设施节点（与 EWMA 预热/推理保持一致）──
+        # MAS 生成的 call_path 包含 Router/Tool_Node，但 policy YAML 和
+        # test data 均不包含。必须在规则引擎评估前剥离，否则所有经过 Router
+        # 的正常流量都会被误判为 adjacency_violation。
+        clean_path = [n for n in (event.call_path or []) if n not in self._INFRA_NODES]
+        if clean_path != event.call_path:
+            event = event.with_call_path(clean_path)
+
         rule_score, risk_types, rule_reason = self.rule_engine.evaluate(event)
 
         # ── 角色引擎评分（如果启用）──
@@ -236,7 +244,7 @@ class SecurityCore:
     # 轨迹评分
     # ══════════════════════════════════════════════════════════
 
-    # ── 基础设施节点（warmup 时剥离，推理时也需剥离以保持对齐）──
+    # ── 基础设施节点（预热时剥离，推理时同步剥离以保持对齐）──
     _INFRA_NODES = {"Router", "Tool_Node"}
 
     def _compute_trajectory_score(self, event: AuditEvent) -> Optional[float]:
@@ -244,12 +252,12 @@ class SecurityCore:
         对当前事件的 call_path 做轨迹异常评分。
 
         call_path 本身就是一条轨迹——它记录了从入口到当前节点的
-        完整路由链。EMA 检测器直接对它打分。
+        完整路由链。EWMA 检测器直接对它打分。
         """
         if self.trajectory_detector is None:
             return None
 
-        # 剥离基础设施节点，与 warmup_from_mas_dir 的预处理对齐
+        # 剥离基础设施节点，与 warmup 预处理对齐
         path = [n for n in (event.call_path or []) if n not in self._INFRA_NODES]
         if len(path) < 2:
             return None

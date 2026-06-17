@@ -2,7 +2,7 @@
 trajectory_model.py — 基于 EWMA + 角色抽象的轻量轨迹监控器
 
 原理（类比 PID 控制器 / 风扇调速）：
-  - 维护每个轨迹特征（深度、角色熵、非法跳数……）的 EWMA 均值和方差
+  - 维护每个轨迹特征（深度、角色熵、新颖边…）的 EWMA 均值和方差
   - 每次观察到正常 call_path 时，以 α=0.05 的速率更新基线
   - 新 call_path 偏离基线超过 k 倍标准差 → 异常
 
@@ -12,20 +12,19 @@ trajectory_model.py — 基于 EWMA + 角色抽象的轻量轨迹监控器
   - 零外部依赖（仅需 numpy），推理 < 0.01ms
   - 完全可解释：每个告警都能追溯到具体哪个特征异常
 
-特征维度（全部从 call_path + 角色映射中提取）：
-  depth          — 路径深度（agent 数量）
-  unique_roles   — 去重后的角色种类数
-  role_entropy   — 角色分布的香农熵
-  illegal_jumps  — 转移概率为 0 的角色跳数
-  backtracks     — 回到之前出现过的角色的次数
-  max_gap        — 同一角色在路径中的最大间隔
+特征维度（全部从 call_path 中提取）：
+  depth           — 路径深度（agent 数量）
+  unique_roles    — 去重后的 agent 种类数
+  role_entropy    — agent 分布的香农熵
+  novel_edge_ratio — 未在预热中出现过的 agent→agent 边占比
+  edge_surprise   — 基于转移概率的边信息量均值（-ln P(B|A)）
 """
 
 from __future__ import annotations
 
 import os
 import pickle
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Optional
 
 import numpy as np
@@ -117,81 +116,161 @@ class RoleAdaptiveMonitor:
 
     - observe(call_path): 用正常轨迹更新 EWMA 基线
     - score(call_path): 返回 [0,1] 异常分
-    - 内部维护 6 个 OnlineGaussian，每个管一个特征维度
+    - 内部维护 5 个 OnlineGaussian，每个管一个特征维度
     """
 
     def __init__(
         self,
         role_discovery=None,  # RoleDiscovery 实例，可选
         alpha: float = 0.05,
-        k_depth: float = 2.0,
+        k_position: float = 2.5,
         k_roles: float = 2.0,
         k_entropy: float = 2.5,
-        k_jumps: float = 1.5,
-        k_backtracks: float = 2.0,
-        k_gap: float = 2.0,
-        k_missing: float = 1.5,
         k_novel_edge: float = 0.5,
+        k_edge_surprise: float = 2.0,
+        k_repetition: float = 2.0,
+        k_path_surprise: float = 3.0,
     ):
         self.rd = role_discovery
         self._known_edges: set[tuple[str, str]] = set()  # agent→agent transitions seen during warmup
+        self._transitions: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self._transition_totals: dict[str, int] = defaultdict(int)
+
+        # 2-gram (bigram) 转移计数: (A,B) → C 的次数
+        self._bigrams: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self._bigram_totals: dict[tuple[str, str], int] = defaultdict(int)
 
         self._stats = {
-            "depth":        OnlineGaussian(alpha, k_depth),
-            "unique_roles": OnlineGaussian(alpha, k_roles),
-            "role_entropy": OnlineGaussian(alpha, k_entropy),
-            "illegal_jumps": OnlineGaussian(alpha, k_jumps),
-            "backtracks":   OnlineGaussian(alpha, k_backtracks),
-            "max_gap":      OnlineGaussian(alpha, k_gap),
-            "spec_no_review": OnlineGaussian(alpha, k_missing),
+            "position_anomaly": OnlineGaussian(alpha, k_position),
+            "unique_roles":     OnlineGaussian(alpha, k_roles),
+            "role_entropy":     OnlineGaussian(alpha, k_entropy),
             "novel_edge_ratio": OnlineGaussian(alpha, k_novel_edge),
+            "edge_surprise":    OnlineGaussian(alpha, k_edge_surprise),
+            "path_repetition":  OnlineGaussian(alpha, k_repetition),
+            "path_surprise":    OnlineGaussian(alpha, k_path_surprise),
         }
+
+        # Per-agent position distribution tracking
+        # key = agent name, value = OnlineGaussian tracking position indices
+        self._agent_positions: dict[str, OnlineGaussian] = {}
+
+    # ── 位置种子：从 adjacency 推导每个 agent 的合法位置范围 ──
+
+    @staticmethod
+    def _compute_reachable_positions(
+        adjacency: dict[str, list[str]], max_depth: int = 4
+    ) -> dict[str, set[int]]:
+        """BFS 从 User 出发遍历 adjacency 图，返回每个 agent 可达的深度集合。"""
+        from collections import deque
+
+        reachable: dict[str, set[int]] = {}
+        queue = deque([("User", 0)])
+        reachable["User"] = {0}
+
+        while queue:
+            node, depth = queue.popleft()
+            if depth >= max_depth:
+                continue
+            for neighbor in adjacency.get(node, []):
+                if neighbor == "Router":
+                    continue
+                depths = reachable.setdefault(neighbor, set())
+                if depth + 1 not in depths:
+                    depths.add(depth + 1)
+                    queue.append((neighbor, depth + 1))
+
+        return reachable
+
+    def seed_agent_positions(
+        self, adjacency: dict[str, list[str]], base_count: int = 5, max_seed_depth: int = 3
+    ) -> None:
+        """用 adjacency 图中每个 agent 的合法深度为位置分布播种。
+
+        仅播种到 max_seed_depth，避免将均值拖向 adjacency 理论可达但实际
+        从未出现过的深度。例如 adjacency BFS 可能算出 Safety 可达深度 4，
+        但实际场景中从未超过 3，播种深度 4 会让 Safety@1 看起来异常。
+        """
+        reachable = self._compute_reachable_positions(adjacency)
+        for agent, depths in reachable.items():
+            if agent == "User":
+                continue
+            if agent not in self._agent_positions:
+                self._agent_positions[agent] = OnlineGaussian(self._stats["position_anomaly"].alpha, 2.5)
+            stat = self._agent_positions[agent]
+            for depth in sorted(depths):
+                if depth > max_seed_depth:
+                    continue
+                for _ in range(base_count):
+                    stat.observe(float(depth))
+
+    # ── 转移概率建模 ──
+
+    def _edge_surprise(self, call_path: list[str]) -> float:
+        """每条边 -ln(P(B|A)) 的均值，Laplace 平滑。
+
+        P(B|A) = (count(A→B) + 1) / (total_out(A) + |V|)
+        未见过边: ~ln(|V|)，常见边: ~0.5-1.0，罕见边: ~2-4。
+        """
+        n = len(call_path) - 1
+        if n <= 0:
+            return 0.0
+        V = max(len(set(self._transition_totals.keys()) |
+                     {a for a in call_path}), 1)
+        total_surprise = 0.0
+        for i in range(n):
+            src, dst = call_path[i], call_path[i + 1]
+            count_ab = self._transitions.get(src, {}).get(dst, 0)
+            total_a = self._transition_totals.get(src, 0)
+            prob = (count_ab + 1) / (total_a + V) if total_a > 0 else 1.0 / V
+            total_surprise += -np.log(max(prob, 1e-10))
+        return float(total_surprise / n)
+
+    def _path_surprise(self, call_path: list[str]) -> float:
+        """2-gram (bigram) 路径意外度：-ln P(C | A→B) 的均值。
+
+        与 edge_surprise (1st-order Markov) 不同，path_surprise 建模的是
+        "给定前两个 agent，第三个 agent 出现的概率"。这能捕获：
+          - User→Firmware→Safety→Firmware: (Firm,Safety)→Firmware 极少见 → 循环检测
+
+        仅对 depth ≥ 4 的路径计算。depth=3 的路径在 warmup 中天然稀疏，
+        每条路径的 bigram 都独一无二，会导致大量误报。
+        """
+        n = len(call_path)
+        if n < 4:
+            return 0.0
+        # V = 所有可能作为 bigram 后继的 agent 数
+        all_agents = set(call_path)
+        for (a, b), dsts in self._bigrams.items():
+            all_agents.update(dsts.keys())
+            all_agents.add(a)
+            all_agents.add(b)
+        V = max(len(all_agents), 1)
+        total_surprise = 0.0
+        k = 0  # 实际计算的 bigram 数
+        for i in range(2, n):
+            prefix = (call_path[i - 2], call_path[i - 1])
+            next_agent = call_path[i]
+            count_abc = self._bigrams.get(prefix, {}).get(next_agent, 0)
+            total_ab = self._bigram_totals.get(prefix, 0)
+            prob = (count_abc + 1) / (total_ab + V) if total_ab > 0 else 1.0 / V
+            total_surprise += -np.log(max(prob, 1e-10))
+            k += 1
+        return float(total_surprise / k) if k > 0 else 0.0
 
     # ── 特征提取 ──
 
     def _extract(self, call_path: list[str]) -> dict[str, float]:
-        """从一条 call_path 中提取 6 个标量特征."""
+        """从一条 call_path 中提取 7 个标量特征."""
         n = len(call_path)
-
-        # 角色序列
-        if self.rd is not None:
-            roles = [self.rd.get_role(a) for a in call_path]
-        else:
-            roles = call_path  # 无角色模型时退化为 agent 名
+        unique_roles_set = set(call_path)
 
         # 角色熵
-        role_counts = Counter(roles)
-        total = sum(role_counts.values())
+        agent_counts = Counter(call_path)
+        total = sum(agent_counts.values())
         entropy = -sum(
             (c / total) * np.log(c / total + 1e-10)
-            for c in role_counts.values()
+            for c in agent_counts.values()
         )
-
-        # 非法角色跳数
-        illegal = 0
-        if self.rd is not None:
-            for i in range(len(roles) - 1):
-                if self.rd.transition_prob(roles[i], roles[i + 1]) == 0.0:
-                    illegal += 1
-
-        # 回退数（回到之前出现过的角色，但不包括连续重复）
-        backtracks = 0
-        for i in range(2, len(roles)):
-            if roles[i] in roles[:i - 1] and roles[i] != roles[i - 1]:
-                backtracks += 1
-
-        # 最大角色跨度
-        first_occ: dict[str, int] = {}
-        max_gap = 0
-        for i, r in enumerate(roles):
-            if r not in first_occ:
-                first_occ[r] = i
-            max_gap = max(max_gap, i - first_occ[r])
-
-        # specialist 出现但 reviewer 缺席 → 典型路径绕过信号
-        unique_roles_set = set(roles)
-        spec_no_review = 1.0 if ("specialist" in unique_roles_set
-                                 and "reviewer" not in unique_roles_set) else 0.0
 
         # 新颖边比例：从未在预热中出现过的 agent→agent 转移边
         total_edges = n - 1
@@ -204,27 +283,66 @@ class RoleAdaptiveMonitor:
         else:
             novel_edge_ratio = 0.0
 
+        # 位置异常：对路径中每个 agent，查其位置分布的 z-score，取最大值
+        max_pos_z = 0.0
+        for idx, agent in enumerate(call_path):
+            pos_stat = self._agent_positions.get(agent)
+            if pos_stat is not None and pos_stat.n_obs > 0:
+                z = pos_stat.z_score(float(idx))
+            else:
+                # 未知 agent: 视为异常位置（z 取一个保守偏高的值）
+                z = 3.0
+            if z > max_pos_z:
+                max_pos_z = z
+
+        # Agent 重复比例：同一 agent 在路径中重复出现的程度
+        # 0 = 全部唯一（正常），0.5 = 一半 agent 是重复的（异常循环）
+        if n > 1:
+            repetition = (n - len(unique_roles_set)) / (n - 1)
+        else:
+            repetition = 0.0
+
+        # 2-gram 路径意外度：基于 bigram P(C | A→B) 的平均信息量
+        # 仅对 depth ≥ 3 的路径有效，捕获"合法边 + 非法序列"的模式
+        path_surprise_val = self._path_surprise(call_path)
+
         return {
-            "depth": float(n),
+            "position_anomaly": float(max_pos_z),
             "unique_roles": float(len(unique_roles_set)),
             "role_entropy": float(entropy),
-            "illegal_jumps": float(illegal),
-            "backtracks": float(backtracks),
-            "max_gap": float(max_gap),
-            "spec_no_review": spec_no_review,
             "novel_edge_ratio": float(novel_edge_ratio),
+            "edge_surprise": float(self._edge_surprise(call_path)),
+            "path_repetition": float(repetition),
+            "path_surprise": float(path_surprise_val),
         }
 
     # ── 在线学习 ──
 
     def observe(self, call_path: list[str]) -> None:
         """用一条正常 call_path 更新所有 EWMA 基线."""
+        # 更新 per-agent 位置分布
+        for idx, agent in enumerate(call_path):
+            if agent not in self._agent_positions:
+                self._agent_positions[agent] = OnlineGaussian(
+                    self._stats["position_anomaly"].alpha, 2.5
+                )
+            self._agent_positions[agent].observe(float(idx))
+
         feats = self._extract(call_path)
         for name, value in feats.items():
             self._stats[name].observe(value)
-        # 将本条路径的边加入已知集（在线扩展基线）
+        # 将本条路径的边加入已知集和转移计数（在线扩展基线）
         for i in range(len(call_path) - 1):
-            self._known_edges.add((call_path[i], call_path[i + 1]))
+            src, dst = call_path[i], call_path[i + 1]
+            self._known_edges.add((src, dst))
+            self._transitions[src][dst] += 1
+            self._transition_totals[src] += 1
+        # 更新 bigram 计数: P(C | A→B)
+        for i in range(2, len(call_path)):
+            prefix = (call_path[i - 2], call_path[i - 1])
+            next_agent = call_path[i]
+            self._bigrams[prefix][next_agent] += 1
+            self._bigram_totals[prefix] += 1
 
     def observe_batch(self, call_paths: list[list[str]]) -> None:
         """批量观察正常轨迹以快速建立基线."""
@@ -232,20 +350,41 @@ class RoleAdaptiveMonitor:
             self.observe(path)
 
     def _collect_edges(self, call_paths: list[list[str]]) -> None:
-        """仅收集边到 _known_edges，不更新 EWMA 统计."""
+        """收集边到 _known_edges 并建立转移计数矩阵，不更新 EWMA 统计."""
         for path in call_paths:
             for i in range(len(path) - 1):
-                self._known_edges.add((path[i], path[i + 1]))
+                src, dst = path[i], path[i + 1]
+                self._known_edges.add((src, dst))
+                self._transitions[src][dst] += 1
+                self._transition_totals[src] += 1
+            # 同时收集 bigram 计数
+            for i in range(2, len(path)):
+                prefix = (path[i - 2], path[i - 1])
+                next_agent = path[i]
+                self._bigrams[prefix][next_agent] += 1
+                self._bigram_totals[prefix] += 1
 
     def _warmup_finalize(self) -> None:
-        """预热收尾：为 novel_edge_ratio 设置最小方差。
+        """预热收尾：为 novel_edge_ratio 和 edge_surprise 设置最小方差。
 
         所有预热路径的 novel_edge_ratio=0（edges 已全量收集），
         但 EWMA 需要非零方差才能对测试路径的新颖边产生 z-score。
         设置 σ=0.15 意味着 1 条新颖边在 4 边路径中 (ratio=0.25)
         产生 z≈1.67 > k_novel_edge=0.5，触发异常。
+
+        edge_surprise 同理：预热路径 surprise≈0.5-1.0，
+        设置 σ=0.3 确保测试路径 surprise>1.5 能触发 z>k_edge_surprise=1.5。
+
+        position_anomaly 及 per-agent 位置分布同理：
+        设置 σ=0.15 (min_var=0.0225) 确保所有合法位置都能产生有效 z-score。
         """
         self._stats["novel_edge_ratio"].ensure_variance(min_var=0.0225)  # σ=0.15
+        self._stats["edge_surprise"].ensure_variance(min_var=0.09)       # σ=0.3
+        self._stats["position_anomaly"].ensure_variance(min_var=0.0225)  # σ=0.15
+        self._stats["path_repetition"].ensure_variance(min_var=0.01)     # σ=0.1
+        self._stats["path_surprise"].ensure_variance(min_var=0.09)       # σ=0.3
+        for stat in self._agent_positions.values():
+            stat.ensure_variance(min_var=0.0225)  # σ=0.15
 
     # ── 异常评分 ──
 
@@ -301,7 +440,19 @@ class RoleAdaptiveMonitor:
         for name, stat in self._stats.items():
             if stat.mean is not None:
                 lines.append(
-                    f"  {name:15s}: μ={stat.mean:6.3f}, σ={stat.var**0.5:6.3f}, "
+                    f"  {name:18s}: μ={stat.mean:6.3f}, σ={stat.var**0.5:6.3f}, "
+                    f"阈值=[{stat.mean - stat.k * stat.var**0.5:.3f}, "
+                    f"{stat.mean + stat.k * stat.var**0.5:.3f}], n={stat.n_obs}"
+                )
+        # 追加 per-agent 位置摘要（前 5 个 agent）
+        sorted_agents = sorted(
+            self._agent_positions.items(),
+            key=lambda x: x[1].n_obs, reverse=True,
+        )
+        for agent, stat in sorted_agents[:5]:
+            if stat.mean is not None:
+                lines.append(
+                    f"  pos[{agent:15s}]: μ={stat.mean:6.3f}, σ={stat.var**0.5:6.3f}, "
                     f"阈值=[{stat.mean - stat.k * stat.var**0.5:.3f}, "
                     f"{stat.mean + stat.k * stat.var**0.5:.3f}], n={stat.n_obs}"
                 )
@@ -356,6 +507,47 @@ class TrajectoryAnomalyDetector:
         self.monitor._collect_edges(call_paths)
         self.monitor.observe_batch(call_paths)
         self.monitor._warmup_finalize()
+        return self
+
+    def seed_agent_positions_from_adjacency(
+        self, adjacency: dict[str, list[str]], base_count: int = 5
+    ) -> "TrajectoryAnomalyDetector":
+        """用 policy adjacency 图为每个 agent 的合法位置分布播种。"""
+        self.monitor.seed_agent_positions(adjacency, base_count)
+        return self
+
+    def seed_policy_edges(self, adjacency: dict[str, list[str]],
+                          base_count: int = 5) -> "TrajectoryAnomalyDetector":
+        """补充 policy 合法边的转移计数，但不将未见边加入 known_edges。
+
+        关键设计：只对 warmup 中已观测到的合法边补充计数（防止低频边
+        edge_surprise 虚高）；warmup 中未出现的合法边保持"新颖"状态，
+        让 EWMA 的 novel_edge_ratio 能独立检测。这样 EWMA 不会沦为
+        规则引擎 adjacency 白名单的影子。
+        """
+        # 计算每个源 agent 的平均出边观测数（仅用于已观测边的计数补充）
+        avg_observed = {}
+        for src in adjacency:
+            counts = [
+                self.monitor._transitions[src].get(dst, 0)
+                for dst in adjacency[src]
+            ]
+            nonzero = [c for c in counts if c > 0]
+            avg_observed[src] = int(sum(nonzero) / len(nonzero)) if nonzero else base_count
+
+        for src, dsts in adjacency.items():
+            for dst in dsts:
+                prev = self.monitor._transitions[src][dst]
+                # 只对 warmup 中已观测到的边补充计数
+                if prev > 0:
+                    self.monitor._known_edges.add((src, dst))
+                    seed = max(base_count, avg_observed.get(src, base_count))
+                    if prev < seed:
+                        delta = seed - prev
+                        self.monitor._transitions[src][dst] = seed
+                        self.monitor._transition_totals[src] += delta
+                # prev == 0: 该边在 warmup 中从未出现 → 不加入 known_edges
+                # → novel_edge_ratio 将在推理时捕获它
         return self
 
     def warmup_from_mas_dir(
@@ -434,6 +626,14 @@ class TrajectoryAnomalyDetector:
                 for name, stat in self.monitor._stats.items()
             },
             "known_edges": list(self.monitor._known_edges),
+            "transitions": {src: dict(dsts) for src, dsts in self.monitor._transitions.items()},
+            "transition_totals": dict(self.monitor._transition_totals),
+            "bigrams": {f"{a}|{b}": dict(dsts) for (a, b), dsts in self.monitor._bigrams.items()},
+            "bigram_totals": {f"{a}|{b}": t for (a, b), t in self.monitor._bigram_totals.items()},
+            "agent_positions": {
+                agent: stat.to_dict()
+                for agent, stat in self.monitor._agent_positions.items()
+            },
         }
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "wb") as f:
@@ -449,13 +649,37 @@ class TrajectoryAnomalyDetector:
         if "stats" in state:
             stats_data = state["stats"]
             known_edges = set(state.get("known_edges", []))
+            transitions = state.get("transitions", {})
+            transition_totals = state.get("transition_totals", {})
+            agent_positions_data = state.get("agent_positions", {})
         else:
             stats_data = state
             known_edges = set()
+            transitions = {}
+            transition_totals = {}
+            agent_positions_data = {}
 
         obj = cls(role_discovery=role_discovery)
         for name, d in stats_data.items():
             if name in obj.monitor._stats:
                 obj.monitor._stats[name] = OnlineGaussian.from_dict(d)
         obj.monitor._known_edges = known_edges
+        obj.monitor._transitions = defaultdict(lambda: defaultdict(int),
+            {src: defaultdict(int, dsts) for src, dsts in transitions.items()})
+        obj.monitor._transition_totals = defaultdict(int, transition_totals)
+
+        # 恢复 bigram 计数
+        bigrams_data = state.get("bigrams", {})
+        bigram_totals_data = state.get("bigram_totals", {})
+        for key, dsts in bigrams_data.items():
+            a, b = key.split("|", 1)
+            obj.monitor._bigrams[(a, b)] = defaultdict(int, dsts)
+        for key, total in bigram_totals_data.items():
+            a, b = key.split("|", 1)
+            obj.monitor._bigram_totals[(a, b)] = total
+
+        # 恢复 per-agent 位置分布
+        for agent, d in agent_positions_data.items():
+            obj.monitor._agent_positions[agent] = OnlineGaussian.from_dict(d)
+
         return obj

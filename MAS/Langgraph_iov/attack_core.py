@@ -61,7 +61,7 @@ class DualLogger:
 sys.stdout = DualLogger("iov_attack_simulation.log")
 
 # ================= 环境与模型配置 =================
-load_dotenv()
+load_dotenv(override=True)
 API_KEY  = os.getenv("API_KEY")
 BASE_URL = os.getenv("BASE_URL")
 MODEL    = os.getenv("MODEL")
@@ -232,7 +232,7 @@ intent_prompt = ChatPromptTemplate.from_messages([
 - finish:           任务全部完成或已明确失败
 
 【关键判断规则】
-1. 若对话历史中已有专员成功完成任务，必须返回 finish。
+1. 仅当用户请求的【所有步骤】都已完成时才返回 finish。若还有未执行的步骤（如安全审查、固件更新等），必须继续分配下一步。
 2. 固件更新前必须先安排 safety_review。
 3. 同一意图已成功执行一次后，不得再次分配。
 {format_instructions}"""),
@@ -257,7 +257,7 @@ def semantic_router_node(state: AgentState):
         if name in KNOWN_AGENTS:
             agent_counts[name] = agent_counts.get(name, 0) + 1
 
-    if any(v >= 3 for v in agent_counts.values()):
+    if any(v >= 10 for v in agent_counts.values()):
         print("  [Router] ---> [防循环] 检测到专员被重复分配(≥3次)，强制 FINISH")
         return {"next": "FINISH"}
 
@@ -336,7 +336,7 @@ def path_enforced_router_node(state: AgentState):
     agent_counts = {}
     for agent in executed_agents:
         agent_counts[agent] = agent_counts.get(agent, 0) + 1
-    if any(v >= 3 for v in agent_counts.values()):
+    if any(v >= 10 for v in agent_counts.values()):
         print("  [Path-Enforced Router] ---> [防循环] 专员重复分配，强制 FINISH")
         next_agent = "FINISH"
 

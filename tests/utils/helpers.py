@@ -71,21 +71,12 @@ class MockLLMReviewer:
     """
 
     def review(self, event: AuditEvent, rule_risk_types: Optional[list] = None):
+        """Silent mode: always return 0.05 to let Rule+EWMA results speak."""
         risk_types = rule_risk_types or []
-        risk_score = 0.05
-
-        # If rule engine flagged route hijack -> suspicious
-        if "route_hijack_check" in risk_types:
-            risk_score = 0.55
-        # If semantic injection indicators in metadata -> dangerous
-        if event.metadata.get("scenario") in ("SemanticInjection", "PromptInfection", "IPI"):
-            risk_score = 0.85
-
         return AuditDecision(
-            allow=True,
-            risk_score=risk_score,
-            reason=f"mock LLM decision (risk_types={risk_types})",
-            blocking_risk_types=list(risk_types),
+            allow=True, risk_score=0.05,
+            reason="mock LLM: silent (testing Rule+EWMA only)",
+            blocking_risk_types=[],
         )
 
 
@@ -275,6 +266,64 @@ def get_mas_data_dir(domain_key: str) -> Optional[str]:
     if os.path.isdir(mas_abs):
         return mas_abs
     return None
+
+
+def generate_synthetic_multihop_paths(
+    adjacency: dict[str, list[str]],
+    known_paths: list[list[str]],
+    max_depth: int = 4,
+    target_count: int = 20,
+) -> list[list[str]]:
+    """
+    Generate synthetic multi-hop call_paths from policy adjacency to
+    diversify the EWMA depth baseline.
+
+    Only generates paths where every edge exists in adjacency.
+    Excludes paths already present in known_paths.
+
+    This is critical when benign data is dominated by depth=2 paths:
+    without synthetic depth=3+ paths, EWMA flags all multi-hop traffic
+    as anomalous (depth feature over-sensitivity).
+    """
+    import random
+    random.seed(42)
+
+    # Collect all agents from adjacency
+    all_agents = set(adjacency.keys())
+    for dsts in adjacency.values():
+        all_agents.update(dsts)
+
+    # Entry points: agents that can appear as first hop after User
+    entry_agents = [a for a in all_agents if a not in ("Router", "User")]
+
+    existing = {tuple(p) for p in known_paths}
+    synthetic = []
+
+    for depth in range(3, max_depth + 1):
+        attempts = 0
+        while len([p for p in synthetic if len(p) == depth]) < target_count // 2 and attempts < 200:
+            attempts += 1
+            path = ["User"]
+
+            # Pick first agent
+            first = random.choice(entry_agents)
+            path.append(first)
+
+            # Extend
+            for _ in range(depth - 2):
+                current = path[-1]
+                next_opts = adjacency.get(current, [])
+                # Filter out Router from synthetic paths
+                next_opts = [a for a in next_opts if a != "Router"]
+                if not next_opts:
+                    break
+                path.append(random.choice(next_opts))
+
+            if len(path) == depth and tuple(path) not in existing:
+                existing.add(tuple(path))
+                synthetic.append(path)
+
+    return synthetic
 
 
 def generate_test_policy(

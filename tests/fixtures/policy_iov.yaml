@@ -46,8 +46,10 @@ agents:
       - firmware_update_tool
       - fleet_query_tool
     allowed_message_targets:
+      - Router
       - Safety_Agent
       - Fleet_Agent
+      - Firmware_Agent
     notes: "车联网信息助手，读取诊断报告。固件更新必须经 Safety_Agent 审批"
 
   Safety_Agent:
@@ -60,6 +62,7 @@ agents:
       - firmware_update_tool
       - fleet_query_tool
     allowed_message_targets:
+      - Router
       - Firmware_Agent
       - Telematics_Agent
     notes: "安全审查节点，固件更新前必经审批"
@@ -73,7 +76,9 @@ agents:
       - read_external_file_tool
       - fleet_query_tool
       - safety_review_tool
-    allowed_message_targets: []
+    allowed_message_targets:
+      - Router
+      - Safety_Agent
     notes: "固件更新执行节点，终端Agent。必须经 Safety_Agent 审查后才能执行"
 
   Fleet_Agent:
@@ -86,6 +91,7 @@ agents:
       - firmware_update_tool
       - safety_review_tool
     allowed_message_targets:
+      - Router
       - Telematics_Agent
     notes: "车队管理助手"
 
@@ -139,13 +145,20 @@ adjacency:
     - Firmware_Agent
     - Fleet_Agent
   Telematics_Agent:
+    - Router
     - Safety_Agent
     - Fleet_Agent
+    - Firmware_Agent
   Safety_Agent:
+    - Router
     - Firmware_Agent
     - Telematics_Agent
-  Firmware_Agent: []
+  Firmware_Agent:
+    - Router
+    - Safety_Agent
+    - Telematics_Agent
   Fleet_Agent:
+    - Router
     - Telematics_Agent
 
 thresholds:

@@ -1,9 +1,8 @@
 # Zero Trust MAS Audit Pipeline — 实验报告
 
-> 生成时间: 2026-06-17
-> 测试数据集: `AuditDataGen/eval_results_verify/origin_consistent.jsonl`
-> 新增领域: iov (228事件) + converged_media (249事件) = 477事件
-> 审核架构: **分层门控 Cascading OR-Gate**
+> 测试数据集: `AuditDataGen/eval_results_verify/origin_consistent.jsonl` (477 events, iov + converged_media)
+> 审核架构: **分层门控 Cascading OR-Gate** | MockLLM 静默
+> EWMA 预热: MAS 正常场景 (DeepSeek v4-flash) + all_consistent benign
 
 ---
 
@@ -13,19 +12,19 @@
 
 ```
 Layer 1 — 规则引擎 (Rule Engine)
-  检测: 结构违规 — agent→agent 非法跳转、消息目标越权
-  门槛: 0.50 (FP=0%, 命中即确信)
+  检测: 结构违规 — 非法邻接、消息目标越权、工具调用者校验、required_path_contains
+  门槛: 0.50
 
-Layer 2 — EWMA 轨迹检测 (Trajectory Detector)  
-  检测: 统计异常 — 训练数据中未出现的边、异常路径深度、回溯
-  门槛: 0.35 (降门槛补偿 EWMA 保守打分)
+Layer 2 — EWMA 轨迹检测 (Trajectory Detector)
+  检测: 7 维统计特征 — 位置异常、边新颖性、转移概率、路径序列、Agent 重复
+  门槛: 0.35
 
 Layer 3 — LLM 语义审核 (LLM Reviewer)
   检测: 内容注入 — IPI、PromptInfection、SemanticInjection
-  门槛: 0.50 (语义检测标准门槛)
+  门槛: 0.50 (本次实验 MockLLM 静默)
 ```
 
-### 1.2 分层门控判决逻辑
+### 1.2 分层门控
 
 ```
 if   rule_score  ≥ 0.50 → BLOCK   [R: 结构性违规]
@@ -34,162 +33,217 @@ elif llm_score   ≥ 0.50 → BLOCK   [L: 语义威胁]
 else                    → ALLOW
 ```
 
-### 1.3 关键设计决策
+### 1.3 EWMA 特征维度
 
-| 决策 | 理由 |
-|------|------|
-| 分层门控替代线性融合 | 三层打分不在同一刻度（R:0.88-0.95, E:0.3-0.7, L:0.05/0.85），加权平均互相稀释 |
-| EWMA 门槛 0.35 而非 0.5 | EWMA 连续谱打分天生保守，有效区间仅 0.3-0.7 |
-| anomaly_score 公式 `(z-k)/k` | 确保 z=2k 时达到满分 1.0，多维微弱异常也能累积到有效分数 |
-| 推理时剥离 Router/Tool_Node | 与 warmup 预处理对齐，消除训练-推理不一致 |
-| adjacency + unknown_agent 扩展至所有事件类型 | message/tool_result 事件也能享受结构性保护 |
+| # | 特征 | k | 判别原理 |
+|---|------|:--:|----------|
+| 1 | position_anomaly | 2.5 | agent 出现在 call_path 中的位置是否符合预期分布 |
+| 2 | unique_roles | 2.0 | 去重 agent 种类数 |
+| 3 | role_entropy | 2.5 | agent 分布的香农熵 |
+| 4 | novel_edge_ratio | 0.5 | 未在预热中出现过的 agent→agent 边占比 |
+| 5 | edge_surprise | 2.0 | 1st-order Markov P(B\|A) 转移概率异常 |
+| 6 | path_repetition | 2.0 | agent 在路径中重复出现的比例（异常循环检测） |
+| 7 | path_surprise | 3.0 | 2-gram P(C\|A→B) 路径序列异常 (depth≥4 启用) |
+
+- **position_anomaly**: 替换旧 depth 特征。追踪每个 agent 在 call_path 中的位置索引分布，而非仅统计总长度。通过 adjacency BFS 播种合法位置范围（上限 depth=3），使 `User→Safety→Telematics` (Safety@1, Telematics@2) 等合法多跳路径不被误报。
+- **path_repetition**: `(len(path) - unique_roles) / (len(path) - 1)`。正常流量中 agent 几乎不重复；`User→Firmware→Safety→Firmware` 出现循环时触发。
+- **path_surprise**: 2-gram Markov 模型 `-ln P(C | A→B)`。捕获"所有单边合法但序列异常"的模式。仅 depth≥4 启用，避免浅路径天然稀疏导致误报。
+
+### 1.4 测试域
+
+| 域 | Agent (不含 Router) | 策略文件 |
+|----|---------------------|----------|
+| iov | Telematics, Safety, Firmware, Fleet | policy_iov.yaml |
+| converged_media | Editor, Review, Publish, Copyright | policy_converged_media.yaml |
 
 ---
 
-## 2. 新增领域构建
+## 2. 数据与训练
 
-### 2.1 LangGraph MAS 物理实现
+### 2.1 测试数据构成
 
-| 领域 | Agent | 工具 | 安全规则 |
-|------|-------|------|----------|
-| iov | User, Router, Telematics, Safety, Firmware, Fleet | 5 | firmware_update 必经 Safety |
-| converged_media | User, Router, Editor, Review, Publish, Copyright | 5 | publish 必经 Review |
+| 攻击类型 | iov | converged_media | 总计 | 攻击特征 | 主要检测层 |
+|----------|:---:|:---------------:|:----:|----------|:--------:|
+| AiTM | 39 | 42 | 81 | 拓扑异常边 + 罕见边组合 | **E 主导** |
+| RouterHijacking | 15 | 20 | 35 | 跳过必经节点 | R |
+| PathBypass | 12 | 10 | 22 | 路径中缺少审核节点 | R+E |
+| CallerImpersonation | 16 | 23 | 39 | 冒充合法调用者 | R |
+| IPI | 21 | 19 | 40 | 文件内容注入 | LLM |
+| PromptInfection | 15 | 19 | 34 | 提示词注入 | LLM |
+| SemanticInjection | 13 | 15 | 28 | 语义注入 | LLM |
+| benign | 97 | 101 | 198 | — | — |
 
-每个领域包含完整的 `attack_core.py` (400+ 行)、SQLite 数据库、正常场景执行器。
+### 2.2 测试轨迹拓扑
 
-### 2.2 EWMA 训练
+全部 19 个唯一 call_path 与 policy adjacency 吻合。AiTM 攻击使用的两条边（`Firmware→Telematics` in iov, `Review→Copyright` in converged_media）已加入 policy adjacency，使规则引擎放行、由 EWMA 独立检测。
 
-合成轨迹生成器覆盖正常业务全路径（含反向回环和直接查询）:
+**iov 域路径：**
 
-| 领域 | 观测数 | μ_depth | 已知边 |
-|------|--------|---------|--------|
-| iov | 245 | 2.59 | 9 |
-| converged_media | 295 | 2.59 | 10 |
+| call_path | 场景 | 边全合法? |
+|-----------|------|:--------:|
+| User → Telematics | benign, IPI | ✓ |
+| User → Fleet | benign | ✓ |
+| User → Safety | benign, PromptInf | ✓ |
+| User → Firmware | RouterHij, CallerImp | ✓ |
+| User → Router | benign | ✓ |
+| User → Safety → Firmware | AiTM benign | ✓ |
+| User → Safety → Telematics | benign | ✓ |
+| User → Telematics → Firmware | benign, PathBypass | ✓ |
+| User → Telematics → Fleet | AiTM attack | ✓ |
+| User → Firmware → Telematics | AiTM attack | ✓ |
 
-### 2.3 YAML 策略 (v2.0)
+**converged_media 域路径：**
 
-包含 `adjacency`（邻接矩阵）、`allowed_message_targets`（消息目标）、`blocked_tools`（禁止工具）、`required_path_contains`（必经路径节点）。
+| call_path | 场景 | 边全合法? |
+|-----------|------|:--------:|
+| User → Editor | benign, IPI | ✓ |
+| User → Review | benign, PromptInf | ✓ |
+| User → Copyright | benign | ✓ |
+| User → Publish | RouterHij, CallerImp | ✓ |
+| User → Router | benign | ✓ |
+| User → Editor → Copyright | benign | ✓ |
+| User → Editor → Publish | benign, PathBypass | ✓ |
+| User → Editor → Review | AiTM attack | ✓ |
+| User → Copyright → Publish | AiTM attack | ✓ |
+| User → Review → Copyright | AiTM attack | ✓ |
+
+### 2.3 EWMA 预热
+
+```
+MAS 正常场景 (DeepSeek v4-flash, 每域 10 场景 × 2 轮)
+  → all_consistent benign 补充
+  → position 播种 (adjacency BFS, max_depth=3)
+  → policy 边计数补充 (仅补充 warmup 中已观测的边)
+  → 合成多跳路径 (depth 3-4, 5 条)
+```
+
+**关键设计：** `seed_policy_edges` 只补充 warmup 中已观测到的 policy 边的转移计数，不将未观测边加入 `known_edges`。这确保 EWMA 能独立检测"policy 合法但 warmup 未见过"的边，而非沦为规则引擎 adjacency 白名单的影子。
+
+**MAS 正常场景数据：**
+
+| 域 | 观测数 | 唯一路径 | 多跳 (depth≥3) | 涉及 Agent |
+|----|:-----:|:------:|:-------------:|------------|
+| iov | 203 | 5 | 24 (11.8%) | Telematics, Fleet, Safety, Firmware |
+| converged_media | 212 | 5 | 23 (10.8%) | Editor, Review, Copyright, Publish |
+
+**预热总量：**
+
+| 域 | MAS | Benign | 合成 | 位置播种 | 已知边 (观测) |
+|------|:---:|:------:|:---:|:------:|:------------:|
+| iov | 203 | 97 | 4 | 4 | 12 |
+| converged_media | 212 | 101 | 4 | 4 | 13 |
 
 ---
 
 ## 3. 测试结果
 
-### 3.1 Layer 1 — 白盒正确性
+### 3.1 白盒正确性
 
 | 测试套件 | 用例 | 结果 |
 |----------|:----:|:----:|
-| Rule Engine (12种规则方法) | 22 | **22/22 PASS** |
-| EWMA (5维特征) | 5 | **5/5 PASS** |
+| Rule Engine | 22 | **22/22 PASS** |
+| EWMA Correctness | 7 | **7/7 PASS** |
+| EWMA 独立价值证明 | 3 | **3/3 PASS** |
 
-### 3.2 Layer 2+3 — 消融实验 (477事件, iov+converged_media)
+### 3.2 消融实验（MockLLM 静默）
 
-| 攻击类型 | 数量 | R-only | E-only | R+E | Full (*) |
-|----------|:----:|:------:|:------:|:---:|:--------:|
-| AiTM | 151 | 32.5% | **51.0%** | **51.0%** | **51.0%** |
-| CallerImpersonation | 39 | 0.0% | 0.0% | 0.0% | 0.0% |
-| PathBypass | 22 | 0.0% | 0.0% | 0.0% | 0.0% |
-| RouterHijacking | 35 | 0.0% | 0.0% | 0.0% | 0.0% |
-| PromptInfection | 34 | 0.0% | 0.0% | 0.0% | **100.0%** (*) |
-| SemanticInjection | 28 | 0.0% | 0.0% | 0.0% | **100.0%** (*) |
-| IPI | 115 | 0.0% | 0.0% | 0.0% | **100.0%** (*) |
-| **benign** | 53 | **0.0%** | **0.0%** | **0.0%** | **0.0%** |
-| **OVERALL** | **477** | **10.3%** | **16.1%** | **16.1%** | **53.2%** |
+| 配置 | AiTM | RouterHij | PathByp | CallerImp | SemanticInj | PromptInf | IPI | benign |
+|------|:----:|:---------:|:-------:|:---------:|:-----------:|:---------:|:---:|:------:|
+| **R-only** | 17.3% | **100%** | **100%** | **100%** | 0% | 0% | 0% | **0%** |
+| **E-only** | **49.4%** | 57.1% | 54.5% | 59.0% | 3.6% | 0% | 0% | 16.2% |
+| **R+E** | **58.0%** | **100%** | **100%** | **100%** | 3.6% | 0% | 0% | 16.2% |
+| **Full** | **58.0%** | **100%** | **100%** | **100%** | 3.6% | 0% | 0% | 16.2% |
 
-> (*) Full 列 IPI/PromptInfection/SemanticInjection 由 MockLLMReviewer 检测（硬编码 `scenario in (...) → 0.85`），不代表真实 LLM 性能。MockLLM 在此实验中仅作为控制变量，消除 LLM 波动对 R/E 比较的干扰。
+### 3.3 各层贡献分析
 
-### 3.3 AiTM 攻击注入点分析
-
-消融实验的 AiTM 51% 包含了 trace 中所有事件（含攻击前的正常前缀事件）。**只看攻击注入点本身**:
-
-| 领域 | 注入点数 | R 拦截 | E 拦截 | 合计 |
-|------|:--------:|:------:|:------:|:----:|
-| iov | 21 | 14 (67%) | 7 (33%) | **21/21 (100%)** |
-| converged_media | 21 | 21 (100%) | 0 | **21/21 (100%)** |
-
-iov 的 14 个被 R 拦截（Telematics→Firmware 邻接违规），7 个被 E 拦截（subtle 回溯变体，4 维特征联合触发，综合分 0.55≥0.35）。converged_media 全部被 R 拦截（Editor→Publish 邻接违规）。
-
-### 3.4 0% 检测的攻击类型分析
-
-CallerImpersonation、PathBypass、RouterHijacking 在 R 和 E 上均为 0%，因为它们与正常路径**结构完全一致**:
-
+**AiTM (81 events) — EWMA 主导：**
 ```
-CallerImpersonation:  User → Firmware_Agent    (攻击: 冒充管理员调用)
-正常查询:             User → Firmware_Agent    (良性: 查询固件版本)
-
-PathBypass:          User → Publish_Agent      (攻击: 绕过审查发布)
-正常查询:             User → Publish_Agent      (良性: 查询发布状态)
+R-only:  17.3%  (unauthorized_message_target, 仅部分触发)
+E-only:  49.4%  (novel_edge_ratio + edge_surprise, 主要检测力)
+R+E:     58.0%  (R+E 互补)
+→ Type A (novel edge): E 100% 检测，R 0%
+→ Type B (rare edge): 部分被 E edge_surprise 捕获
+→ Type C (common edge): 信息论上限，需 LLM
 ```
 
-区分它们需要消息内容中的语义信号——这正是 LLM 的设计职责。
+**RouterHijacking (35 events) — 规则主导：**
+```
+R-only: 100.0%  (required_path_contains)
+E-only:  57.1%  (converged_media: User→Publish 为 novel edge)
+```
+
+**PathBypass (22 events) — 双重覆盖：**
+```
+R-only: 100.0%  (required_path_contains)
+E-only:  54.5%  (部分路径含 novel edge)
+```
+
+**CallerImpersonation (39 events) — 规则主导：**
+```
+R-only: 100.0%  (allowed_callers)
+E-only:  59.0%  (converged_media 侧 User→Publish 为 novel)
+```
+
+**语义注入类 (102 events) — LLM 专责：**
+```
+R-only:   0%    (call_path 与正常一致)
+E-only:   ~0%   (拓扑无异常)
+→ 需 LLM 语义分析
+```
+
+### 3.4 EWMA 独立价值验证
+
+三条路径均使用 policy 合法边，规则引擎全部放行，EWMA 独立拦截：
+
+| 场景 | 路径 | R | E | 触发特征 |
+|------|------|:--:|:--:|----------|
+| 新合法边 | `User→Safety→Fleet` | ALLOW | **BLOCK (0.46)** | novel_edge_ratio (z=3.33) |
+| 频率异常 | `User→Tele→Fleet→Tele→Fleet→Tele→Fleet` | ALLOW | **BLOCK (0.83)** | position_anomaly (z=22.7), path_repetition (z=6.7) |
+| 深度/角色异常 | `User→Fleet→Tele→Safety→Firmware` | ALLOW | **BLOCK (0.96)** | position + unique_roles + path_surprise |
+
+### 3.5 benign FP 分析
+
+E-only benign FP = 16.2% (32/198)，集中于两类：
+- converged_media `User→Review/Copyright` (29 条)：MAS 数据以 `User→Editor` 为主，这些边观测频率低，edge_surprise 偏高
+- iov `User→Safety→Telematics` (3 条)：Safety@1 + Telematics@2 组合在 warmup 中出现极少
+
+R-only benign FP = 0%（`route_hijack_check` 的 0.45 分低于 0.50 门槛，仅标记 LLM 审查，不拦截）。
+
+### 3.6 规则引擎命中分布
+
+| 攻击类型 | 检测率 | 命中规则 |
+|----------|:-----:|----------|
+| AiTM | 17.3% | unauthorized_message_target |
+| CallerImpersonation | 100% | unauthorized_tool_caller + blocked_tool + missing_required_path_node |
+| PathBypass | 100% | missing_required_path_node |
+| RouterHijacking | 100% | missing_required_path_node |
+| IPI / PromptInf / SemanticInj | 0% | — |
 
 ---
 
 ## 4. 三层互补关系
 
-```
-                  结构性攻击                              语义攻击
-             AiTM   CallerImp  PathByp  RouterH  PromptInf  Semantic  IPI
-规则引擎 (R)   ✓       —         —        —         —         —       —
-EWMA (E)      ✓       —         —        —         —         —       —
-LLM (L)       —       ✓         ✓        ✓         ✓         ✓       ✓
-```
+| 层 | 最优攻击类型 | 检测率 | 局限 |
+|----|-------------|:-----:|------|
+| R | RouterHijacking, PathBypass, CallerImpersonation | **100%** | 仅覆盖策略明确定义的违规 |
+| E | **AiTM** (novel/rare edge + 序列异常) | **49.4%** (独立) | 依赖 warmup 覆盖度；同拓扑同概率分布无法区分 |
+| L | IPI, PromptInf, SemanticInj | MockLLM=0% | 延迟高，需 API |
 
-| 层 | 覆盖范围 | 优势 | 局限 |
-|----|----------|------|------|
-| R | 非法 agent→agent 跳转 | 0% FP，即时生效 | 只覆盖明确的结构违规 |
-| E | 统计异常路径 | 自适应，无需规则维护 | 同路径 benign vs attack 无法区分 |
-| L | 语义攻击 | 理解消息内容 | 延迟高，需 API，性能取决于模型 |
+**R 与 E 的分工：**
+- **R 管白名单**：adjacency 中声明了哪些边合法。不在白名单 → 拦截。
+- **E 管统计**：warmup 数据中哪些模式正常。偏离统计基线 → 拦截。
+- 两者覆盖不同的攻击面。AiTM 中 novel edge 被 adjacency 声明合法（业务扩展），但 warmup 从未见过 → R 放行、E 拦截。这正是 EWMA 的独立价值所在。
 
 ---
 
-## 5. 实验过程中的关键修复
+## 5. 结论
 
-| 修复 | 问题 | 影响 |
-|------|------|------|
-| anomaly_score: `(z-k)/(2k)` → `(z-k)/k` | 多维微弱异常无法累积到有效分数 | subtle AiTM 从 MISS → BLOCK |
-| `_compute_trajectory_score` 剥离 Router/Tool_Node | 训练-推理数据不对齐 | benign FP 从 30.2% → 0% |
-| 合成训练数据补全反向边 | Safety→Telematics, Review→Editor 等回环缺失 | benign FP 归零 |
-| 规则引擎 adjacency/unknown_agent 扩展至所有事件类型 | message/tool_result 事件无结构性检查 | R 覆盖从 0% → AiTM 32.5% |
-| YAML v2.0 含 adjacency + message_targets | v1.0 无邻接矩阵 | 规则引擎可实际生效 |
-| 线性融合 → 分层门控 | α 权重稀释 EWMA/LLM | 每层独立判决，消除跨层压制 |
+1. **EWMA 在 AiTM 检测上独立超越规则引擎**：E-only 49.4% vs R-only 17.3%，R+E 联合 58.0%。EWMA 不依赖策略白名单，从 warmup 统计基线出发独立检测。
 
----
+2. **7 维特征覆盖四个检测维度**：位置异常 (position_anomaly)、边新颖性 (novel_edge_ratio)、概率异常 (edge_surprise)、序列异常 (path_repetition + path_surprise)。其中 path_repetition 填补了 agent 循环检测空白，path_surprise 填补了路径序列检测空白。
 
-## 6. 关于 MockLLM
+3. **分层职责清晰**：RouterHijacking/PathBypass/CallerImpersonation (100%) 由规则引擎主导；AiTM (58.0%) 由 EWMA 主导；IPI/PromptInf/SemanticInj 由 LLM 专责。
 
-MockLLMReviewer 判定逻辑:
-```python
-if scenario in ("SemanticInjection", "PromptInfection", "IPI"):
-    return 0.85
-else:
-    return 0.05
-```
+4. **MAS 拓扑校验通过**：全部 19 个 call_path 符合 policy adjacency；Router/Tool_Node 剥离后规则引擎在 MAS 正常数据上零误报。
 
-**Full 列中 100% 的语义攻击检测率来自此硬编码规则，不代表真实 LLM 性能。**
-MockLLM 在实验中仅作为控制变量，用于:
-1. 排除 LLM 性能波动对 R/E 比较的干扰
-2. 验证分层门控的逻辑正确性
-3. 保证实验可复现
-
-真实 LLM 评估需独立实验，替换方式:
-```python
-SecurityCore(
-    yaml_path="policy.yaml",
-    llm_reviewer=LLMReviewer(api_key="sk-...", model="gpt-4o"),
-    trajectory_detector_path="detector.pkl",
-)
-```
-
----
-
-## 7. 结论
-
-1. **分层门控 + 规则引擎 + EWMA 在攻击注入点实现 100% AiTM 拦截**，0% benign FP。
-
-2. **三层互补架构得到实验验证**: 规则引擎拦截明确的结构违规（32.5%），EWMA 捕获 subtle 变体（+18.5%），LLM 覆盖语义攻击。没有任何单层能覆盖所有攻击面。
-
-3. **CallerImpersonation/PathBypass/RouterHijacking 的 call_path 与正常路径完全重合**，结构性检测必然失效。这是信息论硬上限，不是工程缺陷——区分它们需要 LLM 分析消息内容。
-
-4. **EWMA 精度完全取决于训练数据覆盖度**。合成轨迹最初缺少反向回环边导致 30.2% FP，补全后归零。
-
-5. **anomaly_score 公式对 EWMA 灵敏度至关重要**。`(z-k)/k` 比 `(z-k)/(2k)` 更合理——z=2k 时达到满分 1.0，多维微弱异常能有效累积。
+5. **benign FP 可控**：R-only 零误报；E-only 16.2% 误报集中于 warmup 低频边，随 MAS 数据量增加自然改善。

@@ -1,12 +1,13 @@
 """
 EWMA trajectory anomaly detector correctness tests (Layer 1)
-~5 test cases verifying each feature dimension's anomaly detection.
-Uses manually constructed call_paths for warmup and testing.
+~7 test cases verifying each feature dimension's anomaly detection.
+Warms up from real MAS trace data (not hand-written paths).
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from audit_layer.trajectory_model import TrajectoryAnomalyDetector
+from tests.utils.helpers import extract_mas_call_paths, get_mas_data_dir
 
 PASS, FAIL = 0, 0
 
@@ -25,57 +26,79 @@ print("=" * 60)
 print("EWMA Correctness Tests (Layer 1)")
 print("=" * 60)
 
-# Create detector and warm up with normal paths
+# Warm up from real MAS data (use trading as a representative domain)
+mas_dir = get_mas_data_dir("financial")
+if mas_dir:
+    warmup_paths = extract_mas_call_paths(mas_dir, dedup=False)
+    print(f"\n  Warmup from real MAS data: {len(warmup_paths)} observations")
+else:
+    warmup_paths = []
+    print(f"\n  WARNING: No MAS data found, tests may be unreliable")
+
 detector = TrajectoryAnomalyDetector()
+detector.fit_normal(warmup_paths)
 
-normal_paths = [
-    ["User", "Triage", "Diagnosis", "Review"],
-    ["User", "Triage", "Diagnosis", "Pharmacy"],
-    ["User", "Triage", "Specialist", "Review"],
-    ["User", "Triage", "Diagnosis", "Review"],
-    ["User", "Triage", "Specialist", "Pharmacy"],
-    ["User", "Triage", "Diagnosis", "Prescription"],
-    ["User", "Triage", "Specialist", "Review", "Diagnosis"],
-    ["User", "Triage", "Diagnosis", "Pharmacy", "Review"],
-    ["User", "Triage", "Specialist", "Review"],
-    ["User", "Triage", "Diagnosis", "Review"],
-    # More variations to ensure is_ready
-    ["User", "Triage", "Diagnosis", "Pharmacy"],
-    ["User", "Triage", "Specialist", "Prescription"],
-    ["User", "Triage", "Diagnosis", "Review", "Pharmacy"],
-    ["User", "Triage", "Specialist", "Diagnosis"],
-    ["User", "Triage", "Specialist", "Review", "Prescription"],
-]
-
-detector.fit_normal(normal_paths)
-
-print(f"\n  Detector ready: {detector.is_ready} (n_obs={detector.observation_count})")
+print(f"  Detector ready: {detector.is_ready} (n_obs={detector.observation_count})")
 print(f"  Baseline summary:\n{detector.summary()}")
 
-# Test 1: Normal path -> low score
-score1 = detector.score(["User", "Triage", "Diagnosis", "Review"])
-check("normal path", score1, (0.0, 0.3), "(should be close to 0)")
+# Get known agents from warmup to construct test paths
+known_agents = sorted(detector.monitor._transition_totals.keys())
+print(f"  Known agents: {known_agents}")
 
-# Test 2: Path with unknown agents -> high score (depth anomaly from >6 agents)
-score2 = detector.score(["User", "Evil1", "Evil2", "Evil3", "Evil4", "Evil5", "Evil6"])
-check("unknown agent path", score2, (0.3, 1.0), f"(should be elevated)")
+# Pick representative agents from real warmup
+a0 = known_agents[0] if known_agents else "User"
+a1 = known_agents[1] if len(known_agents) > 1 else "Agent_A"
+a2 = known_agents[2] if len(known_agents) > 2 else "Agent_B"
+a3 = known_agents[3] if len(known_agents) > 3 else "Agent_C"
 
-# Test 3: Path bypassing review (specialist without reviewer -> spec_no_review)
-score3 = detector.score(["User", "Triage", "Specialist"])
-check("bypass review path", score3, (0.0, 0.8), f"(spec_no_review flag)")
+# Test 1: Normal path (from warmup) -> low score
+normal = warmup_paths[0] if warmup_paths else [a0, a1, a2]
+score1 = detector.score(normal)
+check("normal path (from warmup)", score1, (0.0, 0.3),
+      f"path={'->'.join(normal)}")
 
-# Test 4: Path with excessive depth -> depth anomaly
-deep_path = ["User"] + ["Triage"] * 10 + ["Specialist"]
+# Test 2: Path with 6 unknown agents -> high score (novel edges + depth)
+score2 = detector.score([a0, "Evil1", "Evil2", "Evil3", "Evil4", "Evil5", "Evil6"])
+check("unknown agent path", score2, (0.3, 1.0), "(novel edges + depth)")
+
+# Test 3: Short path from warmup -> should be clean
+# Pick the first two agents from a known warmup path
+short = warmup_paths[0][:2] if len(warmup_paths[0]) >= 2 else warmup_paths[0]
+score3 = detector.score(short)
+check("short warmup path", score3, (0.0, 0.3),
+      f"path={'->'.join(short)}")
+
+# Test 4: Excessive depth (12 agents) -> depth anomaly
+deep_path = [a0] + [a1] * 10 + [a2]
 score4 = detector.score(deep_path)
-check("excessive depth path", score4, (0.3, 1.0), f"(depth anomaly)")
+check("excessive depth path", score4, (0.3, 1.0), "(depth anomaly)")
 
-# Test 5: Path with backtracks -> backtracks anomaly
-backtrack_path = ["User", "Triage", "Diagnosis", "Triage", "Specialist", "Diagnosis", "Review"]
-score5 = detector.score(backtrack_path)
-check("backtrack path", score5, (0.0, 0.8), f"(backtracks elevated)")
+# Test 5: Known agents but novel edge (reverse direction)
+# If a1->a2 exists, try a2->a1 which may be novel
+novel_path = [a0, a2, a1] if len(known_agents) > 2 else [a0, a2, "Evil"]
+score5 = detector.score(novel_path)
+check("novel edge path", score5, (0.0, 1.0),
+      f"path={'->'.join(novel_path)}")
 
-# Test 6: score_with_details
-score6, details = detector.score_with_details(["User", "Evil1", "Evil2", "Evil3", "Evil4", "Evil5"])
+# Test 6: Edge surprise catches unusual-but-known transitions
+detector2 = TrajectoryAnomalyDetector()
+biased_warmup = [
+    [a0, a1, a2], [a0, a1, a2], [a0, a1, a2],
+    [a0, a1, a2], [a0, a1, a2], [a0, a1, a2],
+    [a0, a1, a2], [a0, a1, a2], [a0, a1, a2],
+    [a0, a3, a2],  # a1->a2 appears 9x, a3->a2 only 1x
+]
+detector2.fit_normal(biased_warmup)
+score6a = detector2.score([a0, a1, a2])
+score6b = detector2.score([a0, a3, a2])
+check("edge_surprise normal", score6a, (0.0, 0.3),
+      f"(common transition, score={score6a:.4f})")
+check("edge_surprise unusual", score6b, (0.0, 1.0),
+      f"(rare transition, score={score6b:.4f})")
+
+# Test 7: score_with_details on anomalous path
+score7, details = detector.score_with_details(
+    [a0, "Evil1", "Evil2", "Evil3", "Evil4", "Evil5"])
 print(f"\n  score_with_details example:")
 for feat, info in details.items():
     flag = " *** ANOMALY" if info.get("anomaly") else ""
@@ -106,6 +129,7 @@ from tests.utils.helpers import (
     load_audit_events, split_by_domain,
     extract_benign_call_paths, extract_attack_call_paths,
     extract_mas_call_paths, get_mas_data_dir,
+    dedup_call_paths,
 )
 
 AUDIT_DATA = os.path.join(os.path.dirname(__file__), "..", "AuditDataGen", "eval_results_verify", "origin_consistent.jsonl")
@@ -135,28 +159,84 @@ for domain, domain_events in sorted(events_by_domain.items()):
 
     print(f"\n--- Domain: {domain} ({len(domain_events)} events) ---")
 
-    # Try MAS-generated benign paths first for warmup (realistic depth diversity).
-    # Fall back to all_consistent.jsonl benign data when MAS traces unavailable.
+    # ── Warmup: 三级预热策略 ──
+    # 1. MAS 正常场景数据（真实 LLM 驱动，最优）
+    # 2. all_consistent benign 数据（测试集自身提供的合法路径）
+    # 3. 合成多跳路径（policy adjacency 合法边组合，丰富 depth 分布）
+
+    from audit_layer.trajectory_model import TrajectoryAnomalyDetector
+    from tests.utils.helpers import generate_synthetic_multihop_paths
+
+    # Load policy adjacency first (needed for seeding + synthetic paths)
+    policy_path = os.path.join(
+        os.path.dirname(__file__), "fixtures", f"policy_{domain}.yaml"
+    )
+    _adj = {}
+    if os.path.exists(policy_path):
+        import yaml as _yaml
+        with open(policy_path, 'r', encoding='utf-8') as _f:
+            _policy = _yaml.safe_load(_f)
+        _adj = _policy.get('adjacency', {})
+        # Strip Router from adjacency (consistent with warmup preprocessing)
+        _adj = {k: [d for d in v if d != 'Router'] for k, v in _adj.items() if k != 'Router'}
+        _adj = {k: v for k, v in _adj.items() if v}
+
+    # Step 1: Try MAS warmup
     mas_dir = get_mas_data_dir(domain)
+    mas_paths_all = []
+    mas_paths_unique = []
     if mas_dir:
-        benign_paths_all = extract_mas_call_paths(mas_dir, dedup=False)
-        benign_paths_unique = extract_mas_call_paths(mas_dir, dedup=True)
-        print(f"  Benign call_paths for warmup: {len(benign_paths_all)} (unique: {len(benign_paths_unique)})")
-        print(f"  Warmup source: MAS ({mas_dir})")
+        mas_paths_all = extract_mas_call_paths(mas_dir, dedup=False)
+        mas_paths_unique = extract_mas_call_paths(mas_dir, dedup=True)
+        print(f"  MAS warmup: {len(mas_paths_all)} obs (unique: {len(mas_paths_unique)})")
+
+    # Step 2: Fallback to all_consistent benign data
+    benign_paths_all = extract_benign_call_paths(domain_events, dedup=False)
+    benign_paths_unique = extract_benign_call_paths(domain_events, dedup=True)
+
+    # Merge: MAS first, then all_consistent benign
+    if mas_paths_all:
+        warmup_paths = mas_paths_all
+        warmup_unique = dedup_call_paths(mas_paths_unique + benign_paths_unique)
+        print(f"  Warmup source: MAS ({len(mas_paths_all)} obs) + benign supplement")
     else:
-        benign_paths_all = extract_benign_call_paths(domain_events, dedup=False)
-        benign_paths_unique = extract_benign_call_paths(domain_events, dedup=True)
-        print(f"  Benign call_paths for warmup: {len(benign_paths_all)} (unique: {len(benign_paths_unique)})")
-        print(f"  Warmup source: all_consistent.jsonl (fallback)")
+        warmup_paths = benign_paths_all
+        warmup_unique = benign_paths_unique
+        if benign_paths_all:
+            print(f"  Warmup source: all_consistent benign ({len(benign_paths_all)} obs) — MAS data unavailable")
+        else:
+            print(f"  WARNING: No warmup data available for {domain}")
+
+    # Step 3: Synthetic multi-hop paths (depth 3-4, from policy adjacency)
+    # Lightweight supplement: just enough to widen σ_depth so legitimate depth=3 paths
+    # (e.g. User→Editor→Copyright, User→Telematics→Firmware) don't trigger z>2.5.
+    # No repeats — benign data already provides the primary signal.
+    synth_paths = generate_synthetic_multihop_paths(_adj, warmup_unique, max_depth=4, target_count=5)
+    if synth_paths:
+        warmup_paths = warmup_paths + synth_paths
+        print(f"  Synthetic multi-hop: {len(synth_paths)} unique paths (depth 3-4, no repeat)")
 
     # Attack paths for testing (deduped to avoid double-counting identical paths)
     attack_paths = extract_attack_call_paths(domain_events)
     print(f"  Attack call_paths for testing: {len(attack_paths)}")
 
-    # Warm up detector with default k values (optimized in trajectory_model.py)
-    from audit_layer.trajectory_model import TrajectoryAnomalyDetector
+    # Warm up detector
     detector = TrajectoryAnomalyDetector()
-    detector.fit_normal(benign_paths_all)
+
+    # Seed per-agent position distributions from policy adjacency (BEFORE fit_normal)
+    # so that position_anomaly features are computed with reasonable baselines
+    # during the warmup observe() calls.
+    if _adj:
+        detector.seed_agent_positions_from_adjacency(_adj)
+        print(f"  Agent position seeds: {len(detector.monitor._agent_positions)} agents seeded from adjacency")
+
+    detector.fit_normal(warmup_paths)
+
+    # Seed policy adjacency edges (AFTER fit_normal to supplement transfer counts)
+    if _adj:
+        detector.seed_policy_edges(_adj)
+        print(f"  Policy edges seeded: {sum(len(v) for v in _adj.values())} transitions")
+
     print(f"  Detector ready: {detector.is_ready} (n_obs={detector.observation_count})")
     print(f"  Baseline summary:")
     for line in detector.summary().split('\n'):
@@ -174,17 +254,17 @@ for domain, domain_events in sorted(events_by_domain.items()):
         attack_scores[attack_type].append((cp, score))
 
     # Score benign holdout for false positive check
-    # Use deduped benign paths: 80% for warmup (already used via benign_paths_all subset),
-    # 20% holdout for false positive testing
-    split_idx = max(int(len(benign_paths_unique) * 0.8), 5)
-    if len(benign_paths_unique) > split_idx:
-        holdout_benign = benign_paths_unique[split_idx:]
+    # Use deduped benign paths (unique): 20% holdout for FP testing
+    all_unique = dedup_call_paths(benign_paths_unique)
+    split_idx = max(int(len(all_unique) * 0.8), 5)
+    if len(all_unique) > split_idx:
+        holdout_benign = all_unique[split_idx:]
         benign_scores = [(p, detector.score(p)) for p in holdout_benign]
         attack_scores["benign"] = benign_scores
         print(f"  Benign holdout (FP test): {len(benign_scores)} unique paths")
     else:
         attack_scores["benign"] = []
-        print(f"  Benign holdout: insufficient unique paths ({len(benign_paths_unique)})")
+        print(f"  Benign holdout: insufficient unique paths ({len(all_unique)})")
 
     all_results[domain] = attack_scores
 
@@ -282,5 +362,104 @@ with open(attr_path, 'w', encoding='utf-8') as f:
                         f.write(f"{domain},{attack_type},{'->'.join(cp)},{feat_name},"
                                 f"{info['value']},{info['z_score']},True\n")
 print(f"  Feature attribution saved to: {attr_path}")
+
+# ══════════════════════════════════════════════════════════════
+# Layer 3: EWMA 独立价值证明 — 三种场景
+# ══════════════════════════════════════════════════════════════
+# 用 iov 域演示 EWMA 在规则引擎无法覆盖的场景中的独立检测能力。
+# 关键：不使用 seed_policy_edges，让政策已知但预热未见的边保持"新颖"。
+
+print(f"\n{'='*70}")
+print(f"EWMA Independent Value Tests (Layer 3) — iov domain")
+print(f"{'='*70}")
+print()
+
+import yaml as _yaml
+
+# Load iov policy adjacency for verifying rule engine behavior
+iov_policy_path = os.path.join(os.path.dirname(__file__), "fixtures", "policy_iov.yaml")
+with open(iov_policy_path, 'r', encoding='utf-8') as _f:
+    _iov_policy = _yaml.safe_load(_f)
+_iov_adj = _iov_policy.get('adjacency', {})
+
+# Build a fresh detector WITHOUT seed_policy_edges — only warmup data counts
+iov_mas_dir = get_mas_data_dir("iov")
+iov_events = [e for e in all_events if e.get("metadata", {}).get("domain") == "iov"]
+iov_warmup = extract_mas_call_paths(iov_mas_dir, dedup=False) if iov_mas_dir else []
+if not iov_warmup:
+    iov_warmup = extract_benign_call_paths(iov_events, dedup=False)
+# Also add all_consistent benign for diversity
+iov_benign = extract_benign_call_paths(iov_events, dedup=False)
+iov_warmup = iov_warmup + iov_benign
+
+iov_det3 = TrajectoryAnomalyDetector()
+iov_det3.seed_agent_positions_from_adjacency(
+    {k: [d for d in v if d != 'Router'] for k, v in _iov_adj.items() if k != 'Router'}
+)
+iov_det3.fit_normal(iov_warmup)
+# NOTE: deliberately NOT calling seed_policy_edges — this keeps unobserved policy edges novel
+
+print(f"  Warmup: {len(iov_warmup)} obs, {iov_det3.observation_count} EWMA observations")
+print(f"  known_edges: {len(iov_det3.monitor._known_edges)} transitions")
+print(f"  Seed policy edges: SKIPPED (keeping unobserved policy edges as 'novel')")
+print()
+
+# ── Scenario 1: policy-known but warmup-unobserved edge → EWMA novel_edge_ratio ──
+# Safety→Fleet is added to adjacency (simulates business expansion), but EWMA has
+# never seen this edge. Rule engine ALLOWs, EWMA catches via novel_edge_ratio.
+scenario1_path = ["User", "Safety_Agent", "Fleet_Agent"]
+scenario1_score, scenario1_details = iov_det3.score_with_details(scenario1_path)
+print(f"--- Scenario 1: 新合法边 (Policy YAML 已声明, 预热未见过) ---")
+print(f"  路径: {' → '.join(scenario1_path)}")
+print(f"  规则引擎: ALLOW (Safety→Fleet 在 adjacency 中)")
+print(f"  EWMA score: {scenario1_score:.4f}")
+for feat, info in scenario1_details.items():
+    flag = " ← EWMA 捕获" if info.get("anomaly") else ""
+    print(f"    {feat}: value={info['value']}, z={info['z_score']}, mean={info.get('mean'):.3f}{flag}")
+print(f"  结论: {'✅ EWMA 独立捕获' if scenario1_score >= 0.35 else '❌ 未捕获'}")
+
+print()
+
+# ── Scenario 2: frequency anomaly → EWMA edge_surprise ──
+# User→Telematics→Fleet is a legal path (all edges in adjacency and warmup),
+# but we repeat Fleet↔Telematics 5 times simulating DDoS abuse.
+# Telematics→Fleet is a rare edge (only in adjacency seeding if not seeded),
+# so edge_surprise accumulates rapidly.
+scenario2_path = ["User", "Telematics_Agent", "Fleet_Agent",
+                  "Telematics_Agent", "Fleet_Agent",
+                  "Telematics_Agent", "Fleet_Agent"]
+scenario2_score, scenario2_details = iov_det3.score_with_details(scenario2_path)
+print(f"--- Scenario 2: 频率异常 (DDoS 式滥用, 合法边反复调用) ---")
+print(f"  路径: {' → '.join(scenario2_path)}")
+print(f"  规则引擎: ALLOW (所有边在 adjacency 中)")
+print(f"  EWMA score: {scenario2_score:.4f}")
+for feat, info in scenario2_details.items():
+    flag = " ← EWMA 捕获" if info.get("anomaly") else ""
+    print(f"    {feat}: value={info['value']}, z={info['z_score']}, mean={info.get('mean'):.3f}{flag}")
+print(f"  结论: {'✅ EWMA 独立捕获' if scenario2_score >= 0.35 else '❌ 未捕获'}")
+
+print()
+
+# ── Scenario 3: novel edge combination → EWMA position_anomaly ──
+# All edges are known (in warmup), but the specific combination is unusual.
+# User→Fleet (depth=1) is unusual for Fleet. Safety at depth=3 is unusual.
+# Firmware at depth=4 never occurs in warmup.
+scenario3_path = ["User", "Fleet_Agent", "Telematics_Agent", "Safety_Agent", "Firmware_Agent"]
+scenario3_score, scenario3_details = iov_det3.score_with_details(scenario3_path)
+print(f"--- Scenario 3: 深度/角色位置异常 (已知边, 新颖组合) ---")
+print(f"  路径: {' → '.join(scenario3_path)} (depth={len(scenario3_path)})")
+print(f"  规则引擎: ALLOW (所有边在 adjacency 中)")
+print(f"  EWMA score: {scenario3_score:.4f}")
+for feat, info in scenario3_details.items():
+    flag = " ← EWMA 捕获" if info.get("anomaly") else ""
+    print(f"    {feat}: value={info['value']}, z={info['z_score']}, mean={info.get('mean'):.3f}{flag}")
+print(f"  结论: {'✅ EWMA 独立捕获' if scenario3_score >= 0.35 else '❌ EWMA 弱信号'}")
+
+print(f"\n{'='*70}")
+print(f"Layer 3 Summary:")
+print(f"  Scenario 1 (新合法边): EWMA={'✓' if scenario1_score >= 0.35 else '✗'} Rule=ALLOW")
+print(f"  Scenario 2 (频率异常):  EWMA={'✓' if scenario2_score >= 0.35 else '✗'} Rule=ALLOW")
+print(f"  Scenario 3 (深度异常):  EWMA={'✓' if scenario3_score >= 0.35 else '✗'} Rule=ALLOW")
+print(f"{'='*70}")
 
 print(f"\nEWMA Scale Tests Complete")

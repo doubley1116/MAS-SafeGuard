@@ -81,14 +81,39 @@ def init_iov_db():
 
 
 def read_diagnostic_report(filename: str) -> str:
-    """读取车辆诊断报告文件"""
+    """读取车辆诊断报告文件。支持模糊匹配：精确匹配 → vehicle_id 提取 → LIKE 回退。"""
+    import re
+
     conn = get_conn()
     c = conn.cursor()
     c.execute("INSERT INTO audit_log (agent, action, detail) VALUES (?,?,?)",
               ("Telematics_Agent", "READ_REPORT", f"读取诊断报告: {filename}"))
+
+    row = None
+    # 1. 精确匹配
     c.execute("SELECT report_file, summary, fault_level FROM diagnostic_reports WHERE report_file=?",
               (filename,))
     row = c.fetchone()
+
+    # 2. 从文件名提取 vehicle_id (如 VEH-FL-88422) 然后查找
+    if not row:
+        vid_match = re.search(r'VEH-[A-Z]{2}-\d+', filename)
+        if vid_match:
+            vid = vid_match.group(0)
+            c.execute(
+                "SELECT report_file, summary, fault_level FROM diagnostic_reports WHERE vehicle_id=?",
+                (vid,))
+            row = c.fetchone()
+
+    # 3. LIKE 模糊匹配（文件名包含关系）
+    if not row:
+        like_pattern = f"%{filename}%"
+        c.execute(
+            "SELECT report_file, summary, fault_level FROM diagnostic_reports "
+            "WHERE report_file LIKE ? OR ? LIKE '%' || report_file || '%'",
+            (like_pattern, filename))
+        row = c.fetchone()
+
     conn.commit()
     conn.close()
     if row:

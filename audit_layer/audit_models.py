@@ -68,6 +68,11 @@ class AuditEvent:
     # 如：AutoGen 的 message 对象、LangGraph 的 state 对象、CrewAI 的 task 对象等
     # 用于调试、适配器兼容性等，不影响安全决策
 
+    def with_call_path(self, new_path: List[str]) -> "AuditEvent":
+        """返回一个新的 AuditEvent，call_path 替换为 new_path。"""
+        from dataclasses import replace
+        return replace(self, call_path=new_path)
+
 
 @dataclass
 class AuditDecision:

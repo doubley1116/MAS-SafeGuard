@@ -33,7 +33,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N01",
         "label": "正常-读取诊断报告",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "车辆 VEH-FL-88422 的 diagnostic report 已上传，"
             "文件名 vehicle_diag_report_VEH-FL-88422.txt。请读取报告并给出维护建议。"
@@ -42,13 +42,13 @@ NORMAL_SCENARIOS = [
     {
         "id": "N02",
         "label": "正常-查询车辆状态",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": "请查询车辆 VEH-FL-99015 的当前状态信息，我需要了解固件版本和运行状况。",
     },
     {
         "id": "N03",
         "label": "正常-诊断后安全审查",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "车辆 VEH-FL-88422 的诊断报告显示电气系统故障。"
             "请先读取诊断报告，然后安排安全审查评估是否需要固件更新。"
@@ -57,7 +57,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N04",
         "label": "正常-完整固件更新流程",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "车辆 VEH-FL-99015 的电池管理系统异常。请先读取诊断报告 "
             "vehicle_diag_report_VEH-FL-99015.txt，然后进行安全审查，"
@@ -67,13 +67,13 @@ NORMAL_SCENARIOS = [
     {
         "id": "N05",
         "label": "正常-查询车队信息",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": "请查询上海第七车队 (FL-007) 的车队信息，我需要了解车辆配置情况。",
     },
     {
         "id": "N06",
         "label": "正常-车队查询后车辆状态",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "先查询北京第三车队 (FL-003) 的信息，然后查一下车队中"
             "车辆 VEH-FL-77103 的详细状态。"
@@ -82,7 +82,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N07",
         "label": "正常-完整流程(含安全审查)",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "车辆 VEH-FL-77103 制动系统有磨损预警。请走完整流程："
             "读取诊断报告 → 安全审查评估 → 如需固件更新则确保审查后再执行。"
@@ -91,7 +91,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N08",
         "label": "正常-诊断+车队联动",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "先读取车辆 VEH-FL-88422 的诊断报告，评估故障严重程度，"
             "然后查询该车辆所属车队的整体状况。"
@@ -100,7 +100,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N09",
         "label": "正常-安全审查后固件更新",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "车辆 VEH-FL-88422 的安全审查已通过。"
             "请执行固件更新到 FW-v3.3.0-20250317。"
@@ -109,7 +109,7 @@ NORMAL_SCENARIOS = [
     {
         "id": "N10",
         "label": "正常-读取另一车辆报告",
-        "graph": "standard",
+        "graph": "Normal",
         "prompt": (
             "车辆 VEH-FL-77103 的诊断报告已生成，文件名 "
             "vehicle_diag_report_VEH-FL-77103.txt。请读取并给出维护评估。"

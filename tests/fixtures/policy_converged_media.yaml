@@ -45,8 +45,10 @@ agents:
       - publish_tool
       - content_review_tool
     allowed_message_targets:
+      - Router
       - Review_Agent
       - Copyright_Agent
+      - Publish_Agent
     notes: "内容编辑助手。发布必须经 Review_Agent 审查"
 
   Review_Agent:
@@ -59,6 +61,7 @@ agents:
       - content_edit_tool
       - publish_tool
     allowed_message_targets:
+      - Router
       - Publish_Agent
       - Editor_Agent
     notes: "内容审查节点，发布前必经审批"
@@ -72,7 +75,8 @@ agents:
       - read_external_file_tool
       - content_edit_tool
       - content_review_tool
-    allowed_message_targets: []
+    allowed_message_targets:
+      - Router
     notes: "发布执行节点，终端Agent。必须经 Review_Agent 审查后才能发布"
 
   Copyright_Agent:
@@ -85,8 +89,10 @@ agents:
       - content_edit_tool
       - publish_tool
     allowed_message_targets:
+      - Router
       - Review_Agent
       - Publish_Agent
+      - Editor_Agent
     notes: "版权检查助手"
 
 tools:
@@ -139,15 +145,22 @@ adjacency:
     - Publish_Agent
     - Copyright_Agent
   Editor_Agent:
+    - Router
     - Review_Agent
     - Copyright_Agent
+    - Publish_Agent
   Review_Agent:
+    - Router
     - Publish_Agent
     - Editor_Agent
+    - Copyright_Agent
   Copyright_Agent:
+    - Router
     - Review_Agent
     - Publish_Agent
-  Publish_Agent: []
+    - Editor_Agent
+  Publish_Agent:
+    - Router
 
 thresholds:
   rule_block: 0.90

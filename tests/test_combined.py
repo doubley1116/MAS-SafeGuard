@@ -107,7 +107,12 @@ for domain, domain_events in events_by_domain.items():
             metadata=e.get("metadata", {}),
         )
 
-        attack_type = e.get("metadata", {}).get("scenario", "benign")
+        intent = e.get("metadata", {}).get("intent", "benign")
+        scenario = e.get("metadata", {}).get("scenario", "benign")
+        if intent == "attack":
+            attack_type = scenario
+        else:
+            attack_type = "benign"
 
         # All configs use audit() with layer switches for clean isolation
         for cfg_name, core in [("R", core_R), ("E", core_E), ("R+E", core_RE), ("Full", core_Full)]:
