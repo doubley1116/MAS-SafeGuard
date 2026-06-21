@@ -67,10 +67,11 @@ AuditDataGen/output_benign_1k/
 # MAS 杩愯鏃ュ織/杈撳嚭
 MAS/Langgraph_ecommerce/database/audit_log.jsonl
 MAS/Langgraph_trading/universal_audit_events.json
-# 鐢熸垚鐨?workflow 鏁版嵁锛圡AS 鏀诲嚮/姝ｅ父鍦烘櫙杈撳嚭锛?
-MAS/Langgraph_ecommerce/data/workflows/
-MAS/Langgraph_healthcare/data/workflows/
-MAS/Langgraph_trading/data/
+# 生成的 workflow 数据 — 攻击场景输出排除，normal 预热数据需要版本控制
+MAS/Langgraph_ecommerce/data/workflows/ecommerce/
+MAS/Langgraph_healthcare/data/workflows/healthcare/
+MAS/Langgraph_trading/data/workflows/trading/
+MAS/Langgraph_trading/data/attack_simulation.log
 # 妯″瀷浜岃繘鍒讹紙role_model / trajectory_detector 鍙噸鏂拌缁冿級
 *.pkl
 # AutoGen 涓存椂鏂囦欢

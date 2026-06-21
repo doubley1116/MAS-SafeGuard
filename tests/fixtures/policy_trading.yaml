@@ -46,8 +46,10 @@ agents:
     blocked_tools:
       - read_external_file_tool
     allowed_message_targets:
+      - Router
       - Research_Agent
       - Trade_Agent
+      - Asset_Agent
     notes: "风控审批代理，交易执行前的必经审批节点"
 
   Trade_Agent:
@@ -98,8 +100,10 @@ adjacency:
   Research_Agent:
     - Risk_Agent
   Risk_Agent:
+    - Router
     - Research_Agent
     - Trade_Agent
+    - Asset_Agent
   Trade_Agent:
     - Asset_Agent
   Asset_Agent: []

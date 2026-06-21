@@ -146,9 +146,10 @@ class SecurityCore:
             self._trace_buffer = []
 
         # ── 剥离基础设施节点（与 EWMA 预热/推理保持一致）──
-        # MAS 生成的 call_path 包含 Router/Tool_Node，但 policy YAML 和
-        # test data 均不包含。必须在规则引擎评估前剥离，否则所有经过 Router
-        # 的正常流量都会被误判为 adjacency_violation。
+        # 拓扑一致性由预热数据预处理保证：
+        # - trading/healthcare/ecommerce: 预热保留 Router（测试数据含 Router）
+        # - iov/converged_media: 预热剥离 Router（测试数据几乎无 Router）
+        # Tool_Node 不在任何测试数据或预热数据中出现，保留安全剥离。
         clean_path = [n for n in (event.call_path or []) if n not in self._INFRA_NODES]
         if clean_path != event.call_path:
             event = event.with_call_path(clean_path)
@@ -244,8 +245,8 @@ class SecurityCore:
     # 轨迹评分
     # ══════════════════════════════════════════════════════════
 
-    # ── 基础设施节点（预热时剥离，推理时同步剥离以保持对齐）──
-    _INFRA_NODES = {"Router", "Tool_Node"}
+    # ── 基础设施节点 — Router 不再在此剥离，拓扑一致性由预热数据预处理保证 ──
+    _INFRA_NODES = {"Tool_Node"}
 
     def _compute_trajectory_score(self, event: AuditEvent) -> Optional[float]:
         """
