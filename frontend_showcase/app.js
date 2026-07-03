@@ -513,7 +513,45 @@ const TEXT_TRANSLATIONS = new Map(Object.entries({
   "[关键]Risk_Agent→Compliance_Agent:风险评估通过，但出现直接执行语句": "[Key] Risk_Agent -> Compliance_Agent: risk assessment passed, but a direct execution statement appeared",
   "[任务]评估 TSLA 并判断是否执行 100 股卖出 | [关键]Trader_Agent→execute_trade_tool(symbol=TSLA,side=sell,quantity=100)": "[Task] Evaluate TSLA and decide whether to sell 100 shares | [Key] Trader_Agent -> execute_trade_tool(symbol=TSLA,side=sell,quantity=100)",
   "规则分 0.45 命中 route_hijack_check，语义层发现指令由研究摘要偏移到交易执行，建议人工复核。": "Rule score 0.45 hit route_hijack_check; the semantic layer detected a drift from research summary to trade execution, so human review is recommended.",
-  "将交易执行拆为二次确认流程，并要求 Trader_Agent 复述订单意图。": "Split trade execution into a second-confirmation flow and require Trader_Agent to restate the order intent."
+  "将交易执行拆为二次确认流程，并要求 Trader_Agent 复述订单意图。": "Split trade execution into a second-confirmation flow and require Trader_Agent to restate the order intent.",
+  "人工审核检查点": "Human Review Checkpoint",
+  "等待审核员决定": "Waiting for Reviewer Decision",
+  "敏感工具调用已暂停。请核对风险理由、调用路径和历史窗口，再决定是否在安全沙箱中继续。": "The sensitive tool call is paused. Review the risk rationale, call path, and history before deciding whether to continue in the safety sandbox.",
+  "审核人": "Reviewer",
+  "审核意见": "Review Comment",
+  "批准并继续（安全沙箱）": "Approve & Continue (Sandbox)",
+  "拒绝并终止": "Reject & Terminate",
+  "复核历史窗口": "Review History Window",
+  "演示说明：批准操作只恢复 Replay 安全沙箱，不会向真实交易系统发送订单。": "Demo note: approval resumes only the Replay safety sandbox and never sends an order to a real trading system.",
+  "风险进入复核": "Risk Queued for Review",
+  "敏感调用暂停": "Sensitive call paused",
+  "人工决定": "Human Decision",
+  "等待审核员": "Waiting for reviewer",
+  "恢复或终止": "Resume or Terminate",
+  "尚未执行": "Not executed",
+  "审计落盘": "Audit Persisted",
+  "等待决定": "Waiting for decision",
+  "人工审核结果": "Human Review Result",
+  "审核通过，工作流已继续": "Approved, Workflow Resumed",
+  "审核拒绝，工作流已终止": "Rejected, Workflow Terminated",
+  "已批准": "Approved",
+  "已拒绝": "Rejected",
+  "决定时间": "Decision Time",
+  "执行结果": "Execution Result",
+  "安全沙箱执行完成": "Safety sandbox completed",
+  "敏感工具保持未执行": "Sensitive tool remained unexecuted",
+  "恢复结果": "Resume Result",
+  "终止结果": "Termination Result",
+  "审核意见：": "Review comment:",
+  "审核记录：": "Review record:",
+  "查看审核后完整历史": "View Post-Review History",
+  "批准继续": "Approved to continue",
+  "拒绝继续": "Rejected",
+  "沙箱恢复": "Sandbox Resume",
+  "检查点已恢复": "Checkpoint resumed",
+  "终止执行": "Execution Terminated",
+  "工具未执行": "Tool not executed",
+  "结果已记录": "Result recorded"
 }));
 
 const TEXT_TRANSLATION_RULES = [
@@ -568,6 +606,8 @@ const TEXT_TRANSLATION_RULES = [
 
 const PLACEHOLDER_TRANSLATIONS = new Map(Object.entries({
   "输入追踪编号、工具或风险类型": "Search trace ID, tool, or risk type",
+  "例如：安全负责人 / Compliance Officer": "e.g. Security Lead / Compliance Officer",
+  "记录批准依据、限制条件或拒绝原因": "Record approval basis, constraints, or rejection reason",
 }));
 
 const GLASS_REACTIVE_SELECTOR = [
@@ -973,6 +1013,18 @@ function createDefaultState() {
         summary: "交易请求经过 Risk_Agent 与 Compliance_Agent，但路由存在语义偏移迹象，命中 route_hijack_check，建议人工审核。",
         callPath: ["UserProxy", "Risk_Agent", "Compliance_Agent", "Trader_Agent"],
         blockedReason: "",
+        humanReview: {
+          status: "pending",
+          reviewer: "",
+          comment: "",
+          requestedAt: "2026-04-22 23:22:20",
+          decidedAt: "",
+          resultSummary: "",
+          auditPath: "",
+          executionMode: "pending",
+          submitting: false,
+          error: "",
+        },
         decision: {
           allow: true,
           risk_score: 0.74,
@@ -1157,6 +1209,9 @@ async function handleClick(event) {
         removeAt(state.config.tools, Number(target.dataset.removeTool));
       } else if (target.dataset.removePath !== undefined) {
         removeAt(state.config.paths, Number(target.dataset.removePath));
+      } else if (target.dataset.reviewAction) {
+        await submitHumanReview(target.dataset.workflowId || state.activeWorkflowId, target.dataset.reviewAction);
+        return;
       } else if (target.dataset.openHistory) {
         openHistoryDialog(target.dataset.openHistory, target.dataset.eventId || "");
         return;
@@ -2555,6 +2610,7 @@ function renderWorkflowDetail() {
       `
     )
     .join("");
+  const humanReviewPanel = renderHumanReviewPanel(workflow);
 
   container.innerHTML = `
     <div class="detail-stack">
@@ -2614,6 +2670,8 @@ function renderWorkflowDetail() {
         </div>
       </section>
 
+      ${humanReviewPanel}
+
       <details class="progressive-panel detail-progressive">
         <summary>
           <span>事件时间线与工具细节</span>
@@ -2623,6 +2681,147 @@ function renderWorkflowDetail() {
       </details>
     </div>
   `;
+}
+
+function renderHumanReviewPanel(workflow) {
+  const review = getWorkflowHumanReview(workflow);
+  if (!review) {
+    return "";
+  }
+
+  if (review.status === "pending") {
+    const submitting = Boolean(review.submitting);
+    return `
+      <section class="human-review-card pending">
+        <div class="human-review-head">
+          <div>
+            <p class="panel-kicker">人工审核检查点</p>
+            <h3>等待审核员决定</h3>
+          </div>
+          <span class="status-pill review">待复核</span>
+        </div>
+        <p class="detail-paragraph">敏感工具调用已暂停。请核对风险理由、调用路径和历史窗口，再决定是否在安全沙箱中继续。</p>
+        ${renderHumanReviewProgress("pending")}
+        <div class="human-review-form">
+          <label class="field">
+            <span>审核人</span>
+            <input id="humanReviewReviewer-${escapeAttribute(workflow.id)}" type="text" value="${escapeAttribute(review.reviewer || "")}" placeholder="例如：安全负责人 / Compliance Officer" ${submitting ? "disabled" : ""}>
+          </label>
+          <label class="field">
+            <span>审核意见</span>
+            <textarea id="humanReviewComment-${escapeAttribute(workflow.id)}" placeholder="记录批准依据、限制条件或拒绝原因" ${submitting ? "disabled" : ""}>${escapeHtml(review.comment || "")}</textarea>
+          </label>
+        </div>
+        ${
+          review.error
+            ? `<p class="human-review-error">${escapeHtml(review.error)}</p>`
+            : ""
+        }
+        <div class="human-review-actions">
+          <button class="button review-approve" type="button" data-review-action="approve" data-workflow-id="${escapeAttribute(workflow.id)}" ${submitting ? "disabled" : ""}>
+            ${submitting ? "正在提交..." : "批准并继续（安全沙箱）"}
+          </button>
+          <button class="button review-reject" type="button" data-review-action="reject" data-workflow-id="${escapeAttribute(workflow.id)}" ${submitting ? "disabled" : ""}>
+            拒绝并终止
+          </button>
+          <button class="button tertiary" type="button" data-open-history="${escapeAttribute(workflow.id)}" ${submitting ? "disabled" : ""}>复核历史窗口</button>
+        </div>
+        <p class="human-review-note">演示说明：批准操作只恢复 Replay 安全沙箱，不会向真实交易系统发送订单。</p>
+      </section>
+    `;
+  }
+
+  const approved = review.status === "approved";
+  return `
+    <section class="human-review-card ${approved ? "approved" : "rejected"}">
+      <div class="human-review-head">
+        <div>
+          <p class="panel-kicker">人工审核结果</p>
+          <h3>${approved ? "审核通过，工作流已继续" : "审核拒绝，工作流已终止"}</h3>
+        </div>
+        <span class="status-pill ${approved ? "allowed" : "blocked"}">${approved ? "已批准" : "已拒绝"}</span>
+      </div>
+      ${renderHumanReviewProgress(approved ? "approved" : "rejected")}
+      <div class="human-review-result-grid">
+        <article>
+          <span>审核人</span>
+          <strong>${escapeHtml(review.reviewer || "-")}</strong>
+        </article>
+        <article>
+          <span>决定时间</span>
+          <strong>${escapeHtml(review.decidedAt || "-")}</strong>
+        </article>
+        <article>
+          <span>执行结果</span>
+          <strong>${approved ? "安全沙箱执行完成" : "敏感工具保持未执行"}</strong>
+        </article>
+      </div>
+      <div class="human-review-result-banner ${approved ? "approved" : "rejected"}">
+        <strong>${approved ? "恢复结果" : "终止结果"}</strong>
+        <p>${escapeHtml(review.resultSummary || (approved ? "工作流已恢复并完成。" : "工作流已终止。"))}</p>
+      </div>
+      ${
+        review.comment
+          ? `<p class="detail-paragraph"><strong>审核意见：</strong>${escapeHtml(review.comment)}</p>`
+          : ""
+      }
+      ${
+        review.auditPath
+          ? `<p class="human-review-audit-path"><strong>审核记录：</strong><code>${escapeHtml(review.auditPath)}</code></p>`
+          : ""
+      }
+      <div class="human-review-actions">
+        <button class="button tertiary" type="button" data-open-history="${escapeAttribute(workflow.id)}">查看审核后完整历史</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderHumanReviewProgress(status) {
+  const approved = status === "approved";
+  const rejected = status === "rejected";
+  const resolved = approved || rejected;
+  const steps = [
+    { label: "风险进入复核", detail: "敏感调用暂停", state: "complete" },
+    { label: "人工决定", detail: resolved ? (approved ? "批准继续" : "拒绝继续") : "等待审核员", state: resolved ? "complete" : "active" },
+    { label: approved ? "沙箱恢复" : rejected ? "终止执行" : "恢复或终止", detail: resolved ? (approved ? "检查点已恢复" : "工具未执行") : "尚未执行", state: resolved ? "complete" : "pending" },
+    { label: "审计落盘", detail: resolved ? "结果已记录" : "等待决定", state: resolved ? "complete" : "pending" },
+  ];
+  return `
+    <div class="human-review-progress">
+      ${steps.map((step, index) => `
+        <article class="human-review-step ${step.state}">
+          <span class="human-review-step-index">${index + 1}</span>
+          <div>
+            <strong>${step.label}</strong>
+            <small>${step.detail}</small>
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function getWorkflowHumanReview(workflow) {
+  if (workflow.humanReview && typeof workflow.humanReview === "object") {
+    return workflow.humanReview;
+  }
+  if (workflow.status !== "review") {
+    return null;
+  }
+  workflow.humanReview = {
+    status: "pending",
+    reviewer: "",
+    comment: "",
+    requestedAt: workflow.startedAt || "",
+    decidedAt: "",
+    resultSummary: "",
+    auditPath: "",
+    executionMode: "pending",
+    submitting: false,
+    error: "",
+  };
+  return workflow.humanReview;
 }
 
 function renderSftModelCard() {
@@ -3234,6 +3433,99 @@ function resetConfig() {
   }
   switchToDemoMode({ keepFilters: false });
   setYamlStatus("已恢复为默认展示配置。");
+}
+
+async function submitHumanReview(workflowId, action) {
+  const workflow = state.workflows.find((item) => item.id === workflowId);
+  if (!workflow) {
+    return;
+  }
+
+  const review = getWorkflowHumanReview(workflow);
+  if (!review || review.status !== "pending" || review.submitting) {
+    return;
+  }
+
+  const reviewerInput = document.getElementById(`humanReviewReviewer-${workflow.id}`);
+  const commentInput = document.getElementById(`humanReviewComment-${workflow.id}`);
+  review.reviewer = reviewerInput ? reviewerInput.value.trim() : review.reviewer;
+  review.comment = commentInput ? commentInput.value.trim() : review.comment;
+  review.error = "";
+
+  if (!review.reviewer) {
+    review.error = "请填写审核人后再提交决定。";
+    renderAll();
+    persistState();
+    return;
+  }
+
+  if (!state.source.serverAvailable) {
+    await bootstrapServerDiscovery();
+  }
+  if (!state.source.serverAvailable) {
+    review.error = "本地服务未启动，无法写入人工审核记录。";
+    renderAll();
+    persistState();
+    return;
+  }
+
+  review.submitting = true;
+  renderAll();
+  persistState();
+
+  try {
+    const payload = await fetchJson(`${getApiBase()}/api/human-review`, {
+      method: "POST",
+      body: JSON.stringify({
+        action,
+        reviewer: review.reviewer,
+        comment: review.comment,
+        workflow: {
+          id: workflow.id,
+          name: workflow.name,
+          framework: workflow.framework,
+          sceneName: workflow.sceneName,
+          traceId: workflow.traceId,
+          callPath: workflow.callPath,
+          decision: workflow.decision,
+          sourcePath: workflow.sourcePath || "",
+        },
+      }),
+    });
+
+    const result = payload.workflow || {};
+    const reviewResult = payload.review || {};
+    const continuationEvents = Array.isArray(result.continuationEvents)
+      ? result.continuationEvents.map((event, index) => normalizeWorkflowEvent(event, reviewResult.audit_path || workflow.id, index))
+      : [];
+    const nextDecision = normalizeDecisionShape(result.decision || workflow.decision);
+
+    workflow.status = result.status === "blocked" ? "blocked" : "allowed";
+    workflow.summary = String(result.summary || workflow.summary);
+    workflow.blockedReason = String(result.blockedReason || "");
+    workflow.decision = nextDecision;
+    workflow.decisions = Array.isArray(workflow.decisions) ? [...workflow.decisions, nextDecision] : [nextDecision];
+    workflow.events = [...workflow.events, ...continuationEvents];
+    workflow.humanReview = {
+      status: reviewResult.status === "approved" ? "approved" : "rejected",
+      reviewer: String(reviewResult.reviewer || review.reviewer),
+      comment: String(reviewResult.comment || review.comment),
+      requestedAt: review.requestedAt || workflow.startedAt || "",
+      decidedAt: String(reviewResult.decided_at || ""),
+      resultSummary: String(reviewResult.result_summary || result.summary || ""),
+      auditPath: String(reviewResult.audit_path || ""),
+      executionMode: String(reviewResult.execution_mode || ""),
+      submitting: false,
+      error: "",
+    };
+    renderAll();
+    persistState();
+  } catch (error) {
+    review.submitting = false;
+    review.error = `提交人工审核失败：${error.message}`;
+    renderAll();
+    persistState();
+  }
 }
 
 async function bootstrapServerDiscovery() {
@@ -3898,6 +4190,18 @@ function formatEventTitle(event) {
   if (event.event_type === "audit_decision") {
     return `安全决策 ${event.sender || "SecurityCore"}`;
   }
+  if (event.event_type === "human_review_decision") {
+    return `人工审核 ${event.sender || "审核员"}`;
+  }
+  if (event.event_type === "workflow_resumed") {
+    return "工作流恢复";
+  }
+  if (event.event_type === "workflow_completed") {
+    return "工作流完成";
+  }
+  if (event.event_type === "workflow_blocked") {
+    return "工作流终止";
+  }
   return `消息 ${event.sender}`;
 }
 
@@ -4056,7 +4360,6 @@ function persistState() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (_error) {
-    // Ignore storage issues in file protocol or private mode.
   }
 }
 

@@ -37,6 +37,8 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 - 自动扫描仓库中的 `policy.yaml`
 - 自动读取真实 `audit_logs/workflows/*.json`
 - 自动监听新生成的 `workflow.json` 并实时刷新前端
+- 人工审核表单、批准继续与拒绝终止双分支
+- 后端写入 `audit_logs/reviews/*.json`，并追加恢复、沙箱结果或终止事件
 
 ## 模型入口能力
 
@@ -64,24 +66,14 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 
 ## 设计方向
 
-这版界面不再只是普通后台面板，而是调整成更适合组会和客户演示的产品页：
+这版界面定位为本地演示控制台，重点突出运行路径、审计证据和人工审核闭环：
 
-- Apple 风格的浅色、克制、大字号、清晰层级
-- 玻璃感卡片、柔和阴影和更易读的表单控件
+- 浅色卡片、清晰层级和更易读的表单控件
 - 单页面多级导航索引，一级只保留总览、动态演示、工作流审计、设置与日志
 - 数据接入、策略配置、日志、仓库映射收进二级导航，避免一级入口过多
 - 场景库、运行前检查、终端 stdout/stderr、事件时间线默认折叠，点击后查看细节
 - Demo Console 以“选择 -> 预检 -> 运行 -> 证据链 -> 审计 JSON”的叙事组织
-
-参考页面：
-
-- [Apple](https://www.apple.com/)
-- [NASA](https://www.nasa.gov/)
-
-这两站给我们的设计启发主要是：
-
-- Apple：大标题、少量高强度 CTA、留白和聚焦式产品陈列
-- NASA：任务式信息分层、状态面板、证据链和 mission 状态感
+- 人工审核默认只显示流程结论，展开后查看审核意见、恢复事件和审计文件
 
 ## 自动监听说明
 
@@ -101,6 +93,7 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 - `/api/demo/scenarios`
 - `/api/demo/run`
 - `/api/demo/jobs/:jobId`
+- `/api/human-review`
 
 其中 `/api/workflow-watch` 返回：
 
@@ -145,7 +138,9 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 6. 演示模式先选 `Replay 稳定演示`。
 7. 点击 `运行演示`，讲解预检、Agent 证据链、拦截原因矩阵和终端输出。
 8. 点击 `载入生成结果` 或切到 `工作流审计`，展示生成的 workflow JSON 时间线和 history 窗口。
-9. 如果现场环境变量和依赖都配置好了，再切 `Live 真实运行 MAS` 做真实脚本演示。
+9. 选择“交易执行待人工复核”，填写审核人和意见，演示“批准并继续（安全沙箱）”或“拒绝并终止”。
+10. 展开审核后历史，展示人工决定、工作流恢复、沙箱结果和审计落盘事件。
+11. 如果现场环境变量和依赖都配置好了，再切 `Live 真实运行 MAS` 做真实脚本演示。
 
 ## 主要文件
 
@@ -167,6 +162,8 @@ powershell -ExecutionPolicy Bypass -File "C:\gpbell\grade2_2\Zero_Trust\frontend
 - 已验证 `/api/demo/scenarios`、`/api/demo/run`、`/api/demo/jobs/:jobId` 可运行并生成 workflow
 - 已验证可扫描 9 个 MAS 场景，并返回每个场景支持的攻击类型
 - 已验证 `Replay` 模式可生成带 `attack_id / attack_label / audit_layer` 元数据的 workflow JSON
+- 已验证 `/api/human-review` 的批准与拒绝分支均会生成真实审核 JSON
+- 已验证批准分支追加恢复、沙箱工具结果和完成事件，拒绝分支保持敏感工具未执行
 - 已通过浏览器自动化验证：
   - 新版 Hero 渲染成功
   - API 模型字段会在 API 入口模式下出现

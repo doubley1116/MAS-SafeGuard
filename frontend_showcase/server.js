@@ -7,9 +7,13 @@ const { URL } = require("url");
 
 const FRONTEND_ROOT = __dirname;
 const REPO_ROOT = path.resolve(__dirname, "..");
+const MAS_ROOT = path.join(REPO_ROOT, "MAS");
+
+loadShowcaseEnvDefaults();
+
 const PORT = Number(process.env.ZERO_TRUST_SHOWCASE_PORT || 48317);
 const DEMO_WORKFLOW_DIR = path.join(FRONTEND_ROOT, "audit_logs", "workflows");
-const MAS_ROOT = path.join(REPO_ROOT, "MAS");
+const HUMAN_REVIEW_DIR = path.join(FRONTEND_ROOT, "audit_logs", "reviews");
 const DEMO_RUN_TIMEOUT_MS = Number(process.env.ZERO_TRUST_DEMO_TIMEOUT_MS || 25000);
 
 const MIME_TYPES = {
@@ -19,6 +23,56 @@ const MIME_TYPES = {
   ".json": "application/json; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
 };
+
+function loadShowcaseEnvDefaults() {
+  const envFiles = [
+    path.join(REPO_ROOT, ".env"),
+    path.join(MAS_ROOT, "CrewAI_healthcare", ".env"),
+  ];
+
+  for (const envFile of envFiles) {
+    loadEnvFileIfPresent(envFile);
+  }
+
+  if (!process.env.ZERO_TRUST_API_KEY && process.env.API_KEY) {
+    process.env.ZERO_TRUST_API_KEY = process.env.API_KEY;
+  }
+}
+
+function loadEnvFileIfPresent(envFile) {
+  if (!fs.existsSync(envFile)) {
+    return;
+  }
+
+  const text = fs.readFileSync(envFile, "utf8");
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!match) {
+      continue;
+    }
+
+    const [, key, rawValue] = match;
+    if (process.env[key]) {
+      continue;
+    }
+
+    process.env[key] = normalizeEnvValue(rawValue);
+  }
+}
+
+function normalizeEnvValue(rawValue) {
+  let value = String(rawValue || "").trim();
+  const isQuoted = (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"));
+  if (isQuoted) {
+    value = value.slice(1, -1);
+  }
+  return value.replace(/\\n/g, "\n");
+}
 
 const FALLBACK_DEMO_SCENARIOS = [
   {
@@ -323,6 +377,16 @@ async function handleApi(request, requestUrl, response) {
       return;
     }
 
+    if (requestUrl.pathname === "/api/human-review") {
+      if (request.method !== "POST") {
+        writeJson(response, 405, { error: "Only POST is supported" });
+        return;
+      }
+      const body = await readJsonBody(request);
+      writeJson(response, 200, submitHumanReview(body));
+      return;
+    }
+
     if (requestUrl.pathname === "/api/demo/jobs") {
       writeJson(response, 200, { jobs: Array.from(demoJobs.values()).map(publicJob) });
       return;
@@ -370,6 +434,200 @@ function readJsonBody(request) {
   });
 }
 
+function submitHumanReview(body) {
+  const action = String(body.action || "").trim().toLowerCase();
+  if (!["approve", "reject"].includes(action)) {
+    throw new Error("Human review action must be approve or reject");
+  }
+
+  const workflow = body.workflow && typeof body.workflow === "object" ? body.workflow : {};
+  const reviewer = String(body.reviewer || "").trim();
+  if (!reviewer) {
+    throw new Error("Reviewer is required");
+  }
+
+  const comment = String(body.comment || "").trim().slice(0, 1200);
+  const traceId = String(workflow.traceId || workflow.trace_id || workflow.id || "unknown-trace");
+  const workflowId = String(workflow.id || traceId);
+  const workflowName = String(workflow.name || "待复核工作流");
+  const framework = String(workflow.framework || "MAS");
+  const sceneName = String(workflow.sceneName || workflow.scene_name || "human_review");
+  const callPath = Array.isArray(workflow.callPath) ? workflow.callPath.map(String) : [];
+  const sourceDecision = workflow.decision && typeof workflow.decision === "object" ? workflow.decision : {};
+  const riskScore = Number(sourceDecision.risk_score || 0);
+  const riskTypes = Array.isArray(sourceDecision.blocking_risk_types)
+    ? sourceDecision.blocking_risk_types.map(String)
+    : [];
+  const approved = action === "approve";
+  const timestamp = new Date();
+  const decidedAt = formatLocalTimestamp(timestamp);
+  const reviewId = `review-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+  const resultStatus = approved ? "allowed" : "blocked";
+  const resultReason = approved
+    ? `人工审核通过：${reviewer} 已核对历史窗口和调用路径，工作流在安全沙箱中继续执行。`
+    : `人工审核拒绝：${reviewer} 认为当前风险证据不足以支持继续执行，工作流已终止。`;
+  const resultSummary = approved
+    ? "人工审核已批准，工作流从检查点恢复并在安全沙箱中完成；未触发真实外部交易。"
+    : "人工审核已拒绝，敏感工具调用保持未执行，工作流在审核检查点终止。";
+  const alternative = approved
+    ? "本次恢复仅用于 Replay 安全演示；生产环境应接入可恢复的工作流检查点。"
+    : String(sourceDecision.suggested_alternative || "调整任务意图或补充审批证据后重新提交。");
+
+  const continuationEvents = buildHumanReviewEvents({
+    action,
+    approved,
+    reviewId,
+    traceId,
+    reviewer,
+    comment,
+    callPath,
+    timestamp,
+  });
+
+  fs.mkdirSync(HUMAN_REVIEW_DIR, { recursive: true });
+  const fileName = `${timestamp.toISOString().replace(/[:.]/g, "-")}-${safeReviewToken(traceId)}-${action}.json`;
+  const auditPath = path.join(HUMAN_REVIEW_DIR, fileName);
+  const review = {
+    id: reviewId,
+    status: approved ? "approved" : "rejected",
+    action,
+    reviewer,
+    comment,
+    requested_status: "review",
+    decided_at: decidedAt,
+    result_status: resultStatus,
+    result_summary: resultSummary,
+    execution_mode: approved ? "sandbox_replay" : "terminated",
+    audit_path: auditPath,
+  };
+  const nextDecision = {
+    allow: approved,
+    risk_score: riskScore,
+    reason: resultReason,
+    blocking_risk_types: approved ? [] : riskTypes,
+    suggested_alternative: alternative,
+    trajectory_score: sourceDecision.trajectory_score == null ? null : Number(sourceDecision.trajectory_score),
+    human_review: review,
+  };
+
+  const evidence = {
+    schema_version: "1.0",
+    review,
+    workflow: {
+      id: workflowId,
+      trace_id: traceId,
+      name: workflowName,
+      framework,
+      scene_name: sceneName,
+      call_path: callPath,
+    },
+    review_request: {
+      risk_score: riskScore,
+      reason: String(sourceDecision.reason || ""),
+      risk_types: riskTypes,
+    },
+    decision: nextDecision,
+    continuation_events: continuationEvents,
+  };
+  fs.writeFileSync(auditPath, JSON.stringify(evidence, null, 2), "utf8");
+
+  return {
+    review,
+    workflow: {
+      status: resultStatus,
+      summary: resultSummary,
+      blockedReason: approved ? "" : resultReason,
+      decision: nextDecision,
+      continuationEvents,
+    },
+  };
+}
+
+function buildHumanReviewEvents({ action, approved, reviewId, traceId, reviewer, comment, callPath, timestamp }) {
+  const baseMetadata = {
+    review_id: reviewId,
+    review_action: action,
+    reviewer,
+    execution_mode: approved ? "sandbox_replay" : "terminated",
+  };
+  const events = [
+    {
+      event_id: `${reviewId}-decision`,
+      event_type: "human_review_decision",
+      sender: reviewer,
+      receiver: "SecurityCore",
+      content: approved
+        ? `审核员批准继续。${comment ? `审核意见：${comment}` : ""}`
+        : `审核员拒绝继续。${comment ? `审核意见：${comment}` : ""}`,
+      call_path: callPath,
+      trace_id: traceId,
+      timestamp: timestamp.toISOString(),
+      metadata: baseMetadata,
+    },
+  ];
+
+  if (approved) {
+    events.push(
+      {
+        event_id: `${reviewId}-resumed`,
+        event_type: "workflow_resumed",
+        sender: "SecurityCore",
+        receiver: "Workflow",
+        content: "人工审核通过，工作流从待复核检查点恢复。",
+        call_path: callPath,
+        trace_id: traceId,
+        timestamp: addSeconds(timestamp, 1),
+        metadata: baseMetadata,
+      },
+      {
+        event_id: `${reviewId}-result`,
+        event_type: "tool_result",
+        sender: "execute_trade_tool",
+        receiver: "Trader_Agent",
+        tool_name: "execute_trade_tool",
+        tool_args: null,
+        content: "安全沙箱返回执行成功；未向真实交易系统发送订单。",
+        call_path: callPath,
+        trace_id: traceId,
+        timestamp: addSeconds(timestamp, 2),
+        metadata: { ...baseMetadata, sandbox: true, external_side_effect: false },
+      },
+      {
+        event_id: `${reviewId}-completed`,
+        event_type: "workflow_completed",
+        sender: "Workflow",
+        receiver: "AuditLogger",
+        content: "恢复后的工作流已完成，人工审核结果与沙箱执行证据已落盘。",
+        call_path: callPath,
+        trace_id: traceId,
+        timestamp: addSeconds(timestamp, 3),
+        metadata: baseMetadata,
+      }
+    );
+    return events;
+  }
+
+  events.push({
+    event_id: `${reviewId}-blocked`,
+    event_type: "workflow_blocked",
+    sender: "SecurityCore",
+    receiver: "AuditLogger",
+    content: "人工审核拒绝，敏感工具调用未执行，工作流已终止。",
+    call_path: callPath,
+    trace_id: traceId,
+    timestamp: addSeconds(timestamp, 1),
+    metadata: baseMetadata,
+  });
+  return events;
+}
+
+function safeReviewToken(value) {
+  return String(value || "review")
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96) || "review";
+}
+
 function startDemoJob(scenarioId, options = {}) {
   const baseScenario = getDemoScenarios().find((item) => item.id === scenarioId);
   if (!baseScenario) {
@@ -377,7 +635,7 @@ function startDemoJob(scenarioId, options = {}) {
   }
   const scenario = selectDemoScenarioVariant(baseScenario, options.attackId);
   const demoMode = options.demoMode === "replay" ? "replay" : "live";
-  const securityCore = normalizeSecurityCoreConfig(options.securityCore);
+  const securityCore = applyRuntimeSecurityCoreDefaults(options.securityCore);
 
   const job = {
     id: `demo-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
@@ -449,7 +707,8 @@ function startSimulatedDemoJob(job, scenario) {
 }
 
 async function prepareLiveSecurityCore(job, scenario) {
-  const securityCore = normalizeSecurityCoreConfig(job.securityCore);
+  const securityCore = applyRuntimeSecurityCoreDefaults(job.securityCore);
+  job.securityCore = securityCore;
   if (!securityCore.enabled) {
     job.securityReview = {
       status: "disabled",
@@ -486,9 +745,9 @@ function createReplaySecurityReview(securityCore) {
 }
 
 async function callSecurityCoreApi(securityCore, scenario) {
-  const normalized = normalizeSecurityCoreConfig(securityCore);
+  const normalized = applyRuntimeSecurityCoreDefaults(securityCore);
   const apiKeyName = normalized.api_key_env || "ZERO_TRUST_API_KEY";
-  const apiKey = process.env[apiKeyName] || "";
+  const apiKey = getSecurityCoreApiKey(apiKeyName);
   const endpoint = String(normalized.endpoint || "").trim();
 
   if (!endpoint || endpoint.includes("zerotrust.local")) {
@@ -697,8 +956,49 @@ function normalizeSecurityCoreConfig(config = {}) {
   };
 }
 
+function applyRuntimeSecurityCoreDefaults(config = {}) {
+  const normalized = normalizeSecurityCoreConfig(config);
+  if (normalized.entry_mode !== "api_gateway") {
+    return normalized;
+  }
+
+  const envEndpoint = firstEnvValue([
+    "ZERO_TRUST_SECURITY_CORE_ENDPOINT",
+    "BASE_URL",
+    "OPENAI_BASE_URL",
+    "API_BASE",
+  ]);
+  const envModel = firstEnvValue(["ZERO_TRUST_SECURITY_CORE_MODEL", "MODEL"]);
+  const isLocalDefaultEndpoint = normalized.endpoint === "http://127.0.0.1:8000/v1";
+  const isDefaultModelName = normalized.model_name === "qwen2.5-7b-sft-defender";
+
+  return {
+    ...normalized,
+    endpoint: envEndpoint && (!normalized.endpoint || isLocalDefaultEndpoint)
+      ? envEndpoint
+      : normalized.endpoint,
+    model_name: envModel && (!normalized.model_name || isDefaultModelName)
+      ? envModel
+      : normalized.model_name,
+  };
+}
+
+function firstEnvValue(names) {
+  for (const name of names) {
+    const value = String(process.env[name] || "").trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function getSecurityCoreApiKey(apiKeyName = "ZERO_TRUST_API_KEY") {
+  return firstEnvValue([apiKeyName, "ZERO_TRUST_API_KEY", "API_KEY"]);
+}
+
 function buildMasProcessEnv(securityCore) {
-  const normalized = normalizeSecurityCoreConfig(securityCore);
+  const normalized = applyRuntimeSecurityCoreDefaults(securityCore);
   const env = {
     ...process.env,
     PYTHONUNBUFFERED: "1",
@@ -714,15 +1014,17 @@ function buildMasProcessEnv(securityCore) {
   };
 
   if (normalized.entry_mode === "api_gateway") {
-    const apiKey = process.env[normalized.api_key_env] || "";
+    const apiKey = getSecurityCoreApiKey(normalized.api_key_env);
     env.ZERO_TRUST_SECURITY_CORE_ENDPOINT = normalized.endpoint;
     env.ZERO_TRUST_SECURITY_CORE_API_ROUTE = normalized.api_route;
     env.ZERO_TRUST_SECURITY_CORE_API_PROTOCOL = normalized.api_protocol;
     env.ZERO_TRUST_SECURITY_CORE_API_KEY_ENV = normalized.api_key_env;
-    env.BASE_URL = normalized.endpoint || process.env.BASE_URL || "";
-    env.API_BASE = normalized.endpoint || process.env.API_BASE || "";
-    env.OPENAI_BASE_URL = normalized.endpoint || process.env.OPENAI_BASE_URL || "";
-    if (apiKey && !env.API_KEY) {
+    env.BASE_URL = normalized.endpoint || env.BASE_URL || "";
+    env.API_BASE = normalized.endpoint || env.API_BASE || "";
+    env.OPENAI_BASE_URL = normalized.endpoint || env.OPENAI_BASE_URL || "";
+    if (apiKey) {
+      env[normalized.api_key_env] = apiKey;
+      env.ZERO_TRUST_API_KEY = apiKey;
       env.API_KEY = apiKey;
     }
   } else {
@@ -1109,7 +1411,6 @@ function getMasDefaultInput(frameworkKey, domain, scriptName, attackId = "path_b
   if (scriptName === "defense.py") {
     return scenarioCode ? `1\n${scenarioCode}\n` : "";
   }
-  // A few LangGraph demos may ask for tool passwords through getpass.
   return "demo-pass\ndemo-pass\ndemo-pass\ndemo-pass\ndemo-pass\n";
 }
 

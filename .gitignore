@@ -18,6 +18,11 @@ venv/
 env/
 ENV/
 .venv/
+.venv_defense/
+.pip_cache_defense/
+.hf_cache_defense/
+.hf_cache_defense_http/
+.hf_models_defense/
 # 字节码文件
 __pycache__/
 *.py[cod]
@@ -45,6 +50,7 @@ logs/
 *.log
 *.log.*
 logs/*.log
+*.pid
 # 临时数据/缓存
 temp/
 cache/
