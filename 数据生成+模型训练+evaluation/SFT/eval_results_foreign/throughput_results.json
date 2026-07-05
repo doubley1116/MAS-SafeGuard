@@ -1,0 +1,12 @@
+[
+  {
+    "model": "claude-sonnet-5",
+    "n_samples": 958,
+    "total_seconds": 9480.388457536697,
+    "throughput": 0.10105071161281491,
+    "accuracy": 0.7703549060542797,
+    "macro_f1": 0.7081340325517864,
+    "format_ok_rate": 1.0,
+    "parse_error_rate": 0.0
+  }
+]

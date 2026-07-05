@@ -1,0 +1,71 @@
+{
+  "metrics": {
+    "accuracy": 0.7045929018789144,
+    "correct": 675,
+    "total": 958,
+    "per_class": {
+      "safe": {
+        "precision": 0.7745901639344263,
+        "recall": 0.8915094339622641,
+        "f1": 0.8289473684210525,
+        "support": 424,
+        "tp": 378,
+        "fp": 110,
+        "fn": 46
+      },
+      "suspicious": {
+        "precision": 0.22826086956521738,
+        "recall": 0.35294117647058826,
+        "f1": 0.27722772277227725,
+        "support": 119,
+        "tp": 42,
+        "fp": 142,
+        "fn": 77
+      },
+      "dangerous": {
+        "precision": 0.8916083916083916,
+        "recall": 0.6144578313253012,
+        "f1": 0.7275320970042796,
+        "support": 415,
+        "tp": 255,
+        "fp": 31,
+        "fn": 160
+      }
+    },
+    "macro_f1": 0.6112357293992031,
+    "weighted_f1": 0.7164818407904001
+  },
+  "confusion_matrix": {
+    "safe": {
+      "safe": 378,
+      "suspicious": 39,
+      "dangerous": 7
+    },
+    "suspicious": {
+      "suspicious": 42,
+      "dangerous": 24,
+      "safe": 53
+    },
+    "dangerous": {
+      "dangerous": 255,
+      "safe": 57,
+      "suspicious": 103
+    }
+  },
+  "format_ok_count": 957,
+  "format_ok_rate": 0.9989561586638831,
+  "parse_error_count": 0,
+  "n_samples": 958,
+  "n_workers": 3,
+  "total_minutes": 67.37371090650558,
+  "error_types": {
+    "safe -> suspicious": 39,
+    "suspicious -> dangerous": 24,
+    "dangerous -> safe": 57,
+    "suspicious -> safe": 53,
+    "dangerous -> suspicious": 103,
+    "safe -> dangerous": 7
+  },
+  "model": "deepseek-v4-pro",
+  "thinking_enabled": true
+}

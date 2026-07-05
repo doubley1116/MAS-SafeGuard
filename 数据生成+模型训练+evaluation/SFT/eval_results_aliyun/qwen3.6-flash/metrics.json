@@ -1,0 +1,62 @@
+{
+  "model": "qwen3.6-flash",
+  "metrics": {
+    "accuracy": 0.651356993736952,
+    "correct": 624,
+    "total": 958,
+    "per_class": {
+      "safe": {
+        "precision": 0.75,
+        "recall": 0.9268867924528302,
+        "f1": 0.829113924050633,
+        "support": 424,
+        "tp": 393,
+        "fp": 131,
+        "fn": 31
+      },
+      "suspicious": {
+        "precision": 0.2032520325203252,
+        "recall": 0.42016806722689076,
+        "f1": 0.27397260273972607,
+        "support": 119,
+        "tp": 50,
+        "fp": 196,
+        "fn": 69
+      },
+      "dangerous": {
+        "precision": 0.9627659574468085,
+        "recall": 0.43614457831325304,
+        "f1": 0.6003316749585407,
+        "support": 415,
+        "tp": 181,
+        "fp": 7,
+        "fn": 234
+      }
+    },
+    "macro_f1": 0.5678060672496333,
+    "weighted_f1": 0.6610487355232674
+  },
+  "confusion_matrix": {
+    "safe": {
+      "safe": 393,
+      "suspicious": 30,
+      "dangerous": 1
+    },
+    "suspicious": {
+      "safe": 63,
+      "suspicious": 50,
+      "dangerous": 6
+    },
+    "dangerous": {
+      "dangerous": 181,
+      "suspicious": 166,
+      "safe": 68
+    }
+  },
+  "format_ok_count": 958,
+  "format_ok_rate": 1.0,
+  "parse_error_count": 0,
+  "n_samples": 958,
+  "total_seconds": 13485.397578954697,
+  "throughput_samples_per_sec": 0.07103980393541041
+}

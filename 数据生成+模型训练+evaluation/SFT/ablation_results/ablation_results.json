@@ -1,0 +1,156 @@
+{
+  "configs": {
+    "V1": {
+      "desc": "基线 (A1+B1)"
+    },
+    "V2": {
+      "desc": "+判别标准 (A1+B2)"
+    },
+    "V3": {
+      "desc": "+上下文 (A2+B1)"
+    },
+    "V4": {
+      "desc": "+上下文+标准 (A2+B2)"
+    },
+    "V5": {
+      "desc": "全字段 (A3+B1)"
+    },
+    "V6": {
+      "desc": "全字段+标准 (A3+B2)"
+    }
+  },
+  "metrics": {
+    "V1": {
+      "n_total": 100,
+      "n_attacks": 85,
+      "n_normals": 15,
+      "overall_tpr": 1.0,
+      "structural_tpr": 1.0,
+      "semantic_tpr": 1.0,
+      "fpr": 0.13333333333333333,
+      "type_recall": {
+        "T1": 1.0,
+        "T2": 1.0,
+        "T3": 1.0,
+        "T4": 1.0,
+        "T5": 1.0,
+        "T6": 1.0,
+        "T7": 1.0
+      },
+      "parse_error_count": 0,
+      "api_error_count": 0,
+      "parse_error_rate": 0.0,
+      "api_error_rate": 0.0
+    },
+    "V2": {
+      "n_total": 100,
+      "n_attacks": 85,
+      "n_normals": 15,
+      "overall_tpr": 0.9647058823529412,
+      "structural_tpr": 0.9666666666666667,
+      "semantic_tpr": 0.9636363636363636,
+      "fpr": 0.13333333333333333,
+      "type_recall": {
+        "T1": 0.9,
+        "T2": 1.0,
+        "T3": 1.0,
+        "T4": 1.0,
+        "T5": 0.9333333333333333,
+        "T6": 1.0,
+        "T7": 0.9333333333333333
+      },
+      "parse_error_count": 1,
+      "api_error_count": 0,
+      "parse_error_rate": 0.01,
+      "api_error_rate": 0.0
+    },
+    "V3": {
+      "n_total": 100,
+      "n_attacks": 85,
+      "n_normals": 15,
+      "overall_tpr": 0.9882352941176471,
+      "structural_tpr": 1.0,
+      "semantic_tpr": 0.9818181818181818,
+      "fpr": 0.06666666666666667,
+      "type_recall": {
+        "T1": 1.0,
+        "T2": 1.0,
+        "T3": 1.0,
+        "T4": 1.0,
+        "T5": 0.9333333333333333,
+        "T6": 1.0,
+        "T7": 1.0
+      },
+      "parse_error_count": 0,
+      "api_error_count": 0,
+      "parse_error_rate": 0.0,
+      "api_error_rate": 0.0
+    },
+    "V4": {
+      "n_total": 100,
+      "n_attacks": 85,
+      "n_normals": 15,
+      "overall_tpr": 0.9647058823529412,
+      "structural_tpr": 1.0,
+      "semantic_tpr": 0.9454545454545454,
+      "fpr": 0.2,
+      "type_recall": {
+        "T1": 1.0,
+        "T2": 1.0,
+        "T3": 1.0,
+        "T4": 1.0,
+        "T5": 0.8666666666666667,
+        "T6": 1.0,
+        "T7": 0.9333333333333333
+      },
+      "parse_error_count": 6,
+      "api_error_count": 0,
+      "parse_error_rate": 0.06,
+      "api_error_rate": 0.0
+    },
+    "V5": {
+      "n_total": 100,
+      "n_attacks": 85,
+      "n_normals": 15,
+      "overall_tpr": 1.0,
+      "structural_tpr": 1.0,
+      "semantic_tpr": 1.0,
+      "fpr": 0.13333333333333333,
+      "type_recall": {
+        "T1": 1.0,
+        "T2": 1.0,
+        "T3": 1.0,
+        "T4": 1.0,
+        "T5": 1.0,
+        "T6": 1.0,
+        "T7": 1.0
+      },
+      "parse_error_count": 0,
+      "api_error_count": 0,
+      "parse_error_rate": 0.0,
+      "api_error_rate": 0.0
+    },
+    "V6": {
+      "n_total": 100,
+      "n_attacks": 85,
+      "n_normals": 15,
+      "overall_tpr": 1.0,
+      "structural_tpr": 1.0,
+      "semantic_tpr": 1.0,
+      "fpr": 0.4666666666666667,
+      "type_recall": {
+        "T1": 1.0,
+        "T2": 1.0,
+        "T3": 1.0,
+        "T4": 1.0,
+        "T5": 1.0,
+        "T6": 1.0,
+        "T7": 1.0
+      },
+      "parse_error_count": 14,
+      "api_error_count": 0,
+      "parse_error_rate": 0.14,
+      "api_error_rate": 0.0
+    }
+  }
+}
