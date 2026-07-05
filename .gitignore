@@ -115,7 +115,6 @@ frontend_showcase/showcase*.log
 
 # Tests / temporary scripts
 /test_*.py
-test_*.py
 tmp_*.py
 tests/tmp_rule_ewma_results/
 
