@@ -64,14 +64,19 @@ Zero_Trust/
 │   └── Langgraph_converged_media/# LangGraph 融媒体
 ├── AutoGenAuditor/               # AutoGen 框架适配器
 ├── LangGraphAuditor/             # LangGraph 框架适配器
-├── 数据生成+模型训练+evaluation/  # 数据生成与模型训练模块
-│   ├── AuditDataGen/             # 生成管线（骨架/自由形式/LLM 增强）
-│   ├── SFT/                      # SFT 训练与评估
+├── 数据生成+模型训练+evaluation/  # 数据生成、模型训练与评估
+│   ├── AuditDataGen/             # 审计数据生成管线
+│   │   ├── src/                  #   生成器源码（骨架/自由形式/LLM 增强）
+│   │   ├── configs/              #   生成配置
+│   │   ├── models/               #   训练后的检测模型
+│   │   ├── train/                #   训练脚本
+│   │   ├── tests/                #   测试用例（规则引擎 / EWMA / 联合消融）
+│   │   └── test_iov_media/       #   车联网/融媒体测试数据
+│   ├── SFT/                      # SFT 微调训练与评估
 │   ├── data/                     # 数据集（origin/split/merged）
 │   └── data_verify/              # 数据清洗与验证
 ├── frontend_showcase/            # 可视化前端展示台
-├── inference_server/             # SFT 模型推理服务
-└── tests/                        # 测试用例
+└── inference_server/             # SFT 模型推理服务
 ```
 
 ## 快速开始
