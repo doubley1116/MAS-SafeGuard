@@ -1,0 +1,63 @@
+{
+  "model": "MiniMax-M2.5",
+  "metrics": {
+    "accuracy": 0.5,
+    "correct": 479,
+    "total": 958,
+    "per_class": {
+      "safe": {
+        "precision": 0.8223350253807107,
+        "recall": 0.7641509433962265,
+        "f1": 0.7921760391198044,
+        "support": 424,
+        "tp": 324,
+        "fp": 70,
+        "fn": 100
+      },
+      "suspicious": {
+        "precision": 0.17515274949083504,
+        "recall": 0.7226890756302521,
+        "f1": 0.28196721311475414,
+        "support": 119,
+        "tp": 86,
+        "fp": 405,
+        "fn": 33
+      },
+      "dangerous": {
+        "precision": 0.971830985915493,
+        "recall": 0.16626506024096385,
+        "f1": 0.2839506172839506,
+        "support": 415,
+        "tp": 69,
+        "fp": 2,
+        "fn": 346
+      }
+    },
+    "macro_f1": 0.4526979565061697,
+    "weighted_f1": 0.508639086764397
+  },
+  "confusion_matrix": {
+    "safe": {
+      "suspicious": 99,
+      "safe": 324,
+      "dangerous": 1
+    },
+    "suspicious": {
+      "safe": 32,
+      "suspicious": 86,
+      "dangerous": 1
+    },
+    "dangerous": {
+      "suspicious": 306,
+      "dangerous": 69,
+      "safe": 38,
+      "PARSE_ERROR": 2
+    }
+  },
+  "format_ok_count": 953,
+  "format_ok_rate": 0.9947807933194155,
+  "parse_error_count": 2,
+  "n_samples": 958,
+  "total_seconds": 13960.314986228943,
+  "throughput_samples_per_sec": 0.06862309345777746
+}

@@ -1,0 +1,10 @@
+{
+  "source_file": "all_consistent.jsonl",
+  "split_ratio": 0.1,
+  "seed": 42,
+  "filter_applied": true,
+  "original_size": 9582,
+  "filtered_size": 9575,
+  "validation_size": 958,
+  "train_size": 8617
+}

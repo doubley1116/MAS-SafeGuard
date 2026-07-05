@@ -1,0 +1,12 @@
+[
+  {
+    "model": "glm-5.2",
+    "n_samples": 958,
+    "total_seconds": 19009.488783836365,
+    "throughput": 0.05039588443927964,
+    "accuracy": 0.7755741127348643,
+    "macro_f1": 0.6698949978224427,
+    "format_ok_rate": 1.0,
+    "parse_error_rate": 0.0
+  }
+]

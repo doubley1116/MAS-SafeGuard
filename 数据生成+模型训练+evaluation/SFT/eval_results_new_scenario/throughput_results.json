@@ -1,0 +1,12 @@
+[
+  {
+    "model": "claude-fable-5",
+    "n_samples": 477,
+    "total_seconds": 7915.702279806137,
+    "throughput": 0.06025997228532478,
+    "accuracy": 0.6477987421383647,
+    "macro_f1": 0.6674309901250809,
+    "format_ok_rate": 0.7547169811320755,
+    "parse_error_rate": 0.24528301886792453
+  }
+]

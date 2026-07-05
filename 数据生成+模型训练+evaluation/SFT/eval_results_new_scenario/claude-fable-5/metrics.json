@@ -1,0 +1,63 @@
+{
+  "model": "claude-fable-5",
+  "metrics": {
+    "accuracy": 0.6477987421383647,
+    "correct": 309,
+    "total": 477,
+    "per_class": {
+      "safe": {
+        "precision": 0.9047619047619048,
+        "recall": 0.8814432989690721,
+        "f1": 0.8929503916449086,
+        "support": 194,
+        "tp": 171,
+        "fp": 18,
+        "fn": 23
+      },
+      "suspicious": {
+        "precision": 0.4807692307692308,
+        "recall": 0.423728813559322,
+        "f1": 0.45045045045045046,
+        "support": 59,
+        "tp": 25,
+        "fp": 27,
+        "fn": 34
+      },
+      "dangerous": {
+        "precision": 0.9495798319327731,
+        "recall": 0.5044642857142857,
+        "f1": 0.6588921282798833,
+        "support": 224,
+        "tp": 113,
+        "fp": 6,
+        "fn": 111
+      }
+    },
+    "macro_f1": 0.6674309901250809,
+    "weighted_f1": 0.7283035414892719
+  },
+  "confusion_matrix": {
+    "safe": {
+      "safe": 171,
+      "PARSE_ERROR": 11,
+      "suspicious": 12
+    },
+    "suspicious": {
+      "safe": 18,
+      "suspicious": 25,
+      "dangerous": 6,
+      "PARSE_ERROR": 10
+    },
+    "dangerous": {
+      "PARSE_ERROR": 96,
+      "suspicious": 15,
+      "dangerous": 113
+    }
+  },
+  "format_ok_count": 360,
+  "format_ok_rate": 0.7547169811320755,
+  "parse_error_count": 117,
+  "n_samples": 477,
+  "total_seconds": 7915.702279806137,
+  "throughput_samples_per_sec": 0.06025997228532478
+}

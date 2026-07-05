@@ -1,0 +1,61 @@
+{
+  "model": "claude-opus-4-8:stable",
+  "metrics": {
+    "accuracy": 0.8784067085953878,
+    "correct": 419,
+    "total": 477,
+    "per_class": {
+      "safe": {
+        "precision": 0.9702380952380952,
+        "recall": 0.8402061855670103,
+        "f1": 0.9005524861878453,
+        "support": 194,
+        "tp": 163,
+        "fp": 5,
+        "fn": 31
+      },
+      "suspicious": {
+        "precision": 0.5128205128205128,
+        "recall": 0.6779661016949152,
+        "f1": 0.583941605839416,
+        "support": 59,
+        "tp": 40,
+        "fp": 38,
+        "fn": 19
+      },
+      "dangerous": {
+        "precision": 0.9391304347826087,
+        "recall": 0.9642857142857143,
+        "f1": 0.9515418502202643,
+        "support": 224,
+        "tp": 216,
+        "fp": 14,
+        "fn": 8
+      }
+    },
+    "macro_f1": 0.8120119807491752,
+    "weighted_f1": 0.8853356635520058
+  },
+  "confusion_matrix": {
+    "safe": {
+      "safe": 163,
+      "suspicious": 31
+    },
+    "suspicious": {
+      "safe": 5,
+      "suspicious": 40,
+      "dangerous": 14
+    },
+    "dangerous": {
+      "dangerous": 216,
+      "suspicious": 7,
+      "PARSE_ERROR": 1
+    }
+  },
+  "format_ok_count": 474,
+  "format_ok_rate": 0.9937106918238994,
+  "parse_error_count": 1,
+  "n_samples": 477,
+  "total_seconds": 6913.696352481842,
+  "throughput_samples_per_sec": 0.06899348419153079
+}

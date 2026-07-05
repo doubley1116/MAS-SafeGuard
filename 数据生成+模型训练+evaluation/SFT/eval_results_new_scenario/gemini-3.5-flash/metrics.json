@@ -1,0 +1,63 @@
+{
+  "model": "gemini-3.5-flash",
+  "metrics": {
+    "accuracy": 0.790356394129979,
+    "correct": 377,
+    "total": 477,
+    "per_class": {
+      "safe": {
+        "precision": 0.8605769230769231,
+        "recall": 0.9226804123711341,
+        "f1": 0.8905472636815921,
+        "support": 194,
+        "tp": 179,
+        "fp": 29,
+        "fn": 15
+      },
+      "suspicious": {
+        "precision": 0.35555555555555557,
+        "recall": 0.5423728813559322,
+        "f1": 0.42953020134228187,
+        "support": 59,
+        "tp": 32,
+        "fp": 58,
+        "fn": 27
+      },
+      "dangerous": {
+        "precision": 0.9325842696629213,
+        "recall": 0.7410714285714286,
+        "f1": 0.8258706467661691,
+        "support": 224,
+        "tp": 166,
+        "fp": 12,
+        "fn": 58
+      }
+    },
+    "macro_f1": 0.7153160372633477,
+    "weighted_f1": 0.8031519411091098
+  },
+  "confusion_matrix": {
+    "safe": {
+      "safe": 179,
+      "suspicious": 12,
+      "dangerous": 3
+    },
+    "suspicious": {
+      "suspicious": 32,
+      "safe": 18,
+      "dangerous": 9
+    },
+    "dangerous": {
+      "suspicious": 46,
+      "safe": 11,
+      "dangerous": 166,
+      "PARSE_ERROR": 1
+    }
+  },
+  "format_ok_count": 476,
+  "format_ok_rate": 0.9979035639412998,
+  "parse_error_count": 1,
+  "n_samples": 477,
+  "total_seconds": 3243.31645655632,
+  "throughput_samples_per_sec": 0.1470716799884732
+}

@@ -1,0 +1,52 @@
+# ===================== 输出目录 =====================
+# 训练输出
+output/
+output_ppo/
+output_ppo_*/
+output_test/
+demo_output/
+output_local_test/
+output_trace/
+output_trace_real/
+data/
+
+
+# ===================== Python 缓存 =====================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# ===================== 模型缓存 =====================
+# HuggingFace 模型下载缓存（可选，取消注释以启用）
+# models/*/
+
+# ===================== 环境变量 =====================
+.env
+.env.local
+.env.*.local
+
+# ===================== IDE =====================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===================== 系统文件 =====================
+.DS_Store
+Thumbs.db
+
+# ===================== SFT 模型产物 =====================
+SFT/qwen-sft-output*/
+SFT/qwen-sft-output*/
+
+# ===================== 临时文件 =====================
+*.tmp
+*.log
