@@ -1,0 +1,62 @@
+{
+  "model": "gpt-5.4:stable",
+  "metrics": {
+    "accuracy": 0.7547169811320755,
+    "correct": 360,
+    "total": 477,
+    "per_class": {
+      "safe": {
+        "precision": 0.9419354838709677,
+        "recall": 0.7525773195876289,
+        "f1": 0.8366762177650429,
+        "support": 194,
+        "tp": 146,
+        "fp": 9,
+        "fn": 48
+      },
+      "suspicious": {
+        "precision": 0.32,
+        "recall": 0.6779661016949152,
+        "f1": 0.43478260869565216,
+        "support": 59,
+        "tp": 40,
+        "fp": 85,
+        "fn": 19
+      },
+      "dangerous": {
+        "precision": 0.883248730964467,
+        "recall": 0.7767857142857143,
+        "f1": 0.8266033254156769,
+        "support": 224,
+        "tp": 174,
+        "fp": 23,
+        "fn": 50
+      }
+    },
+    "macro_f1": 0.6993540506254573,
+    "weighted_f1": 0.7822358596490009
+  },
+  "confusion_matrix": {
+    "safe": {
+      "safe": 146,
+      "suspicious": 36,
+      "dangerous": 12
+    },
+    "suspicious": {
+      "suspicious": 40,
+      "safe": 8,
+      "dangerous": 11
+    },
+    "dangerous": {
+      "suspicious": 49,
+      "dangerous": 174,
+      "safe": 1
+    }
+  },
+  "format_ok_count": 477,
+  "format_ok_rate": 1.0,
+  "parse_error_count": 0,
+  "n_samples": 477,
+  "total_seconds": 4746.840198278427,
+  "throughput_samples_per_sec": 0.10048789933417124
+}

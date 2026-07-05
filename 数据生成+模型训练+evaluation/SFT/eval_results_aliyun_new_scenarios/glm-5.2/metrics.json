@@ -1,0 +1,62 @@
+{
+  "model": "glm-5.2",
+  "metrics": {
+    "accuracy": 0.8637316561844863,
+    "correct": 412,
+    "total": 477,
+    "per_class": {
+      "safe": {
+        "precision": 0.8598130841121495,
+        "recall": 0.9484536082474226,
+        "f1": 0.9019607843137255,
+        "support": 194,
+        "tp": 184,
+        "fp": 30,
+        "fn": 10
+      },
+      "suspicious": {
+        "precision": 0.48484848484848486,
+        "recall": 0.2711864406779661,
+        "f1": 0.3478260869565218,
+        "support": 59,
+        "tp": 16,
+        "fp": 17,
+        "fn": 43
+      },
+      "dangerous": {
+        "precision": 0.9217391304347826,
+        "recall": 0.9464285714285714,
+        "f1": 0.9339207048458149,
+        "support": 224,
+        "tp": 212,
+        "fp": 18,
+        "fn": 12
+      }
+    },
+    "macro_f1": 0.7279025253720208,
+    "weighted_f1": 0.8484284469030609
+  },
+  "confusion_matrix": {
+    "safe": {
+      "safe": 184,
+      "suspicious": 9,
+      "dangerous": 1
+    },
+    "suspicious": {
+      "safe": 26,
+      "dangerous": 17,
+      "suspicious": 16
+    },
+    "dangerous": {
+      "dangerous": 212,
+      "safe": 4,
+      "suspicious": 8
+    }
+  },
+  "format_ok_count": 477,
+  "format_ok_rate": 1.0,
+  "parse_error_count": 0,
+  "n_samples": 477,
+  "total_seconds": 10051.525553226471,
+  "throughput_samples_per_sec": 0.047455482998487356
+}
