@@ -12,11 +12,11 @@ run_all_tests.py — 完整实验执行脚本
     python run_all_tests.py --domains iov,converged_media  # 只测试指定领域
 """
 import os, sys, subprocess, datetime, argparse
-from collections import defaultdict
-
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(SCRIPT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
+
+TESTS_DIR = os.path.join(SCRIPT_DIR, "数据生成+模型训练+evaluation", "AuditDataGen", "tests")
 
 
 def run_normal_scenarios(rounds=5):
@@ -63,7 +63,7 @@ def run_layer1_tests():
 
     # Rule Engine tests
     print("\n--- Rule Engine Tests ---")
-    rule_path = os.path.join(SCRIPT_DIR, "tests", "test_rule_engine.py")
+    rule_path = os.path.join(TESTS_DIR, "test_rule_engine.py")
     result = subprocess.run(
         [sys.executable, rule_path], capture_output=True, text=True
     )
@@ -72,7 +72,7 @@ def run_layer1_tests():
 
     # EWMA tests
     print("\n--- EWMA Tests ---")
-    ewma_path = os.path.join(SCRIPT_DIR, "tests", "test_ewma.py")
+    ewma_path = os.path.join(TESTS_DIR, "test_ewma.py")
     result = subprocess.run(
         [sys.executable, ewma_path], capture_output=True, text=True
     )
@@ -90,7 +90,7 @@ def run_layer2_tests(domains_filter=None):
     print("Step 2: Layer 2 消融实验 (分层门控)")
     print("=" * 70)
 
-    combined_path = os.path.join(SCRIPT_DIR, "tests", "test_combined.py")
+    combined_path = os.path.join(TESTS_DIR, "test_combined.py")
 
     env = os.environ.copy()
     if domains_filter:
