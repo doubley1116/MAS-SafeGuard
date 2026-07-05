@@ -2,59 +2,70 @@
 __pycache__/
 *.py[cod]
 *$py.class
-# ===================== 绯荤粺閫氱敤鏂囦欢 =====================
-# Mac绯荤粺闅愯棌鏂囦欢
+*.pyo
+
+# System files
 .DS_Store
-# Windows绯荤粺缂╃暐鍥剧紦瀛?
 Thumbs.db
-# Linux涓存椂鏂囦欢
 *.swp
 *.tmp
 *~
 
-# ===================== Python椤圭洰鏍稿績 =====================
-# 铏氭嫙鐜
+# Python environments and local dependency caches
 venv/
 env/
 ENV/
 .venv/
-# 瀛楄妭鐮佹枃浠?
-__pycache__/
-*.py[cod]
-*$py.class
-*.pyo
-# Python鎵撳寘/鏋勫缓浜х墿
+.venv_defense/
+.pip_cache_defense/
+.hf_cache_defense/
+.hf_cache_defense_http/
+.hf_models_defense/
+.hf_download_runtime/
+.hf_probe_cache/
+.modelscope_models/
+inference_server/.vendor_py310/
+
+# Python packaging / build artifacts
 dist/
 build/
 *.egg-info/
 .eggs/
 
-# ===================== 椤圭洰涓撳睘鏂囦欢 =====================
-# 鏁忔劅鐜鍙橀噺
+# Sensitive environment variables
 .env
 .env.local
 .env.*.local
-# SQLite鏁版嵁搴撴枃浠讹紙鏍稿績淇锛氳鐩朚AS鏍圭洰褰曠殑db锛?
+
+# SQLite databases
 MAS/asset.db
 MAS/trade.db
 *.db
 *.sqlite
 *.sqlite3
-# 鏃ュ織鏂囦欢
+
+# Logs and runtime state
 logs/
 *.log
 *.log.*
-logs/*.log
-# 涓存椂鏁版嵁/缂撳瓨
+*.pid
+frontend_showcase/logs/
+
+# Temporary data / caches
 temp/
 cache/
 *.cache
-# 鏀诲嚮楠岃瘉鎶ュ憡
+tmp/
+.codex_frontend_branch_run/
+
+# Attack validation reports and generated outputs
 reports/
 attack_results/
-# Claude Code 鍐呴儴
+
+# Claude Code internals
 .claude/
-# AuditDataGen 鐢熸垚鏁版嵁 / 璇勪及缁撴灉
+
+# AuditDataGen generated data / eval outputs
 AuditDataGen/SFT/ablation_test/
 AuditDataGen/SFT/eval_results_api/
 AuditDataGen/SFT/eval_results_multi/
@@ -64,54 +75,59 @@ AuditDataGen/SFT/run_ablation_server.py
 AuditDataGen/eval_results/
 AuditDataGen/mas_prompts.jsonl
 AuditDataGen/output_benign_1k/
-# MAS 杩愯鏃ュ織/杈撳嚭
+AuditDataGen/eval_results_verify.zip
+AuditDataGen/eval_results_verify/
+
+# Model training outputs
+AuditDataGen/SFT/qwen-sft-output-2/
+AuditDataGen/SFT/qwen-sft-output/
+
+# MAS runtime logs / generated outputs
 MAS/Langgraph_ecommerce/database/audit_log.jsonl
 MAS/Langgraph_trading/universal_audit_events.json
-# 生成的 workflow 数据 — 攻击场景输出排除，normal 预热数据需要版本控制
 MAS/Langgraph_ecommerce/data/workflows/ecommerce/
 MAS/Langgraph_healthcare/data/workflows/healthcare/
 MAS/Langgraph_trading/data/workflows/trading/
 MAS/Langgraph_trading/data/attack_simulation.log
-# 妯″瀷浜岃繘鍒讹紙role_model / trajectory_detector 鍙噸鏂拌缁冿級
+
+# Re-trainable binary model artifacts
 *.pkl
-# AutoGen 涓存椂鏂囦欢
+
+# AutoGen temporary files and generated code
 autogen_logs/
 agent_cache/
-# AutoGen 鐢熸垚鐨勪唬鐮?
 generated_code/
-AuditDataGen/SFT/qwen-sft-output-2/
-AuditDataGen/SFT/qwen-sft-output/
 
-# ===================== IDE/缂栬緫鍣ㄩ厤缃?=====================
-# VSCode
+# Frontend showcase generated audit files
+frontend_showcase/audit_logs/
+frontend_showcase/showcase*.log
+
+# IDE / editor config
 .vscode/
 *.code-workspace
-# PyCharm/IntelliJ
 .idea/
 *.iml
 *.ipr
 *.iws
-# Sublime Text
 *.sublime-project
 *.sublime-workspace
-# Vim
 *.vim
 
-# ===================== 鍏朵粬鏃犻渶涓婁紶鐨勬枃浠?=====================
-# 娴嬭瘯鏂囦欢/涓存椂鑴氭湰
+# Tests / temporary scripts
 /test_*.py
+test_*.py
 tmp_*.py
 tests/tmp_rule_ewma_results/
-# 鏁版嵁澶囦唤
+
+# Backups
 *.bak
 *.backup
-# 鎿嶄綔绯荤粺涓存椂鏂囦欢
+
+# OS-specific binaries
 *.dll
 *.exe
 *.so
 *.dylib
-# Jupyter绗旇鏈鏌ョ偣
+
+# Jupyter checkpoints
 .ipynb_checkpoints/
-AuditDataGen/eval_results_verify.zip
-AuditDataGen/eval_results_verify/
-tests/tmp_rule_ewma_results/
